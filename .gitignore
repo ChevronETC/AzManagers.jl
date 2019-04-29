@@ -1,0 +1,5 @@
+*.swp
+Manifest.toml
+deps/build.log
+deps/usr
+docs/build

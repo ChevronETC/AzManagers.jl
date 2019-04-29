@@ -1,0 +1,25 @@
+pool:
+  vmImage: 'Ubuntu 20.04'
+
+variables:
+  - name: julia_version
+    value: 1.5.0
+
+steps:
+- script: |
+    julia_version_minor=`echo ${{ variables.julia_version }} | sed 's/\.[^.]*$//'`
+
+    sudo wget https://julialang-s3.julialang.org/bin/linux/x64/${julia_version_minor}/julia-${{ variables.julia_version }}-linux-x86_64.tar.gz
+    sudo mkdir -p /opt/julia
+    sudo tar --strip-components=1 -xzvf julia-${{ variables.julia_version }}-linux-x86_64.tar.gz -C /opt/julia
+
+    mkdir -p $(HOME)/.julia/dev
+    cp -r ${BUILD_SOURCESDIRECTORY} $(HOME)/.julia/dev/AzManagers
+
+    /opt/julia/bin/julia -e 'using Pkg; pkg"dev /home/vsts/.julia/dev/AzManagers"'
+    /opt/julia/bin/julia -e 'using Pkg; pkg"precompile"'
+  displayName: 'Install System'
+
+- script: |
+    /opt/julia/bin/julia -e 'using Pkg; pkg"test AzManagers"'
+  displayName: 'Run unit-tests'
