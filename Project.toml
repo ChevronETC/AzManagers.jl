@@ -1,7 +1,7 @@
 name = "AzManagers"
 uuid = "db05ebb0-6096-11e9-199b-87b703361841"
 authors = ["samtkaplan <sam.kaplan@chevron.com>"]
-version = "0.39.0"
+version = "1.0.0"
 
 [deps]
 AzSessions = "f239b30d-ae6b-58be-a2d5-7e9f30e280a9"
@@ -20,7 +20,10 @@ Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 
 [compat]
+AzSessions = "1"
 HTTP = "0.8"
+JSON = "0.21"
+MPI = "0.14"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"

@@ -2,8 +2,8 @@
 
 ## Issue reporting
 If you have found a bug in AzManagers.jl or have any suggestions for changes to
-AzSessions.jl functionality, please consider filing an issue using the GitHub
-isssue tracker.  Please do not forget to search for an existing issue
+AzManagers.jl functionality, please consider filing an issue using the GitHub
+issue tracker.  Please do not forget to search for an existing issue
 which may already cover your suggestion.
 
 ## Contributing
