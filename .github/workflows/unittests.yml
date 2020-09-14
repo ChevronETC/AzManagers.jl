@@ -21,6 +21,8 @@ jobs:
           sudo mkdir -p /opt/julia
           sudo tar --strip-components=1 -xzvf julia-1.5.0-linux-x86_64.tar.gz -C /opt/julia
 
+
+          pwd
           mkdir -p $(HOME)/.julia/dev
           cp -r ${BUILD_SOURCESDIRECTORY} $(HOME)/.julia/dev/AzManagers
 
