@@ -23,8 +23,8 @@ jobs:
 
 
           pwd
-          mkdir -p $(HOME)/.julia/dev
-          cp -r ${BUILD_SOURCESDIRECTORY} $(HOME)/.julia/dev/AzManagers
+          mkdir -p /home/runner/work/AzManagers.jl/.julia/dev
+        # cp -r ${BUILD_SOURCESDIRECTORY} /home/runner/work/AzManagers.jl/.julia/dev/AzManagers
 
           /opt/julia/bin/julia -e 'using Pkg; pkg"dev /home/vsts/.julia/dev/AzManagers"'
           /opt/julia/bin/julia -e 'using Pkg; pkg"precompile"'
