@@ -15,17 +15,17 @@ jobs:
         run: |
           cd ~
           pwd
-      # - name: Install Julia System
-      #   run: |
-      #     sudo wget https://julialang-s3.julialang.org/bin/linux/x64/1.5/julia-1.5.0-linux-x86_64.tar.gz
-      #     sudo mkdir -p /opt/julia
-      #     sudo tar --strip-components=1 -xzvf julia-1.5.0-linux-x86_64.tar.gz -C /opt/julia
+      - name: Install Julia System
+        run: |
+          sudo wget https://julialang-s3.julialang.org/bin/linux/x64/1.5/julia-1.5.0-linux-x86_64.tar.gz
+          sudo mkdir -p /opt/julia
+          sudo tar --strip-components=1 -xzvf julia-1.5.0-linux-x86_64.tar.gz -C /opt/julia
 
-      #     mkdir -p /home/runner/work/AzManagers.jl/.julia/dev
-      #     cp -r ${BUILD_SOURCESDIRECTORY} /home/runner/work/AzManagers.jl/.julia/dev/AzManagers
+          mkdir -p /home/runner/.julia/dev
+          cp -r /home/runner/work/AzManagers.jl/ /home/runner/.julia/dev/AzManagers
 
-      #     /opt/julia/bin/julia -e 'using Pkg; pkg"dev /home/vsts/.julia/dev/AzManagers"'
-      #     /opt/julia/bin/julia -e 'using Pkg; pkg"precompile"'
-      # - name: Run Julia Unit Tests
-      #   run: |
-      #     /opt/julia/bin/julia -e 'using Pkg; pkg"test AzManagers"'
+          /opt/julia/bin/julia -e 'using Pkg; pkg"dev /home/runner/.julia/dev/AzManagers"'
+          /opt/julia/bin/julia -e 'using Pkg; pkg"precompile"'
+      - name: Run Julia Unit Tests
+        run: |
+          /opt/julia/bin/julia -e 'using Pkg; pkg"test AzManagers"'
