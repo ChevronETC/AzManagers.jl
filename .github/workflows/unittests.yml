@@ -1,4 +1,4 @@
-name: CI
+name: UnitTests
 
 on:
   push
@@ -9,11 +9,25 @@ jobs:
 
     steps:
       - uses: actions/checkout@v2
-
       - name: Run a one-line script
         run: echo Hello, world!
-
       - name: Run a multi-line script
         run: |
           echo Add other actions to build,
           echo test, and deploy your project.
+      - name: Install System
+        run: |
+          julia_version_minor=`echo ${{ variables.julia_version }} | sed 's/\.[^.]*$//'`
+
+          sudo wget https://julialang-s3.julialang.org/bin/linux/x64/${julia_version_minor}/julia-${{ variables.julia_version }}-linux-x86_64.tar.gz
+          sudo mkdir -p /opt/julia
+          sudo tar --strip-components=1 -xzvf julia-${{ variables.julia_version }}-linux-x86_64.tar.gz -C /opt/julia
+
+          mkdir -p $(HOME)/.julia/dev
+          cp -r ${BUILD_SOURCESDIRECTORY} $(HOME)/.julia/dev/AzManagers
+
+          /opt/julia/bin/julia -e 'using Pkg; pkg"dev /home/vsts/.julia/dev/AzManagers"'
+          /opt/julia/bin/julia -e 'using Pkg; pkg"precompile"'
+      - name: Run unit-tests
+        run: |
+          /opt/julia/bin/julia -e 'using Pkg; pkg"test AzManagers"'
