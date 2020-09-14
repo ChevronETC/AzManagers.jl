@@ -24,10 +24,11 @@ jobs:
 
           pwd
           mkdir -p /home/runner/work/AzManagers.jl/.julia/dev
-        # cp -r ${BUILD_SOURCESDIRECTORY} /home/runner/work/AzManagers.jl/.julia/dev/AzManagers
+
 
           /opt/julia/bin/julia -e 'using Pkg; pkg"dev /home/vsts/.julia/dev/AzManagers"'
           /opt/julia/bin/julia -e 'using Pkg; pkg"precompile"'
       - name: Run Julia Unit Tests
         run: |
           /opt/julia/bin/julia -e 'using Pkg; pkg"test AzManagers"'
+        # cp -r ${BUILD_SOURCESDIRECTORY} /home/runner/work/AzManagers.jl/.julia/dev/AzManagers
