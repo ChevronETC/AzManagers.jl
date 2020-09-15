@@ -48,7 +48,7 @@ jobs:
       - name: Set up env var
         run: echo "::set-env name=FIRST_NAME::yellow"
       - uses: julia-actions/julia-runtest@latest
-        with:
+        env:
           FIRST_NAME: ${{ env.FIRST_NAME }}
           middle_name: The
           Last_Name: Octocat
