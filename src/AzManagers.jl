@@ -1337,8 +1337,8 @@ Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` w
 * `detachedservice=true` start the detached service allowing for RESTful remote code execution
 """
 function addproc(vm_template::Dict, nic_template=nothing;
-        basename="cbox",
-        user="",
+        basename = "cbox",
+        user = "",
         subscriptionid = "",
         resourcegroup = "",
         session = AzSession(;lazy=true),
@@ -1352,7 +1352,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     subscriptionid == "" && (subscriptionid = AzManagers._manifest["subscriptionid"])
     resourcegroup == "" && (resourcegroup = AzManagers._manifest["resourcegroup"])
     ssh_key =  AzManagers._manifest["ssh_public_key_file"]
-    user = AzManagers._manifest["ssh_user"]
+    user == "" && (user = AzManagers._manifest["ssh_user"])
     timeout = Distributed.worker_timeout()
 
     vmname = basename*"-"*randstring('a':'z', 6)
