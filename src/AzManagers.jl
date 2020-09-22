@@ -376,8 +376,8 @@ function Distributed.launch_on_machine(manager::AzManager, vm, params, launched,
 
     wconfig = WorkerConfig()
     wconfig.io = io.out
-    wconfig.host = vm["host"]
-    wconfig.bind_addr = vm["bindaddr"]
+    wconfig.host = user*vm["host"]
+    wconfig.bind_addr = user*vm["bindaddr"]
     wconfig.tunnel = false
     wconfig.sshflags = ``
     wconfig.exeflags = `--worker`
