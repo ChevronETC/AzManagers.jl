@@ -9,6 +9,12 @@ jobs:
         os: [ubuntu-latest]
     steps:
       - uses: actions/checkout@v1.0.0
+      - uses: azure/login@v1.1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Run Az CLI script
+        run: |
+          az rg create
       - uses: julia-actions/setup-julia@latest
         with:
           version: ${{ matrix.julia-version }}
@@ -21,8 +27,9 @@ jobs:
       - uses: codecov/codecov-action@v1
         with:
           file: lcov.info
-
-
+      - name: Run Az CLI script
+        run: |
+          az rg delete
 # jobs:
 #   test:
 #     runs-on: ${{ matrix.os }}
