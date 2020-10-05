@@ -14,7 +14,7 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       - name: Run Az CLI script
         run: |
-          az group create -l southcentralus -n "${{matrix.os}}-${{matrix.julia-version}}-${{github.run_id}}"
+          az group create -l southcentralus -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
       - uses: julia-actions/setup-julia@latest
         with:
           version: ${{ matrix.julia-version }}
@@ -26,5 +26,5 @@ jobs:
           file: lcov.info
       - name: Run Az CLI script
         run: |
-          az group delete -n "${{matrix.os}}-${{matrix.julia-version}}-${{github.run_id}}" --yes
+          az group delete -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --yes
         if: ${{ always() }}
