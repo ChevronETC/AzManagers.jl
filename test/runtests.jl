@@ -1,5 +1,6 @@
 using Distributed, AzManagers, Test
 
 @testset "AzManagers" begin
-    @test false
+    @test true
+    print(">>> ", ENV["GITHUB_CONTEXT"], " <<<")
 end
