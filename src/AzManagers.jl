@@ -1307,7 +1307,7 @@ function buildstartupscript(user::String, custom_environment::Bool)
         cmd *= """
         
         sudo su - $user <<EOF
-        cd $(DEPOT_PATH[1])/environments/v$(VERSION.major).$(VERSION.minor)
+        cd /home/$user/.julia/environments/v$(VERSION.major).$(VERSION.minor)
         git fetch
         git checkout $environmentname
         julia -e 'using Pkg; pkg"instantiate"; pkg"precompile"'
