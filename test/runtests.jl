@@ -2,8 +2,7 @@ using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 
 ss_template_json = JSON.parse(ENV["SS_TEMPLATE_JSON"])
 
-myscaleset = AzManagers.build_sstemplate(
-name                 = ss_template_json["name"],
+myscaleset = AzManagers.build_sstemplate(ss_template_json["name"],
 subscriptionid       = ss_template_json["subscriptionid"],
 location             = ss_template_json["location"],
 resourcegroup        = ss_template_json["resourcegroup"],
