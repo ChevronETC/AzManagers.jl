@@ -3,8 +3,24 @@ using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 new = JSON.parse(ENV["SS_TEMPLATE_JSON"])
 write(stdout, "This is: $new")
 
-myscaleset = AzManagers.build_sstemplate(JSON.parse(ENV["SS_TEMPLATE_JSON"]))
-AzManagers.save_template_scaleset("myscaleset", myscaleset)
+ss_template_json = JSON.parse(ENV["SS_TEMPLATE_JSON"])
+
+write(stdout, ss_template_json["subscriptionid"])
+
+# myscaleset = AzManagers.build_sstemplate(
+#     )
+# "cbox02" => build_sstemplate("cbox02",
+# subscriptionid       = "ac1006f8-2a79-4f71-b9b0-89a7bb3d0f54", # T107
+# location             = "southcentralus",
+# resourcegroup        = "cofii-t107-20200225",
+# resourcegroup_vnet   = "network-ussc-t107",
+# vnet                 = "default-ussc-t107",
+# subnet               = "computeL1",
+# imagegallery         = "cofiigallerydev",
+# imagename            = "cbox-master",
+# skuname              = "Standard_D2s_v3"),
+
+# AzManagers.save_template_scaleset("myscaleset", myscaleset)
 
 # template = "myscaleset"
 # credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
