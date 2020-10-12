@@ -3,15 +3,10 @@ templates_folder() = joinpath(homedir(), ".azmanagers")
 function save_template(templates_filename::AbstractString, name::AbstractString, template::Dict)
     templates = isfile(templates_filename) ? JSON.parse(read(templates_filename, String)) : Dict{String,Any}()
     templates[name] = template
-    if isfile(templates_filename)
-        write(templates_filename, json(templates))
-    else
+    if !ispath(templates_folder())
         mkdir(templates_folder())
-        # io = open(templates_filename, "w")
-        # write(io, json(templates))
-        # close(io)
-        write(templates_filename, json(templates))
     end
+    write(templates_filename, json(templates))
     nothing
 end
 

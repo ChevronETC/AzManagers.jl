@@ -16,9 +16,9 @@ skuname              = ss_template_json["skuname"])
 AzManagers.save_template_scaleset("cbox02", myscaleset)
 
 template = "cbox02"
-# credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
-# subscriptionid = credentials["subscriptionId"]
-# resourcegroup = ENV["RESOURCE_GROUP"]
+credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
+subscriptionid = credentials["subscriptionId"]
+resourcegroup = ENV["RESOURCE_GROUP"]
 
 # @testset "AzManagers, addprocs" for kwargs in (
 #     (subscriptionid = subscriptionid, resourcegroup = resourcegroup,          ninstances = 1, group = "test$(randstring('a':'z',4))"),
