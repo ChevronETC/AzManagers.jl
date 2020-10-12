@@ -8,6 +8,7 @@ function save_template(templates_filename::AbstractString, name::AbstractString,
     else
         run(`pwd`)
         run(`ls -al`)
+        run(`mkdir /home/runner/.azmanagers/`)
         run(`ls /home/runner/.azmanagers/`)
         # run(`touch $templates_filename`)
         io = open(templates_filename, "w")
