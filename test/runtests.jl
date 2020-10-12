@@ -3,8 +3,8 @@ using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 new = JSON.parse(ENV["SS_TEMPLATE_JSON"])
 write(stdout, "This is: $new")
 
-# myscaleset = AzManagers.build_sstemplate(JSON.parse(ENV["SS_TEMPLATE_JSON"]))
-# AzManagers.save_template_scaleset("myscaleset", myscaleset)
+myscaleset = AzManagers.build_sstemplate(JSON.parse(ENV["SS_TEMPLATE_JSON"]))
+AzManagers.save_template_scaleset("myscaleset", myscaleset)
 
 # template = "myscaleset"
 # credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
