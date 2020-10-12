@@ -1,52 +1,55 @@
 using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 
-myscaleset = AzManagers.build_sstemplate(JSON.parse(ENV["SS_TEMPLATE_JSON"]))
-AzManagers.save_template_scaleset("myscaleset", myscaleset)
+new = JSON.parse(ENV["SS_TEMPLATE_JSON"])
+write(stdout, "This is: $new")
 
-template = "myscaleset"
-credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
-subscriptionid = credentials["subscriptionId"]
-resourcegroup = ENV["RESOURCE_GROUP"]
+# myscaleset = AzManagers.build_sstemplate(JSON.parse(ENV["SS_TEMPLATE_JSON"]))
+# AzManagers.save_template_scaleset("myscaleset", myscaleset)
 
-@testset "AzManagers, addprocs" for kwargs in (
-    (subscriptionid = subscriptionid, resourcegroup = resourcegroup,          ninstances = 1, group = "test$(randstring('a':'z',4))"),
-    (subscriptionid = subscriptionid, resourcegroup = resourcegroup, ppi = 2, ninstances = 2, group = "test$(randstring('a':'z',4))") )
+# template = "myscaleset"
+# credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
+# subscriptionid = credentials["subscriptionId"]
+# resourcegroup = ENV["RESOURCE_GROUP"]
+
+# @testset "AzManagers, addprocs" for kwargs in (
+#     (subscriptionid = subscriptionid, resourcegroup = resourcegroup,          ninstances = 1, group = "test$(randstring('a':'z',4))"),
+#     (subscriptionid = subscriptionid, resourcegroup = resourcegroup, ppi = 2, ninstances = 2, group = "test$(randstring('a':'z',4))") )
     
-    # Set up iteration vars
-    url = "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$(kwargs.group)?api-version=2019-12-01"
-    ninstances = kwargs.ninstances              # Number of new scale set instances to be added to the scale set
-    ppi = haskey(kwargs, :ppi) ? kwargs.ppi : 1 # Number of Julia processes to be present on each scale set instance
-    tppi = ppi*ninstances                       # Total number of Julia processes in the entire scale set
+#     # Set up iteration vars
+#     url = "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$(kwargs.group)?api-version=2019-12-01"
+#     ninstances = kwargs.ninstances              # Number of new scale set instances to be added to the scale set
+#     ppi = haskey(kwargs, :ppi) ? kwargs.ppi : 1 # Number of Julia processes to be present on each scale set instance
+#     tppi = ppi*ninstances                       # Total number of Julia processes in the entire scale set
 
-    #
-    # Unit Test 1 - Create scale set and start Julia processes
-    #
-    addprocs(template, ninstances; kwargs...)
+#     #
+#     # Unit Test 1 - Create scale set and start Julia processes
+#     #
+#     addprocs(template, ninstances; kwargs...)
     
-    # Verify that the scale set is present
-    session = AzSession()
-    _r = HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
-    @test _r.status == 200
+#     # Verify that the scale set is present
+#     session = AzSession()
+#     _r = HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
+#     @test _r.status == 200
 
-    #
-    # Unit Test 2 - Verify that (Total # of Julia processes specified) == (Total # of Julia processes actual)
-    #
-    @test nworkers() == tppi
+#     #
+#     # Unit Test 2 - Verify that (Total # of Julia processes specified) == (Total # of Julia processes actual)
+#     #
+#     @test nworkers() == tppi
 
-    #
-    # Unit Test 3 - Verify that there is a healthy connection to each node
-    #
-    myworkers = [remotecall_fetch(gethostname, workers()[i]) for i=1:tppi]
+#     #
+#     # Unit Test 3 - Verify that there is a healthy connection to each node
+#     #
+#     myworkers = [remotecall_fetch(gethostname, workers()[i]) for i=1:tppi]
 
-    #
-    # Unit Test 4 - Verify that none of the created Julia processes are the master Julia process
-    #
-    master = gethostname()
-    unique_workers = unique(myworkers)
-    @test length(unique_workers) == ninstances
-    for worker in myworkers
-        @test master != worker
-    end
+#     #
+#     # Unit Test 4 - Verify that none of the created Julia processes are the master Julia process
+#     #
+#     master = gethostname()
+#     unique_workers = unique(myworkers)
+#     @test length(unique_workers) == ninstances
+#     for worker in myworkers
+#         @test master != worker
+#     end
 
     #
     # Unit Test 5 - Verify that the cloud-init startup script ran successfully
