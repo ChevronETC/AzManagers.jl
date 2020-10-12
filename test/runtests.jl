@@ -1,6 +1,9 @@
 using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 
-template = "cbox02"
+myscaleset = AzManagers.build_sstemplate(JSON.parse(ENV["SS_TEMPLATE_JSON"]))
+AzManagers.save_template_scaleset("myscaleset", myscaleset)
+
+template = "myscaleset"
 credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
 subscriptionid = credentials["subscriptionId"]
 resourcegroup = ENV["RESOURCE_GROUP"]
