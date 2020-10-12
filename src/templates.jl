@@ -6,6 +6,7 @@ function save_template(templates_filename::AbstractString, name::AbstractString,
     if isfile(templates_filename)
         write(templates_filename, json(templates))
     else
+        run(`touch $templates_filename`)
         io = open(templates_filename, "w")
         write(io, json(templates))
         close(io)
