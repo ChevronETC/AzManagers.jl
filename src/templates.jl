@@ -6,14 +6,11 @@ function save_template(templates_filename::AbstractString, name::AbstractString,
     if isfile(templates_filename)
         write(templates_filename, json(templates))
     else
-        run(`pwd`)
-        run(`ls -al`)
-        run(`mkdir /home/runner/.azmanagers/`)
-        run(`ls /home/runner/.azmanagers/`)
-        # run(`touch $templates_filename`)
-        io = open(templates_filename, "w")
-        write(io, json(templates))
-        close(io)
+        mkdir(templates_folder())
+        # io = open(templates_filename, "w")
+        # write(io, json(templates))
+        # close(io)
+        write(templates_filename, json(templates))
     end
     nothing
 end
