@@ -31,7 +31,7 @@ resourcegroup = ENV["RESOURCE_GROUP"]
     ppi = haskey(kwargs, :ppi) ? kwargs.ppi : 1 # Number of Julia processes to be present on each scale set instance
     tppi = ppi*ninstances                       # Total number of Julia processes in the entire scale set
 
-    Base.structdiff(kwargs, NamedTuple(ninstances))
+    Base.structdiff(kwargs, NamedTuple{ninstances})
 
     #
     # Unit Test 1 - Create scale set and start Julia processes
