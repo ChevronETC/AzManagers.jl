@@ -44,7 +44,7 @@ resourcegroup = ENV["RESOURCE_GROUP"]
     addprocs(template, ninstances; kwargs...)
     
     # Verify that the scale set is present
-    session = AzSession()
+    session = AzSession(;protocal=AzClientCredentials, client_id=credentials["clientId"], client_secret=credentials["clientSecret"])
     _r = HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
     @test _r.status == 200
 
@@ -80,7 +80,7 @@ resourcegroup = ENV["RESOURCE_GROUP"]
     #
 
     # First, verify that the scale set is present
-    session = AzSession()
+    session = AzSession(;protocal=AzClientCredentials, client_id=credentials["clientId"], client_secret=credentials["clientSecret"])
     _r = HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
     @test _r.status == 200
 
@@ -90,7 +90,7 @@ resourcegroup = ENV["RESOURCE_GROUP"]
     # Last, verify that the scale set has been deleted
     while true
         try
-            session = AzSession()    
+            session = AzSession(;protocal=AzClientCredentials, client_id=credentials["clientId"], client_secret=credentials["clientSecret"])
             HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
         catch _e
             e = JSON.parse(String(_e.response.body))
@@ -108,7 +108,7 @@ end
 #     addproc(template; basename=kwargs.basename)
 # end
 
-@testset "AzManagers, detach" for kwargs in ( (session = AzSession()), )
+@testset "AzManagers, detach" for kwargs in ( (session = AzSession(;protocal=AzClientCredentials, client_id=credentials["clientId"], client_secret=credentials["clientSecret"])), )
 
     #
     # Unit Test 1 - Create a detached job and persist the server
