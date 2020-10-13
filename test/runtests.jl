@@ -15,6 +15,8 @@ skuname              = ss_template_json["skuname"])
 
 AzManagers.save_template_scaleset("cbox02", myscaleset)
 
+run(`ssh-keygen -f /home/cvx/.ssh/azmanagers_rsa -N ''`)
+
 template = "cbox02"
 credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
 AzSessions.write_manifest(;client_id=credentials["clientId"], client_secret=credentials["clientSecret"], tenant=credentials["tenantId"])
