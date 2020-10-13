@@ -1,6 +1,6 @@
 using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 
-ss_template_json = JSON.parse(ENV["SS_TEMPLATE_JSON"])
+ss_template_json = JSON.parse(ENV["SS_TEMPLATE_JSON_2"])
 
 myscaleset = AzManagers.build_sstemplate(ss_template_json["name"],
 subscriptionid       = ss_template_json["subscriptionid"],
@@ -15,15 +15,16 @@ skuname              = ss_template_json["skuname"])
 
 AzManagers.save_template_scaleset("cbox02", myscaleset)
 
-# mkdir(joinpath(homedir(), ".ssh"))
-run(`ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''`)
+homedir = homedir()
+run(`ssh-keygen -f $homedir/.ssh/azmanagers_rsa -N ''`)
 
 template = "cbox02"
 credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
-AzSessions.write_manifest(;client_id=credentials["clientId"], client_secret=credentials["clientSecret"], tenant=credentials["tenantId"])
-AzManagers.write_manifest(;resourcegroup=ENV["RESOURCE_GROUP"], subscriptionid=credentials["subscriptionId"], ssh_user="cvx")
 subscriptionid = credentials["subscriptionId"]
 resourcegroup = ENV["RESOURCE_GROUP"]
+
+AzSessions.write_manifest(;client_id=credentials["clientId"], client_secret=credentials["clientSecret"], tenant=credentials["tenantId"])
+AzManagers.write_manifest(;resourcegroup=ENV["RESOURCE_GROUP"], subscriptionid=credentials["subscriptionId"], ssh_user="cvx")
 
 @testset "AzManagers, addprocs" for kwargs in (
     (subscriptionid = subscriptionid, resourcegroup = resourcegroup,          ninstances = 1, group = "test$(randstring('a':'z',4))"),
@@ -34,18 +35,12 @@ resourcegroup = ENV["RESOURCE_GROUP"]
     ninstances = kwargs.ninstances              # Number of new scale set instances to be added to the scale set
     ppi = haskey(kwargs, :ppi) ? kwargs.ppi : 1 # Number of Julia processes to be present on each scale set instance
     tppi = ppi*ninstances                       # Total number of Julia processes in the entire scale set
-
-    # Base.structdiff(kwargs, NamedTuple{ninstances})
-
     session = AzSession(;protocal=AzClientCredentials, client_id=credentials["clientId"], client_secret=credentials["clientSecret"])
-
-
     kwargs = (subscriptionid = kwargs.subscriptionid,
                 resourcegroup = kwargs.resourcegroup,
                 ppi = ppi,
                 group = kwargs.group,
                 session = session)
-
 
     #
     # Unit Test 1 - Create scale set and start Julia processes
