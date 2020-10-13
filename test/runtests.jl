@@ -15,8 +15,8 @@ skuname              = ss_template_json["skuname"])
 
 AzManagers.save_template_scaleset("cbox02", myscaleset)
 
-homedir = homedir()
-run(`ssh-keygen -f $homedir/.ssh/azmanagers_rsa -N ''`)
+# mkdir(joinpath(homedir(), ".ssh"))
+run(`ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''`)
 
 template = "cbox02"
 credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
@@ -35,12 +35,18 @@ AzManagers.write_manifest(;resourcegroup=ENV["RESOURCE_GROUP"], subscriptionid=c
     ninstances = kwargs.ninstances              # Number of new scale set instances to be added to the scale set
     ppi = haskey(kwargs, :ppi) ? kwargs.ppi : 1 # Number of Julia processes to be present on each scale set instance
     tppi = ppi*ninstances                       # Total number of Julia processes in the entire scale set
+
+    # Base.structdiff(kwargs, NamedTuple{ninstances})
+
     session = AzSession(;protocal=AzClientCredentials, client_id=credentials["clientId"], client_secret=credentials["clientSecret"])
+
+
     kwargs = (subscriptionid = kwargs.subscriptionid,
                 resourcegroup = kwargs.resourcegroup,
                 ppi = ppi,
                 group = kwargs.group,
                 session = session)
+
 
     #
     # Unit Test 1 - Create scale set and start Julia processes
