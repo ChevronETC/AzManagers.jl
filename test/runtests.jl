@@ -33,12 +33,15 @@ resourcegroup = ENV["RESOURCE_GROUP"]
 
     # Base.structdiff(kwargs, NamedTuple{ninstances})
 
+    session = AzSession(;protocal=AzClientCredentials, client_id=credentials["clientId"], client_secret=credentials["clientSecret"])
+
+
     kwargs = (subscriptionid = kwargs.subscriptionid,
                 resourcegroup = kwargs.resourcegroup,
                 ppi = ppi,
-                group = kwargs.group)
+                group = kwargs.group,
+                session = session)
 
-    session = AzSession(;protocal=AzClientCredentials, client_id=credentials["clientId"], client_secret=credentials["clientSecret"])
 
     #
     # Unit Test 1 - Create scale set and start Julia processes
