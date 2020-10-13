@@ -669,18 +669,12 @@ function pollworkers(manager::AzManager, verbose)
         isempty(scalesetnames) && break
 
         # TODO - we assume that all workers are in the same subscription and resource group
-        subscriptionid = ""
-        resourcegroup = ""
+        local subscriptionid,resourcegroup
         for pid in workers()
             pid == 1 && continue
             u = Distributed.map_pid_wrkr[pid].config.userdata
-            if haskey(u, "subscriptionid")
-                subscriptionid = u["subscriptionid"]
-            end
-            if haskey(u, "resourcegroup")
-                resourcegroup = u["resourcegroup"]
-            end
-            (subscriptionid == "" || resourcegroup == "") || break
+            subscriptionid = get(u, "subscriptionid", "")
+            resourcegroup = get(u, "resourcegroup", "")
         end
         (resourcegroup == "" || subscriptionid == "") && continue
 
@@ -708,7 +702,11 @@ function pollworkers(manager::AzManager, verbose)
             try
                 pid == 1 && continue
                 pid ∈ Distributed.map_del_wrkr && continue
+
                 u = Distributed.map_pid_wrkr[pid].config.userdata
+
+                get(u, "subscriptionid", "") == "" && continue # TODO -- this checks to see if pid is on an Azure VM, but could probably do something better
+
                 if u["name"] ∉ vmnames
                     @info "AzManagers found a zombie worker for pid=$pid, de-registering."
                     yield()
