@@ -15,8 +15,8 @@ skuname              = ss_template_json["skuname"])
 
 AzManagers.save_template_scaleset("cbox02", myscaleset)
 
-mkdir(joinpath("/home/cvx/.ssh/.ssh/"))
-run(`ssh-keygen -f /home/cvx/.ssh/azmanagers_rsa -N ''`)
+# mkdir(joinpath(homedir(), ".ssh"))
+run(`ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''`)
 
 template = "cbox02"
 credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
