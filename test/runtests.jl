@@ -1,3 +1,4 @@
+import Pkg; Pkg.add("JinjaTemplates")
 using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON, JinjaTemplates
 
 env = LazyTemplateLoader(["~/templates"])
