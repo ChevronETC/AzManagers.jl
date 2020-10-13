@@ -38,6 +38,8 @@ resourcegroup = ENV["RESOURCE_GROUP"]
                 ppi = ppi,
                 group = kwargs.group)
 
+    session = AzSession(;protocal=AzClientCredentials, client_id=credentials["clientId"], client_secret=credentials["clientSecret"])
+
     #
     # Unit Test 1 - Create scale set and start Julia processes
     #
