@@ -17,7 +17,7 @@ AzManagers.save_template_scaleset("cbox02", myscaleset)
 
 template = "cbox02"
 credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
-AzSessions.write_manifest(;client_id=credentials["clientId"], client_secret=credentials["clientSecret"], tenant=credentials["tenantId"])
+AzManagers.write_manifest(;client_id=credentials["clientId"], client_secret=credentials["clientSecret"], tenant=credentials["tenantId"])
 subscriptionid = credentials["subscriptionId"]
 resourcegroup = ENV["RESOURCE_GROUP"]
 
