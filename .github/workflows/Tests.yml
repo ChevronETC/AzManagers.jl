@@ -30,6 +30,7 @@ jobs:
           CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
           RESOURCE_GROUP: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
           JULIA_VERSION: "${{ matrix.julia-version }}"
+          SIG_NAME: "sig${{ github.run_id }}${{ matrix.julia-version }}"
 
       - name: Validate Template
         uses: operatehappy/packer-github-actions@master
