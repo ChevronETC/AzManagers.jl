@@ -2,10 +2,10 @@
   "builders":
   [
     {
-      "subscription_id": "{{ SUBSCRIPTION_ID }}",
-      "tenant_id": "{{ TENANT_ID }}",
-      "client_id": "{{ CLIENT_ID }}",
-      "client_secret": "{{ CLIENT_SECRET }}",
+      "subscription_id": "{{ env['SUBSCRIPTION_ID'] }}",
+      "tenant_id": "{{ env['TENANT_ID'] }}",
+      "client_id": "{{ env['CLIENT_ID'] }}",
+      "client_secret": "{{ env['CLIENT_SECRET'] }}",
       "type": "azure-arm",
       "os_type": "Linux",
       "vm_size": "Standard_D8s_v3",
@@ -19,8 +19,8 @@
         "image_version": "1.0",
         "replication_regions": ["South Central US"]
       },    
-      "build_resource_group_name": "{{ RESOURCE_GROUP }}",
-      "managed_image_resource_group_name": "{{ RESOURCE_GROUP }}",
+      "build_resource_group_name": "{{ env['RESOURCE_GROUP'] }}",
+      "managed_image_resource_group_name": "{{ env['RESOURCE_GROUP'] }}",
       "managed_image_name": "unit-test-image",
       "managed_image_storage_account_type": "Premium_LRS",
       "virtual_network_name":"dummy-vnet",
@@ -62,7 +62,7 @@
       "type": "shell",
       "inline":
       [
-        "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/{{ JULIA_VERSION }}/julia-{{ JULIA_VERSION }}-linux-x86_64.tar.gz"
+        "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/{{ env['JULIA_VERSION'] }}/julia-{{ env['JULIA_VERSION'] }}-linux-x86_64.tar.gz"
       ]
     },
     {
@@ -71,8 +71,8 @@
       [
         "echo \"installing Julia\"",
         "mkdir ~/.julia",
-        "sudo tar --strip-components=1 -xzvf julia-{{ JULIA_VERSION }}-linux-x86_64.tar.gz -C /opt/julia",
-        "sudo rm -f julia-{{ JULIA_VERSION }}-linux-x86_64.tar.gz",
+        "sudo tar --strip-components=1 -xzvf julia-{{ env['JULIA_VERSION'] }}-linux-x86_64.tar.gz -C /opt/julia",
+        "sudo rm -f julia-{{ env['JULIA_VERSION'] }}-linux-x86_64.tar.gz",
         "cd",
         "sed -i '1 i export PATH=\"${PATH}:/opt/julia/bin\"' .bashrc",
         "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"720\"' .bashrc",
