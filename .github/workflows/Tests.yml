@@ -66,7 +66,7 @@ jobs:
       - uses: codecov/codecov-action@v1
         with:
           file: lcov.info
-      - name: Run Az CLI script
-        run: |
-          az group delete -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --yes
-        if: ${{ always() }}
+      # - name: Run Az CLI script
+      #   run: |
+      #     az group delete -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --yes
+      #   if: ${{ always() }}
