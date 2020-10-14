@@ -19,6 +19,8 @@ jobs:
           az sig create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "sig${{ github.run_id }}${{ matrix.julia-version }}"
           pwd
           ls -al ..
+          ls -al ../..
+          ls -al ../../..
       - uses: santisaez/packer-action@v1
         with:
           template: /home/runner/work/AzManagers.jl/cofii-base.json.j2
