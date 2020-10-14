@@ -18,9 +18,10 @@ jobs:
           az group wait --created --resource-group "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
           az sig create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "sig${{ github.run_id }}${{ matrix.julia-version }}"
           pwd
+          ls -al ..
       - uses: santisaez/packer-action@v1
         with:
-          template: cofii-base.json.j2
+          template: /home/runner/work/AzManagers.jl/cofii-base.json.j2
         env:
           SUBSCRIPTION_ID: ${{ secrets.SUBSCRIPTION_ID }}
       - uses: julia-actions/setup-julia@latest
