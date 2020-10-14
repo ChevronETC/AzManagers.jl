@@ -16,7 +16,7 @@ jobs:
         run: |
           az group create -l southcentralus -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
           az group wait --created --resource-group "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
-          az sig create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "sig${{ github.run_id }}"
+          az sig create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "sig${{ github.run_id }}${{ matrix.julia-version }}"
       - uses: santisaez/packer-action@v1
         with:
           template: cofii-base.json
