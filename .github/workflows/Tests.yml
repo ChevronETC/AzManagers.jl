@@ -29,10 +29,10 @@ jobs:
           template: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json.j2
           output_file: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
         env:
-          SUBSCRIPTION_ID: "${{ SUBSCRIPTION_ID }}"
-          TENANT_ID: "${{ TENANT_ID }}"
-          CLIENT_ID: "${{ CLIENT_ID }}"
-          CLIENT_SECRET: "${{ CLIENT_SECRET }}"
+          SUBSCRIPTION_ID: "${{ secrets.SUBSCRIPTION_ID }}"
+          TENANT_ID: "${{ secrets.TENANT_ID }}"
+          CLIENT_ID: "${{ secrets.CLIENT_ID }}"
+          CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
           RESOURCE_GROUP: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
           JULIA_VERSION: "${{ matrix.julia-version }}"
 
