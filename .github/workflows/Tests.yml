@@ -22,8 +22,8 @@ jobs:
           ls -al ..
           ls -al ../..
           ls -al ../../..
-            - name: Validate Template
-      - uses: operatehappy/packer-github-actions@master
+      - name: Validate Template
+        uses: operatehappy/packer-github-actions@master
         with:
           command: validate
           target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json.j2
