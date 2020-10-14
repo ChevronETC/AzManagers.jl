@@ -22,11 +22,25 @@ jobs:
           ls -al ..
           ls -al ../..
           ls -al ../../..
+      
+      - name: Setup nginx
+        uses: cuchi/jinja2-action@v1.2.0
+        with:
+          template: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json.j2
+          output_file: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+        env:
+          SUBSCRIPTION_ID: "${{ SUBSCRIPTION_ID }}"
+          TENANT_ID: "${{ TENANT_ID }}"
+          CLIENT_ID: "${{ CLIENT_ID }}"
+          CLIENT_SECRET: "${{ CLIENT_SECRET }}"
+          RESOURCE_GROUP: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
+          JULIA_VERSION: "${{ matrix.julia-version }}"
+
       - name: Validate Template
         uses: operatehappy/packer-github-actions@master
         with:
           command: validate
-          target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json.j2
+          target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
 
       # build artifact
       - name: Build Artifact
@@ -34,7 +48,7 @@ jobs:
         with:
           command: build
           arguments: "-color=false -force -timestamp-ui"
-          target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json.j2
+          target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
 
       # - uses: santisaez/packer-action@v1
       #   with:

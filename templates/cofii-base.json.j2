@@ -19,8 +19,8 @@
         "image_version": "1.0",
         "replication_regions": ["South Central US"]
       },    
-      "build_resource_group_name": "{{ resourcegroup }}",
-      "managed_image_resource_group_name": "{{ resourcegroup }}",
+      "build_resource_group_name": "{{ RESOURCE_GROUP }}",
+      "managed_image_resource_group_name": "{{ RESOURCE_GROUP }}",
       "managed_image_name": "unit-test-image",
       "managed_image_storage_account_type": "Premium_LRS",
       "virtual_network_name":"dummy-vnet",
@@ -62,7 +62,7 @@
       "type": "shell",
       "inline":
       [
-        "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/{{ julia_version }}/julia-{{ julia_version }}-linux-x86_64.tar.gz"
+        "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/{{ JULIA_VERSION }}/julia-{{ JULIA_VERSION }}-linux-x86_64.tar.gz"
       ]
     },
     {
@@ -71,8 +71,8 @@
       [
         "echo \"installing Julia\"",
         "mkdir ~/.julia",
-        "sudo tar --strip-components=1 -xzvf julia-{{ julia_version }}-linux-x86_64.tar.gz -C /opt/julia",
-        "sudo rm -f julia-{{ julia_version }}-linux-x86_64.tar.gz",
+        "sudo tar --strip-components=1 -xzvf julia-{{ JULIA_VERSION }}-linux-x86_64.tar.gz -C /opt/julia",
+        "sudo rm -f julia-{{ JULIA_VERSION }}-linux-x86_64.tar.gz",
         "cd",
         "sed -i '1 i export PATH=\"${PATH}:/opt/julia/bin\"' .bashrc",
         "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"720\"' .bashrc",
