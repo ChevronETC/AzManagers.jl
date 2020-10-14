@@ -15,7 +15,7 @@ jobs:
       - name: Run Az CLI script
         run: |
           az group create -l southcentralus -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
-          az sig create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -n "dummy-sig"
+          az sig create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "dummy-sig"
       - uses: santisaez/packer-action@v1
         with:
           template: cofii-base.json
