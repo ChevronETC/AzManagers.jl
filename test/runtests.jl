@@ -5,7 +5,7 @@ ss_template_json = JSON.parse(ENV["SS_TEMPLATE_JSON"])
 myscaleset = AzManagers.build_sstemplate(ss_template_json["name"],
     subscriptionid       = ss_template_json["subscriptionid"],
     location             = ss_template_json["location"],
-    resourcegroup        = ss_template_json["resourcegroup"],
+    resourcegroup        = ENV["RESOURCE_GROUP"], #ss_template_json["resourcegroup"]
     resourcegroup_vnet   = ss_template_json["resourcegroup_vnet"],
     vnet                 = ss_template_json["vnet"],
     subnet               = ss_template_json["subnet"],
@@ -17,10 +17,7 @@ AzManagers.save_template_scaleset("cbox02", myscaleset)
 template = "cbox02"
 
 run(`ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''`)
-run(`set -o pipefail`)
-run(`/usr/local/bin/packer build -color=false -force -timestamp-ui -only=azure-arm cofii-base.json | tee packer-output-base.log`)
 
-julia_version = ENV["JULIA_VERSION"]
 resourcegroup = ENV["RESOURCE_GROUP"]
 credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
 subscriptionid = credentials["subscriptionId"]

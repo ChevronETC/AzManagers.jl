@@ -31,7 +31,7 @@ jobs:
           TENANT_ID: "${{ secrets.TENANT_ID }}" 
           CLIENT_ID: "${{ secrets.CLIENT_ID }}"
           CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
-          RESOURCE_GROUP: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
+          RESOURCE_GROUP: "azmanagers-unittesting" #"${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
           JULIA_VERSION: "${{ matrix.julia-version }}"
           SIG_NAME: "sig${{ github.run_id }}${{ matrix.julia-version }}"
 
@@ -40,20 +40,12 @@ jobs:
         with:
           command: validate
           target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
-
-      # build artifact
       - name: Build Artifact
         uses: operatehappy/packer-github-actions@master
         with:
           command: build
           arguments: "-color=false -force -timestamp-ui"
           target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
-
-      # - uses: santisaez/packer-action@v1
-      #   with:
-      #     template: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json.j2
-      #   env:
-      #     SUBSCRIPTION_ID: ${{ secrets.SUBSCRIPTION_ID }}
       - uses: julia-actions/setup-julia@latest
         with:
           version: ${{ matrix.julia-version }}
@@ -68,7 +60,7 @@ jobs:
       - uses: codecov/codecov-action@v1
         with:
           file: lcov.info
-      # - name: Run Az CLI script
-      #   run: |
-      #     az group delete -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --yes
-      #   if: ${{ always() }}
+      - name: Run Az CLI script
+        run: |
+          az group delete -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --yes
+        if: ${{ always() }}
