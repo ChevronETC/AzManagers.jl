@@ -35,17 +35,17 @@ jobs:
           JULIA_VERSION: "${{ matrix.julia-version }}"
           SIG_NAME: "sig${{ github.run_id }}${{ matrix.julia-version }}"
 
-      - name: Validate Template
-        uses: operatehappy/packer-github-actions@master
-        with:
-          command: validate
-          target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
-      - name: Build Artifact
-        uses: operatehappy/packer-github-actions@master
-        with:
-          command: build
-          arguments: "-color=false -force -timestamp-ui"
-          target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+      # - name: Validate Template
+      #   uses: operatehappy/packer-github-actions@master
+      #   with:
+      #     command: validate
+      #     target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+      # - name: Build Artifact
+      #   uses: operatehappy/packer-github-actions@master
+      #   with:
+      #     command: build
+      #     arguments: "-color=false -force -timestamp-ui"
+      #     target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
       - uses: julia-actions/setup-julia@latest
         with:
           version: ${{ matrix.julia-version }}
@@ -54,8 +54,8 @@ jobs:
         env:
           AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
           JULIA_VERSION: "${{ matrix.julia-version }}"
-          RESOURCE_GROUP: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
-          SS_TEMPLATE_JSON: ${{ secrets.SS_TEMPLATE_JSON_2 }}
+          RESOURCE_GROUP: "azmanagers-unittesting" #"${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
+          SS_TEMPLATE_JSON: ${{ secrets.SS_TEMPLATE_JSON_3 }}
       - uses: julia-actions/julia-processcoverage@v1
       - uses: codecov/codecov-action@v1
         with:
