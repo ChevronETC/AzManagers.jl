@@ -188,7 +188,7 @@ function Distributed.addprocs(template::Dict, nprocs::Int;
         maxprice = -1,
         mpi_ranks_per_worker = 0,
         mpi_flags = "-bind-to core:$(get(ENV, "OMP_NUM_THREADS", 1)) -map-by numa")
-    @info "Top of addprocs 1"
+    @info "start of addprocs 1"
     (subscriptionid == "" || resourcegroup == "" || user == "") && load_manifest()
     subscriptionid == "" && (subscriptionid = _manifest["subscriptionid"])
     resourcegroup == "" && (resourcegroup = _manifest["resourcegroup"])
@@ -223,10 +223,12 @@ function Distributed.addprocs(template::Dict, nprocs::Int;
     end
 
     pids
+    @info "end of addprocs 1"
+
 end
 
 function Distributed.addprocs(template::AbstractString, nprocs::Int; kwargs...)
-    @info "Top of addprocs 2"
+    @info "start of addprocs 2"
 
     isfile(templates_filename_scaleset()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
 
@@ -234,6 +236,8 @@ function Distributed.addprocs(template::AbstractString, nprocs::Int; kwargs...)
     haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
 
     addprocs(templates_scaleset[template], nprocs; kwargs...)
+    @info "end of addprocs 2"
+
 end
 
 spin(spincount, elapsed_time) = ['◐','◓','◑','◒','✓'][spincount]*@sprintf(" %.2f",elapsed_time)*" seconds"
@@ -259,7 +263,7 @@ function spinner(launch_tasks, verb)
 end
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)
-    @info "Top of Distributed.launch"
+    @info "start of Distributed.launch"
 
     @debug "getting image info"
     sigimagename, sigimageversion, imagename = scaleset_image(manager, params[:template], params[:sigimagename], params[:sigimageversion], params[:imagename])
@@ -330,12 +334,11 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     @info "Finalizing cluster..."
 
     notify(c)
-    @info "After notify"
-
+    @info "end of Distributed.launch"
 end
 
 function launchcmd(omp_num_threads, user, vm)
-    @info "Top of launchcmd"
+    @info "start of launchcmd"
     load_manifest()
 
     ssh_id = _manifest["ssh_private_key_file"]
@@ -344,20 +347,22 @@ function launchcmd(omp_num_threads, user, vm)
     cmds = """$(Base.shell_escape_posixly(exename)) $(Base.shell_escape_posixly(exeflags))"""
     cmd = `env OMP_NUM_THREADS=$omp_num_threads sh -l -c $cmds`
     `ssh -i $ssh_id -T -a -x -o ClearAllForwardings=yes $user$(vm["bindaddr"]) $(Base.shell_escape_posixly(cmd))`
+    @info "end of launchcmd"
 end
 
 function launchcmd_mpi(mpi_ranks_per_worker, omp_num_threads, mpi_flags, cookie, user, vm)
-    @info "Top of launchcmd_mpi"
+    @info "start of launchcmd_mpi"
 
     load_manifest()
 
     ssh_id = _manifest["ssh_private_key_file"]
     _cmd = "mpirun -n $mpi_ranks_per_worker -env OMP_NUM_THREADS=$omp_num_threads $mpi_flags julia -e \"using AzManagers, MPI; AzManagers.start_worker_mpi(\\\"$cookie\\\")\""
     `ssh -i $ssh_id -T -a -x -o ClearAllForwardings=yes $user$(vm["bindaddr"]) $_cmd`
+    @info "end of launchcmd_mpi"
 end
 
 function Distributed.launch_on_machine(manager::AzManager, vm, params, launched, launch_ntfy::Condition)
-    @info "Top of distributed.launch on machine"
+    @info "start of Distributed.launch_on_machine"
 
     cookie = Distributed.cluster_cookie()
     mpi_ranks_per_worker = params[:mpi_ranks_per_worker]
@@ -408,6 +413,7 @@ function Distributed.launch_on_machine(manager::AzManager, vm, params, launched,
 
     push!(launched, wconfig)
     notify(launch_ntfy)
+    @info "end of Distributed.launch_on_machine"
 end
 
 #
@@ -415,10 +421,15 @@ end
 # These methods are slightly modified versions of what is in the base Distributed standard library.
 #
 function process_messages_mpi_rank0(r_stream::TCPSocket, w_stream::TCPSocket, incoming::Bool=true)
+    @info "start of process_messages_mpi_rank0"
+
     @async process_tcp_streams_mpi_rank0(r_stream, w_stream, incoming)
+    @info "end of process_messages_mpi_rank0"
 end
 
 function process_tcp_streams_mpi_rank0(r_stream::TCPSocket, w_stream::TCPSocket, incoming::Bool)
+    @info "start of process_tcp_streams_mpi_rank0"
+
     Sockets.nagle(r_stream, false)
     Sockets.quickack(r_stream, true)
     Distributed.wait_connected(r_stream)
@@ -428,9 +439,13 @@ function process_tcp_streams_mpi_rank0(r_stream::TCPSocket, w_stream::TCPSocket,
         Distributed.wait_connected(w_stream)
     end
     message_handler_loop_mpi_rank0(r_stream, w_stream, incoming)
+    @info "end of process_tcp_streams_mpi_rank0"
+
 end
 
 function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bool)
+    @info "start of message_handler_loop_mpi_rank0"
+
     wpid=0          # the worker r_stream is connected to.
     boundary = similar(Distributed.MSG_BOUNDARY)
 
@@ -541,9 +556,13 @@ function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bo
 
         return nothing
     end
+    @info "end of message_handler_loop_mpi_rank0"
+
 end
 
 function message_handler_loop_mpi_rankN()
+    @info "start of message_handler_loop_mpi_rankN"
+
     comm = MPI.COMM_WORLD
     header,msg,version = nothing,nothing,nothing
     while true
@@ -570,10 +589,14 @@ function message_handler_loop_mpi_rankN()
             @warn "MPI - message_handler_loop_mpi -- caught error: $(String(take!(io)))"
         end    
     end
+    @info "end of message_handler_loop_mpi_rankN"
+
 end
 
 start_worker_mpi_rank0(cookie::AbstractString=readline(stdin); kwargs...) = start_worker_mpi_rank0(stdout, cookie; kwargs...)
 function start_worker_mpi_rank0(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
+    @info "start of start_worker_mpi_rank0"
+
     Distributed.init_multi()
 
     close_stdin && close(stdin) # workers will not use it
@@ -614,11 +637,15 @@ function start_worker_mpi_rank0(out::IO, cookie::AbstractString=readline(stdin);
         print(stderr, "unhandled exception on $(myid()): $(err)\nexiting.\n")
     end
 
+    @info "end of start_worker_mpi_rank0"
+
     close(sock)
     exit(0)
 end
 
 function start_worker_mpi(cookie)
+    @info "start of start_worker_mpi"
+
     MPI.Initialized() || MPI.Init()
 
     comm = MPI.COMM_WORLD
@@ -637,6 +664,8 @@ function start_worker_mpi(cookie)
     fetch(t)
 
     MPI.Barrier(comm)
+    @info "end of start_worker_mpi"
+
 end
 
 #
