@@ -330,6 +330,8 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     @info "Finalizing cluster..."
 
     notify(c)
+    @info "After notify"
+
 end
 
 function launchcmd(omp_num_threads, user, vm)
