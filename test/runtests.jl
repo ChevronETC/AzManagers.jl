@@ -64,7 +64,7 @@ AzManagers.write_manifest(;resourcegroup=ENV["RESOURCE_GROUP"], subscriptionid=c
     master = gethostname()
     unique_workers = unique(myworkers)
     @test length(unique_workers) == ninstances
-    for worker in myworkers
+    for worker in myworkers 
         @test master != worker
     end
 
