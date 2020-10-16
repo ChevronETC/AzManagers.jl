@@ -36,7 +36,7 @@ AzManagers.write_manifest(;resourcegroup=ENV["RESOURCE_GROUP"], subscriptionid=c
     tppi = ppi*ninstances                       # Total number of Julia processes in the entire scale set
     session = AzSession(;protocal=AzClientCredentials, client_id=credentials["clientId"], client_secret=credentials["clientSecret"])
     # Get rid of ninstances, it is not needed for addprocs
-    kwargs = (subscriptionid = kwargs.subscriptionid, resourcegroup = kwargs.resourcegroup, ppi = ppi, group = kwargs.group, session = session)
+    kwargs = (subscriptionid = kwargs.subscriptionid, resourcegroup = kwargs.resourcegroup, sigimagename = "unit-test-image", sigimageversion = "1.0.0", ppi = ppi, group = kwargs.group, session = session)
 
     #
     # Unit Test 1 - Create scale set and start Julia processes
