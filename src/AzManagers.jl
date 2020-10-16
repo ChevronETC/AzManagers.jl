@@ -188,6 +188,7 @@ function Distributed.addprocs(template::Dict, nprocs::Int;
         maxprice = -1,
         mpi_ranks_per_worker = 0,
         mpi_flags = "-bind-to core:$(get(ENV, "OMP_NUM_THREADS", 1)) -map-by numa")
+    @info "Top of addprocs 1"
     (subscriptionid == "" || resourcegroup == "" || user == "") && load_manifest()
     subscriptionid == "" && (subscriptionid = _manifest["subscriptionid"])
     resourcegroup == "" && (resourcegroup = _manifest["resourcegroup"])
@@ -225,6 +226,8 @@ function Distributed.addprocs(template::Dict, nprocs::Int;
 end
 
 function Distributed.addprocs(template::AbstractString, nprocs::Int; kwargs...)
+    @info "Top of addprocs 2"
+
     isfile(templates_filename_scaleset()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
 
     templates_scaleset = JSON.parse(read(templates_filename_scaleset(), String))
@@ -256,6 +259,8 @@ function spinner(launch_tasks, verb)
 end
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)
+    @info "Top of Distributed.launch"
+
     @debug "getting image info"
     sigimagename, sigimageversion, imagename = scaleset_image(manager, params[:template], params[:sigimagename], params[:sigimageversion], params[:imagename])
 
@@ -328,6 +333,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
 end
 
 function launchcmd(omp_num_threads, user, vm)
+    @info "Top of launchcmd"
     load_manifest()
 
     ssh_id = _manifest["ssh_private_key_file"]
@@ -339,6 +345,8 @@ function launchcmd(omp_num_threads, user, vm)
 end
 
 function launchcmd_mpi(mpi_ranks_per_worker, omp_num_threads, mpi_flags, cookie, user, vm)
+    @info "Top of launchcmd_mpi"
+
     load_manifest()
 
     ssh_id = _manifest["ssh_private_key_file"]
@@ -347,6 +355,8 @@ function launchcmd_mpi(mpi_ranks_per_worker, omp_num_threads, mpi_flags, cookie,
 end
 
 function Distributed.launch_on_machine(manager::AzManager, vm, params, launched, launch_ntfy::Condition)
+    @info "Top of distributed.launch on machine"
+
     cookie = Distributed.cluster_cookie()
     mpi_ranks_per_worker = params[:mpi_ranks_per_worker]
     mpi_flags = params[:mpi_flags]
