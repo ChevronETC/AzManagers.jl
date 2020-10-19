@@ -38,7 +38,7 @@ jobs:
       - name: Echo the contents of the templated file
         run: |
           cat /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
-          ssh-keygen -t rsa -q -N ""
+          ssh-keygen -t rsa -q -N "" -f "id_rsa"
 
       - name: Validate Template
         uses: operatehappy/packer-github-actions@master
