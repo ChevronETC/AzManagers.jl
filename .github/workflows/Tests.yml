@@ -18,10 +18,9 @@ jobs:
           az group wait --created --resource-group "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
           az sig create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "sig${{ github.run_id }}${{ matrix.julia-version }}"
           az sig image-definition create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --gallery-name "sig${{ github.run_id }}${{ matrix.julia-version }}" --gallery-image-definition "unit-test-image" --publisher "canonical" --offer "0001-com-ubuntu-server-focal" --sku "20_04-lts" --os-type linux
+          az sig show  -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "sig${{ github.run_id }}${{ matrix.julia-version }}"
 
-    # az sig show  -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "sig${{ github.run_id }}${{ matrix.julia-version }}"
-    # sleep 1m
-      - name: Setup nginx
+      - name: Template the Packer .j2 file
         uses: cuchi/jinja2-action@v1.2.0
         with:
           template: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json.j2
@@ -31,36 +30,47 @@ jobs:
           TENANT_ID: "${{ secrets.TENANT_ID }}" 
           CLIENT_ID: "${{ secrets.CLIENT_ID }}"
           CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
-          RESOURCE_GROUP: "azmanagers-unittesting" #"${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
+          RESOURCE_GROUP: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
           JULIA_VERSION: "${{ matrix.julia-version }}"
           SIG_NAME: "sig${{ github.run_id }}${{ matrix.julia-version }}"
 
-      # - name: Validate Template
-      #   uses: operatehappy/packer-github-actions@master
-      #   with:
-      #     command: validate
-      #     target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
-      # - name: Build Artifact
-      #   uses: operatehappy/packer-github-actions@master
-      #   with:
-      #     command: build
-      #     arguments: "-color=false -force -timestamp-ui"
-      #     target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+      - name: Echo the contents of the templated file
+        run: |
+          cat /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+
+      - name: Validate Template
+        uses: operatehappy/packer-github-actions@master
+        with:
+          command: validate
+          target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+
+      - name: Build Artifact
+        uses: operatehappy/packer-github-actions@master
+        with:
+          command: build
+          arguments: "-color=false -force -timestamp-ui"
+          target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+
       - uses: julia-actions/setup-julia@latest
         with:
           version: ${{ matrix.julia-version }}
+
       - uses: julia-actions/julia-buildpkg@latest #change lastest to master
+
       - uses: julia-actions/julia-runtest@latest #change lastest to master
         env:
           AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
           JULIA_VERSION: "${{ matrix.julia-version }}"
           RESOURCE_GROUP: "azmanagers-unittesting" #"${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
           SS_TEMPLATE_JSON: ${{ secrets.SS_TEMPLATE_JSON_3 }}
+
       - uses: julia-actions/julia-processcoverage@v1
+
       - uses: codecov/codecov-action@v1
         with:
           file: lcov.info
-      - name: Run Az CLI script
-        run: |
-          az group delete -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --yes
-        if: ${{ always() }}
+
+      # - name: Run Az CLI script
+      #   run: |
+      #     az group delete -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --yes
+      #   if: ${{ always() }}
