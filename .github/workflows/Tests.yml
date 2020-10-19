@@ -40,7 +40,7 @@ jobs:
           cat /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
           mkdir /home/runner/.ssh/
           touch /home/runner/.ssh/id_rsa
-          ssh-keygen -t rsa -q -N "" -f "/home/runner/.ssh/id_rsa"
+          ssh-keygen -t rsa -q -N "" -f "/home/runner/.ssh/id_rsa_v2"
 
       - name: Validate Template
         uses: operatehappy/packer-github-actions@master
