@@ -38,11 +38,18 @@ jobs:
       - name: Echo the contents of the templated file
         run: |
           cat /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
-          mkdir /home/runner/.ssh/
-          ls -al /home/runner/.ssh/
-          ssh-keygen -t rsa -q -N "" -f "/home/runner/.ssh/id_rsa_v2"
-          chmod 777 /home/runner/.ssh/id_rsa_v2
-          cat /home/runner/.ssh/id_rsa_v2
+      - name: Install Packer
+        run: |
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update && sudo apt-get install packer
+          packer build -color=false -force -timestamp-ui /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+
+      # mkdir /home/runner/.ssh/
+      # ls -al /home/runner/.ssh/
+      # ssh-keygen -t rsa -q -N "" -f "/home/runner/.ssh/id_rsa_v2"
+      # chmod 777 /home/runner/.ssh/id_rsa_v2
+      # cat /home/runner/.ssh/id_rsa_v2
 
       - name: Validate Template
         uses: operatehappy/packer-github-actions@master
