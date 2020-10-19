@@ -19,7 +19,7 @@ jobs:
           az sig create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "sig${{ github.run_id }}${{ matrix.julia-version }}"
           az sig image-definition create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --gallery-name "sig${{ github.run_id }}${{ matrix.julia-version }}" --gallery-image-definition "unit-test-image" --publisher "canonical" --offer "0001-com-ubuntu-server-focal" --sku "20_04-lts" --os-type linux
           az sig show  -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "sig${{ github.run_id }}${{ matrix.julia-version }}"
-
+  
       - name: Template the Packer .j2 file
         uses: cuchi/jinja2-action@v1.2.0
         with:
