@@ -26,7 +26,7 @@
       "virtual_network_name":"dummy-vnet",
       "virtual_network_subnet_name": "dummy-subnet",
       "virtual_network_resource_group_name": "azmanagers-unittesting",
-      "private_virtual_network_with_public_ip": false,
+      "private_virtual_network_with_public_ip": "{{ env['PUBLIC_IP'] | bool }}",
       "ssh_username": "cvx"
     }
   ],

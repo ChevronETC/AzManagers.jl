@@ -33,6 +33,7 @@ jobs:
           RESOURCE_GROUP: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
           JULIA_VERSION: "${{ matrix.julia-version }}"
           SIG_NAME: "sig${{ github.run_id }}${{ matrix.julia-version }}"
+          PUBLIC_IP: true
 
       - name: Echo the contents of the templated file
         run: |
