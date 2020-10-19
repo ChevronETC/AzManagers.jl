@@ -39,9 +39,10 @@ jobs:
         run: |
           cat /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
           mkdir /home/runner/.ssh/
-          touch /home/runner/.ssh/id_rsa
+          touch /home/runner/.ssh/id_rsa_v2
+          chmode 777 /home/runner/.ssh/id_rsa_v2
           ls -al /home/runner/.ssh/
-          cat /home/runner/.ssh/id_rsa
+          cat /home/runner/.ssh/id_rsa_v2
           ssh-keygen -t rsa -q -N "" -f "/home/runner/.ssh/id_rsa_v2"
 
       - name: Validate Template
