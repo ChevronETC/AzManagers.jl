@@ -80,7 +80,7 @@
         "export PATH=\"${PATH}:/opt/julia/bin\"",
         "echo \"installing julia packages\"",
         "export JULIA_MPI_BINARY=\"system\"",
-        "julia -e 'using Pkg; pkg\"add AzSessions AzManagers#{{ env['BRANCH_NAME'] }}\"'",
+        "julia -e 'using Pkg; pkg\"add AzSessions AzManagers#github-cicd\"'",
         "julia -e 'using Pkg; pkg\"precompile\"'"
       ]
     }
