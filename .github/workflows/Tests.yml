@@ -51,18 +51,18 @@ jobs:
       # chmod 777 /home/runner/.ssh/id_rsa_v2
       # cat /home/runner/.ssh/id_rsa_v2
 
-      - name: Validate Template
-        uses: operatehappy/packer-github-actions@master
-        with:
-          command: validate
-          target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+      # - name: Validate Template
+      #   uses: operatehappy/packer-github-actions@master
+      #   with:
+      #     command: validate
+      #     target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
 
-      - name: Build Artifact
-        uses: operatehappy/packer-github-actions@master
-        with:
-          command: build
-          arguments: "-color=false -force -timestamp-ui"
-          target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+      # - name: Build Artifact
+      #   uses: operatehappy/packer-github-actions@master
+      #   with:
+      #     command: build
+      #     arguments: "-color=false -force -timestamp-ui"
+      #     target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
 
       - uses: julia-actions/setup-julia@latest
         with:
