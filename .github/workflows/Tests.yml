@@ -35,7 +35,7 @@ jobs:
           JULIA_VERSION: "${{ matrix.julia-version }}"
           SIG_NAME: "sig${{ github.run_id }}${{ matrix.julia-version }}"
           PUBLIC_IP: true
-          BRANCH_NAME: "{{ github.ref }}"
+          BRANCH_NAME: "${{ github.ref }}"
 
       - name: Install Packer
         run: |
