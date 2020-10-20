@@ -1,6 +1,12 @@
+write(stdout, "At the top of the unit tests file\n")
+
 using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 
 ss_template_json = JSON.parse(ENV["SS_TEMPLATE_JSON"])
+
+write(stdout, "ss_template_json: $(ss_template_json)\n")
+write(stdout, "ENV: $(ENV)\n")
+
 
 myscaleset = AzManagers.build_sstemplate(ss_template_json["name"],
     subscriptionid       = ss_template_json["subscriptionid"],

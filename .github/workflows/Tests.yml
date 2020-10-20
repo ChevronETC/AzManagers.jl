@@ -5,7 +5,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        julia-version: [1.5]
+        julia-version: [1.0, 1.5]
         os: [ubuntu-latest] 
     steps:
       - uses: actions/checkout@v1.0.0
@@ -38,31 +38,18 @@ jobs:
       - name: Echo the contents of the templated file
         run: |
           cat /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
-      - name: Install Packer
-        run: |
-          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-          sudo apt-get update && sudo apt-get install packer
-          packer build -color=false -force -timestamp-ui /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
 
-      # mkdir /home/runner/.ssh/
-      # ls -al /home/runner/.ssh/
-      # ssh-keygen -t rsa -q -N "" -f "/home/runner/.ssh/id_rsa_v2"
-      # chmod 777 /home/runner/.ssh/id_rsa_v2
-      # cat /home/runner/.ssh/id_rsa_v2
+      # - name: Install Packer
+      #   run: |
+      #     curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+      #     sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+      #     sudo apt-get update && sudo apt-get install packer
 
-      # - name: Validate Template
-      #   uses: operatehappy/packer-github-actions@master
-      #   with:
-      #     command: validate
-      #     target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
-
-      # - name: Build Artifact
-      #   uses: operatehappy/packer-github-actions@master
-      #   with:
-      #     command: build
-      #     arguments: "-color=false -force -timestamp-ui"
-      #     target: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+      # - name: packer build image
+      #   run: |
+      #     packer build -color=false -force -timestamp-ui /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+        # can remove -force and should make each image name unique
+        # will need to make sure we are adding the correct branch of AzManagers to the image we want to test
 
       - uses: julia-actions/setup-julia@latest
         with:
@@ -74,7 +61,7 @@ jobs:
         env:
           AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
           JULIA_VERSION: "${{ matrix.julia-version }}"
-          RESOURCE_GROUP: "azmanagers-unittesting" #"${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
+          RESOURCE_GROUP: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
           SS_TEMPLATE_JSON: ${{ secrets.SS_TEMPLATE_JSON_3 }}
 
       - uses: julia-actions/julia-processcoverage@v1
@@ -83,7 +70,7 @@ jobs:
         with:
           file: lcov.info
 
-      - name: Run Az CLI script
-        run: |
-          az group delete -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --yes
-        if: ${{ always() }}
+      # - name: Run Az CLI script
+      #   run: |
+      #     az group delete -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --yes
+      #   if: ${{ always() }}
