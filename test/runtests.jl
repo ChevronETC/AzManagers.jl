@@ -15,8 +15,8 @@ myscaleset = AzManagers.build_sstemplate(ss_template_json["name"],
     resourcegroup_vnet   = ss_template_json["resourcegroup_vnet"],
     vnet                 = ss_template_json["vnet"],
     subnet               = ss_template_json["subnet"],
-    imagegallery         = ss_template_json["imagegallery"],
-    imagename            = ss_template_json["imagename"],
+    imagegallery         = ENV["IMAGE_GALLERY"], #ss_template_json["imagegallery"],
+    imagename            = ENV["IMAGE_NAME"], #ss_template_json["imagename"], #grab from ENV instead? we are creating the image dynamically so why are we pulling a static value here?
     skuname              = ss_template_json["skuname"])
 AzManagers.save_template_scaleset("cbox02", myscaleset)
 # mkdir(joinpath(homedir(), ".ssh"))
