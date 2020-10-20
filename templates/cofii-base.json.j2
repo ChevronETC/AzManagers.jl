@@ -63,7 +63,7 @@
       "type": "shell",
       "inline":
       [
-        "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/{{ env['JULIA_VERSION'] }}/julia-{{ env['JULIA_VERSION'] }}-linux-x86_64.tar.gz"
+        "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/{{ env['JULIA_VERSION'] }}/julia-1.5.2-linux-x86_64.tar.gz"
       ]
     },
     {
@@ -72,8 +72,8 @@
       [
         "echo \"installing Julia\"",
         "mkdir ~/.julia",
-        "sudo tar --strip-components=1 -xzvf julia-{{ env['JULIA_VERSION'] }}-linux-x86_64.tar.gz -C /opt/julia",
-        "sudo rm -f julia-{{ env['JULIA_VERSION'] }}-linux-x86_64.tar.gz",
+        "sudo tar --strip-components=1 -xzvf julia-1.5.2-linux-x86_64.tar.gz -C /opt/julia",
+        "sudo rm -f julia-1.5.2-linux-x86_64.tar.gz",
         "cd",
         "sed -i '1 i export PATH=\"${PATH}:/opt/julia/bin\"' .bashrc",
         "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"720\"' .bashrc",
