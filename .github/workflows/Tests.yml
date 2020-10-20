@@ -6,7 +6,7 @@ jobs:
     strategy:
       matrix:
         julia-version: [1.5]
-        os: [ubuntu-latest]
+        os: [ubuntu-latest] 
     steps:
       - uses: actions/checkout@v1.0.0
       - uses: azure/login@v1.1
