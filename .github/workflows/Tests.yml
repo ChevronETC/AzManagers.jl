@@ -86,7 +86,7 @@ jobs:
         with:
           file: lcov.info
 
-      - name: Delete CI Resource Group
-        run: |
-          az group delete -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --yes
-        if: ${{ always() }}
+      # - name: Delete CI Resource Group
+      #   run: |
+      #     az group delete -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --yes
+      #   if: ${{ always() }}

@@ -116,7 +116,7 @@ function build_sstemplate(name;
     )
 
     if publicipname != ""
-        body["properties"]["virtualMachineProfile"]["networkProfile"]["networkInterfaceConfigurations"][1]["properties"]["ipConfigurations"][1]["publicIPAddressConfiguration"] = Dict("name" => publicipname, "properties" => Dict("idleTimeoutInMinutes" => 15))
+        body["properties"]["virtualMachineProfile"]["networkProfile"]["networkInterfaceConfigurations"][1]["properties"]["ipConfigurations"][1]["properties"]["publicIPAddressConfiguration"] = Dict("name" => publicipname, "properties" => Dict("idleTimeoutInMinutes" => 15, ""))
     end
     
     body
