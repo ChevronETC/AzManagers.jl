@@ -1745,10 +1745,12 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     if !scaleset_exists
         _template["sku"]["capacity"] = 0
         write(stdout, "template: $(_template)\n")
+        write(stdout, "JSON template: JSON.json(_template)\n")
+
         @retry nretry azrequest(
             "PUT",
             verbose,
-            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2019-12-01",
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2020-06-01",
             Dict("Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"),
             json(_template,1))
     end
