@@ -52,7 +52,6 @@ jobs:
           SIG_NAME: "sig${{ github.run_id }}${{ matrix.julia-version }}"
           PUBLIC_IP: true
           BRANCH_NAME: "${{ steps.myref.outputs.branch }}" #Not the branch, but the SHA
-          SSH_PASS: "${{ secrets.SSH_PASSWORD }}"
 
       - name: Install Packer
         run: |
