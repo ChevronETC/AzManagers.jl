@@ -1744,6 +1744,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
 
     if !scaleset_exists
         _template["sku"]["capacity"] = 0
+        write(stdout, "template: $(_template)\n")
         @retry nretry azrequest(
             "PUT",
             verbose,
