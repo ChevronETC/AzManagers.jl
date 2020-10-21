@@ -1,25 +1,21 @@
-write(stdout, "At the top of the unit tests file\n")
-
 using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 
 ss_template_json = JSON.parse(ENV["SS_TEMPLATE_JSON"])
 
-write(stdout, "ss_template_json: $(ss_template_json)\n")
-write(stdout, "ENV: $(ENV)\n")
-
+# write(stdout, "ss_template_json: $(ss_template_json)\n")
+# write(stdout, "ENV: $(ENV)\n")
 
 myscaleset = AzManagers.build_sstemplate(ss_template_json["name"],
     subscriptionid       = ss_template_json["subscriptionid"],
     location             = ss_template_json["location"],
-    resourcegroup        = ENV["RESOURCE_GROUP"], #ss_template_json["resourcegroup"]
+    resourcegroup        = ENV["RESOURCE_GROUP"],
     resourcegroup_vnet   = ss_template_json["resourcegroup_vnet"],
     vnet                 = ss_template_json["vnet"],
     subnet               = ss_template_json["subnet"],
-    imagegallery         = ENV["IMAGE_GALLERY"], #ss_template_json["imagegallery"],
-    imagename            = ENV["IMAGE_NAME"], #ss_template_json["imagename"], #grab from ENV instead? we are creating the image dynamically so why are we pulling a static value here?
+    imagegallery         = ENV["IMAGE_GALLERY"],
+    imagename            = ENV["IMAGE_NAME"],
     skuname              = ss_template_json["skuname"])
 AzManagers.save_template_scaleset("cbox02", myscaleset)
-# mkdir(joinpath(homedir(), ".ssh"))
 template = "cbox02"
 
 run(`ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''`)
