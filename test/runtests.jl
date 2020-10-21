@@ -18,7 +18,7 @@ myscaleset = AzManagers.build_sstemplate(ss_template_json["name"],
 AzManagers.save_template_scaleset("cbox02", myscaleset)
 template = "cbox02"
 
-run(`ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''`)
+# run(`ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''`)
 
 resourcegroup = ENV["RESOURCE_GROUP"]
 credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])

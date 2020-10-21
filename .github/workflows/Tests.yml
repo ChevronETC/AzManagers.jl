@@ -21,6 +21,17 @@ jobs:
           az sig create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "sig${{ github.run_id }}${{ matrix.julia-version }}"
           az sig image-definition create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --gallery-name "sig${{ github.run_id }}${{ matrix.julia-version }}" --gallery-image-definition "unit-test-image" --publisher "canonical" --offer "0001-com-ubuntu-server-focal" --sku "20_04-lts" --os-type linux
 
+      - name: Create an SSH Key
+        run: |
+          ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
+
+      # - name: Install SSH key
+      #   uses: shimataro/ssh-key-action@v2
+      #   with:
+      #     key: ${{ secrets.SSH_KEY }}
+      #     name: id_rsa # optional
+      #     known_hosts: ${{ secrets.KNOWN_HOSTS }}
+
       - name: Get the current branch name
         shell: bash
         run: echo "::set-output name=branch::${GITHUB_REF#refs/heads/}"
