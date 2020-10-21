@@ -21,6 +21,18 @@ jobs:
           az sig create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "sig${{ github.run_id }}${{ matrix.julia-version }}"
           az sig image-definition create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --gallery-name "sig${{ github.run_id }}${{ matrix.julia-version }}" --gallery-image-definition "unit-test-image" --publisher "canonical" --offer "0001-com-ubuntu-server-focal" --sku "20_04-lts" --os-type linux
 
+      # - name: Grab Branch Name from 'github.ref'
+      #   uses: actions-ecosystem/action-regex-match@v2
+      #   id: branch-regex
+      #   with:
+      #     text: ${{ github.ref }}
+      #     regex: '.*\/(.*)'
+
+      - name: Get the current branch name
+        shell: bash
+        run: echo "::set-output name=branch::${GITHUB_REF#refs/heads/}"
+        id: myref
+
       - name: Template the Packer .j2 file
         uses: cuchi/jinja2-action@v1.2.0
         with:
@@ -35,7 +47,7 @@ jobs:
           JULIA_VERSION: "${{ matrix.julia-version }}"
           SIG_NAME: "sig${{ github.run_id }}${{ matrix.julia-version }}"
           PUBLIC_IP: true
-          BRANCH_NAME: "${{ github.ref }}"
+          BRANCH_NAME: "${{ steps.myref.outputs.branch }}"
 
       - name: Install Packer
         run: |
