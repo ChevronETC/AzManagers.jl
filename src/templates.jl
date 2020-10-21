@@ -114,12 +114,12 @@ function build_sstemplate(name;
             )
         ) # properties
     )
- 
+
     if publicipname != ""
         body["properties"]["virtualMachineProfile"]["networkProfile"]["networkInterfaceConfigurations"][1]["properties"]["ipConfigurations"][1]["publicIpAddressConfiguration"] = Dict("name" => publicipname, "properties" => Dict("idleTimeoutInMinutes" => 15))
     end
     
-    body​​
+    body
 end
 
 templates_filename_scaleset() = joinpath(templates_folder(), "templates_scaleset.json")
