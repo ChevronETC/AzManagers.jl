@@ -1,10 +1,6 @@
 using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 
 ss_template_json = JSON.parse(ENV["SS_TEMPLATE_JSON"])
-
-# write(stdout, "ss_template_json: $(ss_template_json)\n")
-# write(stdout, "ENV: $(ENV)\n")
-
 myscaleset = AzManagers.build_sstemplate(ss_template_json["name"],
     subscriptionid       = ss_template_json["subscriptionid"],
     location             = ss_template_json["location"],
@@ -18,8 +14,6 @@ myscaleset = AzManagers.build_sstemplate(ss_template_json["name"],
     publicipname         = "matthew")
 AzManagers.save_template_scaleset("cbox02", myscaleset)
 template = "cbox02"
-
-# run(`ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''`)
 
 resourcegroup = ENV["RESOURCE_GROUP"]
 credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
