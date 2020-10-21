@@ -14,7 +14,8 @@ myscaleset = AzManagers.build_sstemplate(ss_template_json["name"],
     subnet               = ss_template_json["subnet"],
     imagegallery         = ENV["IMAGE_GALLERY"],
     imagename            = ENV["IMAGE_NAME"],
-    skuname              = ss_template_json["skuname"])
+    skuname              = ss_template_json["skuname"],
+    publicipname         = "matthew")
 AzManagers.save_template_scaleset("cbox02", myscaleset)
 template = "cbox02"
 
@@ -43,7 +44,7 @@ AzManagers.write_manifest(;resourcegroup=ENV["RESOURCE_GROUP"], subscriptionid=c
     #
     # Unit Test 1 - Create scale set and start Julia processes
     #
-    addprocs(template, ninstances; kwargs...)
+    addprocs(template, ninstances; kwargs...) #add public ip to azmanagers for ScaleSet creation (add to templates.jl and to azmanagers.jl if needed)
     
     # Verify that the scale set is present
     session = AzSession(;protocal=AzClientCredentials, client_id=credentials["clientId"], client_secret=credentials["clientSecret"])
