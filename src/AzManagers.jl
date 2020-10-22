@@ -1881,6 +1881,15 @@ function getnextlinks!(manager::AzManager, value, nextlink, nretry, verbose)
     value
 end
 
+function ispublic(nic_template)
+    try
+        haskey(nic_template["properties"]["ipConfigurations"][1]["properties"], "publicIPAddress")
+    catch e
+        @error "Failed to check for public IP"
+        throw(e)
+    end
+end
+
 function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
     _r = @retry nretry azrequest(
         "GET",
@@ -1919,7 +1928,8 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
         if vm["properties"]["provisioningState"] ∈ ("Succeeded", "Updating")
             i = findfirst(id->id == vm["id"], networkinterfaces_vmids)
             if i != nothing
-                push!(vms, Dict("name"=>vm["name"], "host"=>vm["properties"]["osProfile"]["computerName"], "bindaddr"=>networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["privateIPAddress"], "instanceid"=>vm["instanceId"]))
+                bind_address = (ispublic(networkinterfaces[i])) ? networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["publicIPAddress"] : networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["privateIPAddress"]
+                push!(vms, Dict("name"=>vm["name"], "host"=>vm["properties"]["osProfile"]["computerName"], "bindaddr"=>bind_address, "instanceid"=>vm["instanceId"]))
             end
         end
     end
