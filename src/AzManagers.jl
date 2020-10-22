@@ -1882,6 +1882,7 @@ function getnextlinks!(manager::AzManager, value, nextlink, nretry, verbose)
 end
 
 function ispublic(nic_template)
+write(stdout, "INSIDE IS PUBLIC: $(nic_template)")
     try
         haskey(nic_template["properties"]["ipConfigurations"][1]["properties"], "publicIPAddress")
     catch e
@@ -1929,6 +1930,7 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
             i = findfirst(id->id == vm["id"], networkinterfaces_vmids)
             if i != nothing
                 bind_address = (ispublic(networkinterfaces[i])) ? networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["publicIPAddress"] : networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["privateIPAddress"]
+                write(stdout, "BIND_ADDRESS: $(bind_address)\n")
                 push!(vms, Dict("name"=>vm["name"], "host"=>vm["properties"]["osProfile"]["computerName"], "bindaddr"=>bind_address, "instanceid"=>vm["instanceId"]))
             end
         end
