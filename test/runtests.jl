@@ -4,23 +4,23 @@ ss_template_json = JSON.parse(ENV["SS_TEMPLATE_JSON"])
 myscaleset = AzManagers.build_sstemplate(ss_template_json["name"],
     subscriptionid       = ss_template_json["subscriptionid"],
     location             = ss_template_json["location"],
-    resourcegroup        = "azmanagers-unittesting", #ENV["RESOURCE_GROUP"]
+    resourcegroup        = ENV["RESOURCE_GROUP"]
     resourcegroup_vnet   = ss_template_json["resourcegroup_vnet"],
     vnet                 = ss_template_json["vnet"],
     subnet               = ss_template_json["subnet"],
-    imagegallery         = "dummysig", #ENV["IMAGE_GALLERY"],
-    imagename            = "unit-test-image", #ENV["IMAGE_NAME"],
+    imagegallery         = ENV["IMAGE_GALLERY"],
+    imagename            = ENV["IMAGE_NAME"],
     skuname              = ss_template_json["skuname"],
     publicipname         = "matthew")
 AzManagers.save_template_scaleset("cbox02", myscaleset)
 template = "cbox02"
 
-resourcegroup = "azmanagers-unittesting" #ENV["RESOURCE_GROUP"]
+resourcegroup = ENV["RESOURCE_GROUP"]
 credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
 subscriptionid = credentials["subscriptionId"]
 
 AzSessions.write_manifest(;client_id=credentials["clientId"], client_secret=credentials["clientSecret"], tenant=credentials["tenantId"])
-AzManagers.write_manifest(;resourcegroup=resourcegroup, subscriptionid=credentials["subscriptionId"], ssh_user="cvx")
+AzManagers.write_manifest(;resourcegroup=resourcegroup, subscriptionid=subscriptionid, ssh_user="cvx")
 
 @testset "AzManagers, addprocs" for kwargs in (
     (subscriptionid = subscriptionid, resourcegroup = resourcegroup,          ninstances = 1, group = "test$(randstring('a':'z',4))"),

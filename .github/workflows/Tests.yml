@@ -53,15 +53,15 @@ jobs:
           PUBLIC_IP: true
           BRANCH_NAME: "${{ steps.myref.outputs.branch }}" #Not the branch, but the SHA
 
-      # - name: Install Packer
-      #   run: |
-      #     curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-      #     sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-      #     sudo apt-get update && sudo apt-get install packer
+      - name: Install Packer
+        run: |
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update && sudo apt-get install packer
 
-      # - name: Build Packer Image
-      #   run: |
-      #     packer build -color=false -force -timestamp-ui /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+      - name: Build Packer Image
+        run: |
+          packer build -color=false -force -timestamp-ui /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
         # can remove -force and should make each image name unique
         # will need to make sure we are adding the correct branch of AzManagers to the image we want to test
 
