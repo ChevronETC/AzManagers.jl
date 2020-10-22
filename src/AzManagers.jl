@@ -1931,7 +1931,7 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
             if i != nothing
                 bind_address = (ispublic(networkinterfaces[i])) ? networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["publicIPAddress"] : networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["privateIPAddress"]
                 write(stdout, "BIND_ADDRESS: $(bind_address)\n")
-                push!(vms, Dict("name"=>vm["name"], "host"=>vm["properties"]["osProfile"]["computerName"], "bindaddr"=>bind_address.id, "instanceid"=>vm["instanceId"]))
+                push!(vms, Dict("name"=>vm["name"], "host"=>vm["properties"]["osProfile"]["computerName"], "bindaddr"=>bind_address["id"], "instanceid"=>vm["instanceId"]))
             end
         end
     end
