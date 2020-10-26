@@ -25,13 +25,6 @@ jobs:
         run: |
           ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
 
-      # - name: Install SSH key
-      #   uses: shimataro/ssh-key-action@v2
-      #   with:
-      #     key: ${{ secrets.SSH_KEY }}
-      #     name: id_rsa # optional
-      #     known_hosts: ${{ secrets.KNOWN_HOSTS }}
-
       - name: Get the current branch name
         shell: bash
         run: echo "::set-output name=branch::${GITHUB_REF#refs/heads/}"
