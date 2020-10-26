@@ -269,7 +269,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     @debug "Waiting for empty kill list"
     wait_for_empty_kill_list()
     @debug "Getting existing vms"
-    preexisting_vms = scaleset_listvms(manager, params[:subscriptionid], params[:resourcegroup], params[:scalesetname], params[:nretry], params[:verbose])
+    preexisting_vms = scaleset_listvms(manager, params[:template], params[:subscriptionid], params[:resourcegroup], params[:scalesetname], params[:nretry], params[:verbose])
     @debug "Updating scaleset, custom_environment=$custom_environment"
     n = scaleset_create_or_update(manager, params[:user], params[:subscriptionid], params[:resourcegroup], params[:scalesetname], sigimagename, sigimageversion, imagename, params[:nretry], params[:template], params[:targetsize], params[:spot], params[:maxprice], params[:verbose], custom_environment)
     n < 0 && return
@@ -277,7 +277,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     @debug "Waiting for stable scaleset"
     scaleset_wait_until_stable(manager, params[:subscriptionid], params[:resourcegroup], params[:scalesetname], params[:nretry], length(preexisting_vms)+params[:targetsize], params[:verbose])
     @debug "Listing vms in scaleset"
-    vms = scaleset_listvms(manager, params[:subscriptionid], params[:resourcegroup], params[:scalesetname], params[:nretry], params[:verbose])
+    vms = scaleset_listvms(manager, params[:template], params[:subscriptionid], params[:resourcegroup], params[:scalesetname], params[:nretry], params[:verbose])
 
     if haskey(_scaleset_counts, params[:scalesetname])
         _scaleset_counts[(params[:resourcegroup],params[:scalesetname])] += params[:targetsize]
@@ -1734,7 +1734,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     scaleset_exists = false
     for scaleset in scalesets
         if scaleset["name"] == scalesetname
-            n = length(scaleset_listvms(manager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)) #scaleset["sku"]["capacity"]
+            n = length(scaleset_listvms(manager, _template, subscriptionid, resourcegroup, scalesetname, nretry, verbose)) #scaleset["sku"]["capacity"]
             _template["properties"]["virtualMachineProfile"]["osProfile"]["computerNamePrefix"] = scaleset["properties"]["virtualMachineProfile"]["osProfile"]["computerNamePrefix"]
             scaleset_exists = true
             break
@@ -1881,17 +1881,17 @@ function getnextlinks!(manager::AzManager, value, nextlink, nretry, verbose)
     value
 end
 
-function ispublic(nic_template)
-write(stdout, "INSIDE IS PUBLIC: $(nic_template)")
+function ispublic(template)
+write(stdout, "INSIDE IS PUBLIC: $(template)")
     try
-        haskey(nic_template["properties"]["ipConfigurations"][1]["properties"], "publicIPAddress")
+        haskey(template["properties"]["virtualMachineProfile"]["networkProfile"]["networkInterfaceConfigurations"][1]["properties"]["ipConfigurations"][1]["properties"], "publicIPAddressConfiguration")
     catch e
         @error "Failed to check for public IP"
         throw(e)
     end
 end
 
-function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
+function scaleset_listvms(manager::AzManager, template, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
     _r = @retry nretry azrequest(
         "GET",
         verbose,
@@ -1904,14 +1904,27 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
     scalesetname ∉ scalesetnames && return String[]
 
     @debug "getting network interfaces from scaleset"
-    _r = @retry nretry azrequest(
-        "GET",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/microsoft.Compute/virtualMachineScaleSets/$scalesetname/networkInterfaces?api-version=2017-03-30",
-        Dict("Authorization"=>"Bearer $(token(manager.session))"))
+    if ispublic(template)
+        write(stdout, "The template was eval'd as public")
+        _r = @retry nretry azrequest(
+            "GET",
+            verbose,
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/publicipaddresses?api-version=2018-10-01",
+            Dict("Authorization"=>"Bearer $(token(manager.session))"))
+    else
+        write(stdout, "The template was eval'd as private")
+        _r = @retry nretry azrequest(
+            "GET",
+            verbose,
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/microsoft.Compute/virtualMachineScaleSets/$scalesetname/networkInterfaces?api-version=2017-03-30",
+            Dict("Authorization"=>"Bearer $(token(manager.session))"))
+    end
     r = JSON.parse(String(_r.body))
     networkinterfaces = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
+    write(stdout, "Network Interfaces: $(networkinterfaces)")
     @debug "done getting network interfaces from scaleset"
+
+    #/subscriptions/461a0ce0-0ca0-44fa-b7d0-29bb0711dadc/resourceGroups/ubuntu-latest-1.5-329482635/providers/Microsoft.Compute/virtualMachineScaleSets/testdewm/virtualMachines/0/networkInterfaces/cbox02/ipConfigurations/cbox02/publicIPAddresses/matthew
 
     _r = @retry nretry azrequest(
         "GET",
@@ -1929,9 +1942,9 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
         if vm["properties"]["provisioningState"] ∈ ("Succeeded", "Updating")
             i = findfirst(id->id == vm["id"], networkinterfaces_vmids)
             if i != nothing
-                bind_address = (ispublic(networkinterfaces[i])) ? networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["publicIPAddress"] : networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["privateIPAddress"]
+                bind_address = (ispublic(template)) ? networkinterfaces["value"][i]["properties"]["ipAddress"] : networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["privateIPAddress"]
                 write(stdout, "BIND_ADDRESS: $(bind_address)\n")
-                push!(vms, Dict("name"=>vm["name"], "host"=>vm["properties"]["osProfile"]["computerName"], "bindaddr"=>bind_address["id"], "instanceid"=>vm["instanceId"]))
+                push!(vms, Dict("name"=>vm["name"], "host"=>vm["properties"]["osProfile"]["computerName"], "bindaddr"=>bind_address, "instanceid"=>vm["instanceId"]))
             end
         end
     end
