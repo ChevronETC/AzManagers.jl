@@ -60,6 +60,8 @@ AzManagers.write_manifest(;resourcegroup=resourcegroup, subscriptionid=subscript
     #
     master = gethostname()
     unique_workers = unique(myworkers)
+
+    write(stdout, "Master: $(master)\n\n U Workers: $(unique_workers)\n\n")
     @test length(unique_workers) == ninstances
     for worker in myworkers 
         @test master != worker
