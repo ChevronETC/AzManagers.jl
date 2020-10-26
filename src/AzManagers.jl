@@ -356,8 +356,8 @@ function Distributed.launch_on_machine(manager::AzManager, vm, params, launched,
     cookie = Distributed.cluster_cookie()
     mpi_ranks_per_worker = params[:mpi_ranks_per_worker]
     mpi_flags = params[:mpi_flags]
-    omp_num_threads = params[:omp_num_threads],
-    julia_num_threads = params[:julia_num_threads],
+    omp_num_threads = params[:omp_num_threads]
+    julia_num_threads = params[:julia_num_threads]
     user = params[:user] == "" ? "" : "$(params[:user])@"
 
     cmd = mpi_ranks_per_worker == 0 ? launchcmd(omp_num_threads, julia_num_threads, user, vm) : launchcmd_mpi(mpi_ranks_per_worker, omp_num_threads, julia_num_threads, mpi_flags, cookie, user, vm)
