@@ -157,6 +157,8 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `session=AzSession(;lazy=true)` The Azure session used for authentication.
 * `group="cbox"` The name of the Azure scale set.  If the scale set does not yet exist, it will be created.
 * `ppi=1` The number of Julia processes to start per Azure scale set instance.
+* `julia_num_threads=Threads.nthreads()` set the number of Julia threads to run on each worker
+* `omp_num_threads=get(ENV, "OMP_NUM_THREADS", 1)` set the number of OpenMP threads to run on each worker
 * `nretry=20` Number of retries for HTTP REST calls to Azure services.
 * `verbose=0` verbose flag passed on to libcurl.
 * `user=AzManagers._manifest["ssh_user"]` ssh user.
@@ -181,6 +183,8 @@ function Distributed.addprocs(template::Dict, nprocs::Int;
         session = AzSession(;lazy=true),
         group = "cbox",
         ppi = 1,
+        julia_num_threads = Threads.nthreads(),
+        omp_num_threads = get(ENV, "OMP_NUM_THREADS", 1),
         nretry = 20,
         verbose = 0,
         user = "",
@@ -205,6 +209,8 @@ function Distributed.addprocs(template::Dict, nprocs::Int;
         template = template,
         targetsize = nprocs,
         ppi = ppi,
+        julia_num_threads = julia_num_threads,
+        omp_num_threads = omp_num_threads,
         nretry = nretry,
         verbose = verbose,
         user = user,
@@ -350,8 +356,8 @@ function Distributed.launch_on_machine(manager::AzManager, vm, params, launched,
     cookie = Distributed.cluster_cookie()
     mpi_ranks_per_worker = params[:mpi_ranks_per_worker]
     mpi_flags = params[:mpi_flags]
-    omp_num_threads = get(ENV, "OMP_NUM_THREADS", 1)
-    julia_num_threads = get(ENV, "JULIA_NUM_THREADS", 1)
+    omp_num_threads = params[:omp_num_threads],
+    julia_num_threads = params[:julia_num_threads],
     user = params[:user] == "" ? "" : "$(params[:user])@"
 
     cmd = mpi_ranks_per_worker == 0 ? launchcmd(omp_num_threads, julia_num_threads, user, vm) : launchcmd_mpi(mpi_ranks_per_worker, omp_num_threads, julia_num_threads, mpi_flags, cookie, user, vm)
