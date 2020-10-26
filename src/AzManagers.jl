@@ -1924,8 +1924,6 @@ function scaleset_listvms(manager::AzManager, template, subscriptionid, resource
     write(stdout, "Network Interfaces: $(networkinterfaces)")
     @debug "done getting network interfaces from scaleset"
 
-    #/subscriptions/461a0ce0-0ca0-44fa-b7d0-29bb0711dadc/resourceGroups/ubuntu-latest-1.5-329482635/providers/Microsoft.Compute/virtualMachineScaleSets/testdewm/virtualMachines/0/networkInterfaces/cbox02/ipConfigurations/cbox02/publicIPAddresses/matthew
-
     _r = @retry nretry azrequest(
         "GET",
         verbose,
