@@ -327,22 +327,22 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     notify(c)
 end
 
-function launchcmd(omp_num_threads, user, vm)
+function launchcmd(omp_num_threads, julia_num_threads, user, vm)
     load_manifest()
 
     ssh_id = _manifest["ssh_private_key_file"]
     exeflags = `--worker`
     exename = "julia"
     cmds = """$(Base.shell_escape_posixly(exename)) $(Base.shell_escape_posixly(exeflags))"""
-    cmd = `env OMP_NUM_THREADS=$omp_num_threads sh -l -c $cmds`
+    cmd = `env OMP_NUM_THREADS=$omp_num_threads JULIA_NUM_THREADS=$julia_num_threads sh -l -c $cmds`
     `ssh -i $ssh_id -T -a -x -o ClearAllForwardings=yes $user$(vm["bindaddr"]) $(Base.shell_escape_posixly(cmd))`
 end
 
-function launchcmd_mpi(mpi_ranks_per_worker, omp_num_threads, mpi_flags, cookie, user, vm)
+function launchcmd_mpi(mpi_ranks_per_worker, omp_num_threads, julia_num_threads, mpi_flags, cookie, user, vm)
     load_manifest()
 
     ssh_id = _manifest["ssh_private_key_file"]
-    _cmd = "mpirun -n $mpi_ranks_per_worker -env OMP_NUM_THREADS=$omp_num_threads $mpi_flags julia -e \"using AzManagers, MPI; AzManagers.start_worker_mpi(\\\"$cookie\\\")\""
+    _cmd = "mpirun -n $mpi_ranks_per_worker -env OMP_NUM_THREADS=$omp_num_threads JULIA_NUM_THREADS=$julia_num_threads $mpi_flags julia -e \"using AzManagers, MPI; AzManagers.start_worker_mpi(\\\"$cookie\\\")\""
     `ssh -i $ssh_id -T -a -x -o ClearAllForwardings=yes $user$(vm["bindaddr"]) $_cmd`
 end
 
@@ -350,10 +350,11 @@ function Distributed.launch_on_machine(manager::AzManager, vm, params, launched,
     cookie = Distributed.cluster_cookie()
     mpi_ranks_per_worker = params[:mpi_ranks_per_worker]
     mpi_flags = params[:mpi_flags]
-    omp_num_threads = get(ENV, "OMP_NUM_THREADS", 16)
+    omp_num_threads = get(ENV, "OMP_NUM_THREADS", 1)
+    julia_num_threads = get(ENV, "JULIA_NUM_THREADS", 1)
     user = params[:user] == "" ? "" : "$(params[:user])@"
 
-    cmd = mpi_ranks_per_worker == 0 ? launchcmd(omp_num_threads, user, vm) : launchcmd_mpi(mpi_ranks_per_worker, omp_num_threads, mpi_flags, cookie, user, vm)
+    cmd = mpi_ranks_per_worker == 0 ? launchcmd(omp_num_threads, julia_num_threads, user, vm) : launchcmd_mpi(mpi_ranks_per_worker, omp_num_threads, julia_num_threads, mpi_flags, cookie, user, vm)
 
     timeout = Distributed.worker_timeout()
     tic = time()
