@@ -319,7 +319,12 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     end
 
     for launch_task in launch_tasks
-        wait(launch_task)
+        try
+            fetch(launch_task)
+        catch e
+            @error "caught error in launch task"
+            throw(e)
+        end
     end
     wait(spinner_task)
     @info "Finalizing cluster..."
