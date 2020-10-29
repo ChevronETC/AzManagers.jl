@@ -14,16 +14,16 @@ jobs:
         run: |
           ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
 
-      # - uses: azure/login@v1.1
-      #   with:
-      #     creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - uses: azure/login@v1.1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # - name: Create Resource Group, Shared Image Gallery and Image Definition
-      #   run: |
-      #     az group create -l southcentralus -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
-      #     az group wait --created --resource-group "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
-      #     az sig create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "sig${{ github.run_id }}${{ matrix.julia-version }}"
-      #     az sig image-definition create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --gallery-name "sig${{ github.run_id }}${{ matrix.julia-version }}" --gallery-image-definition "unit-test-image" --publisher "canonical" --offer "0001-com-ubuntu-server-focal" --sku "20_04-lts" --os-type linux
+      - name: Create Resource Group, Shared Image Gallery and Image Definition
+        run: |
+          az group create -l southcentralus -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
+          az group wait --created --resource-group "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
+          az sig create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "sig${{ github.run_id }}${{ matrix.julia-version }}"
+          az sig image-definition create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --gallery-name "sig${{ github.run_id }}${{ matrix.julia-version }}" --gallery-image-definition "unit-test-image" --publisher "canonical" --offer "0001-com-ubuntu-server-focal" --sku "20_04-lts" --os-type linux
       #     az vm create -n "cmdln-vm4" -g ubuntu-latest-1.5-329937369 --image unit-test-image --public-ip-address "cmdln-pubip4" --subnet "default" --vnet-name "ubuntu-latest-1.5-329937369-vnet" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub --admin-username cvx
 
         # az vm create -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vm" -g ubuntu-latest-1.5-329937369 --image unit-test-image --public-ip-address "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip" --subnet "default" --vnet-name "ubuntu-latest-1.5-329937369-vnet"
