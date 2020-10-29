@@ -67,6 +67,11 @@
       ]
     },
     {
+      "type": "file",
+      "source": "/home/runner/work/AzManagers.jl/AzManagers.jl/templates/azmanagers-setup.jl",
+      "destination": "/home/cvx/azmanagers-setup.jl"
+    },
+    {
       "type": "shell",
       "inline":
       [
@@ -80,8 +85,11 @@
         "export PATH=\"${PATH}:/opt/julia/bin\"",
         "echo \"installing julia packages\"",
         "export JULIA_MPI_BINARY=\"system\"",
-        "julia -e 'using Pkg; pkg\"add AzSessions AzManagers#{{ env['BRANCH_NAME'] }}\"'",
-        "julia -e 'using Pkg; pkg\"precompile\"'"
+        "julia -e 'using Pkg; pkg\"add AzSessions AzManagers#{{ env['BRANCH_NAME'] }} Distributed JSON HTTP Test Random\"'",
+        "julia -e 'using Pkg; pkg\"precompile\"'",
+        
+        "echo \"running julia setup\"",
+        "julia /home/cvx/azmanagers-setup.jl"
       ]
     }
   ]

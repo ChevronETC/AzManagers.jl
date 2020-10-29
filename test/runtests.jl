@@ -1,26 +1,31 @@
-using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
+# using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 
-ss_template_json = JSON.parse(ENV["SS_TEMPLATE_JSON"])
-myscaleset = AzManagers.build_sstemplate(ss_template_json["name"],
-    subscriptionid       = ss_template_json["subscriptionid"],
-    location             = ss_template_json["location"],
-    resourcegroup        = ENV["RESOURCE_GROUP"],
-    resourcegroup_vnet   = ss_template_json["resourcegroup_vnet"],
-    vnet                 = ss_template_json["vnet"],
-    subnet               = ss_template_json["subnet"],
-    imagegallery         = ENV["IMAGE_GALLERY"],
-    imagename            = ENV["IMAGE_NAME"],
-    skuname              = ss_template_json["skuname"],
-    publicipname         = "matthew")
-AzManagers.save_template_scaleset("cbox02", myscaleset)
-template = "cbox02"
 
-resourcegroup = ENV["RESOURCE_GROUP"]
-credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
-subscriptionid = credentials["subscriptionId"]
+# #####################################################################
+# ss_template_json = JSON.parse(ENV["SS_TEMPLATE_JSON"])
+# myscaleset = AzManagers.build_sstemplate(ss_template_json["name"],
+#     subscriptionid       = ss_template_json["subscriptionid"],
+#     location             = ss_template_json["location"],
+#     resourcegroup        = ENV["RESOURCE_GROUP"],
+#     resourcegroup_vnet   = ss_template_json["resourcegroup_vnet"],
+#     vnet                 = ss_template_json["vnet"],
+#     subnet               = ss_template_json["subnet"],
+#     imagegallery         = ENV["IMAGE_GALLERY"],
+#     imagename            = ENV["IMAGE_NAME"],
+#     skuname              = ss_template_json["skuname"],
+#     publicipname         = "matthew")
+# AzManagers.save_template_scaleset("cbox02", myscaleset)
+# template = "cbox02"
 
-AzSessions.write_manifest(;client_id=credentials["clientId"], client_secret=credentials["clientSecret"], tenant=credentials["tenantId"])
-AzManagers.write_manifest(;resourcegroup=resourcegroup, subscriptionid=subscriptionid, ssh_user="cvx")
+# resourcegroup = ENV["RESOURCE_GROUP"]
+# credentials = JSON.parse(ENV["AZURE_CREDENTIALS"])
+# subscriptionid = credentials["subscriptionId"]
+
+# AzSessions.write_manifest(;client_id=credentials["clientId"], client_secret=credentials["clientSecret"], tenant=credentials["tenantId"])
+# AzManagers.write_manifest(;resourcegroup=resourcegroup, subscriptionid=subscriptionid, ssh_user="cvx")
+#######################################################################3
+# Bake the above (run the above) in the packer script to make the ssh run of the azmanagers test as simple as possible
+# And ssh Key generation
 
 @testset "AzManagers, addprocs" for kwargs in (
     (subscriptionid = subscriptionid, resourcegroup = resourcegroup,          ninstances = 1, group = "test$(randstring('a':'z',4))"),

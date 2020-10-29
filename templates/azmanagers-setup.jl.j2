@@ -1,0 +1,23 @@
+using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
+
+resourcegroup = "{{ env['RESOURCE_GROUP'] }}"
+credentials = JSON.parse( {{ env['AZURE_CREDENTIALS'] }} )
+subscriptionid = credentials["subscriptionId"]
+templatename = "cbox02"
+
+sstemplate = AzManagers.build_sstemplate(
+        templatename,
+        subscriptionid       = subscriptionid,
+        location             = "southcentralus",
+        resourcegroup        = resourcegroup,
+        resourcegroup_vnet   = resourcegroup,
+        vnet                 = "default-vnet",
+        subnet               = "default",
+        imagegallery         = "{{ env['SIG_NAME'] }}",
+        imagename            = "unit-test-image",
+        skuname              = "Standard_D2s_v3")
+
+AzManagers.save_template_scaleset(templatename, sstemplate)
+
+AzSessions.write_manifest(;client_id=credentials["clientId"], client_secret=credentials["clientSecret"], tenant=credentials["tenantId"])
+AzManagers.write_manifest(;resourcegroup=resourcegroup, subscriptionid=subscriptionid, ssh_user="cvx")
