@@ -66,6 +66,11 @@ jobs:
           RESOURCE_GROUP: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
           SIG_NAME: "sig${{ github.run_id }}${{ matrix.julia-version }}"
           AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          SUBSCRIPTION_ID: "${{ secrets.SUBSCRIPTION_ID }}"
+          TENANT_ID: "${{ secrets.TENANT_ID }}" 
+          CLIENT_ID: "${{ secrets.CLIENT_ID }}"
+          CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
+
 
       - name: Install Packer
         run: |

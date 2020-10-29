@@ -1,8 +1,8 @@
 using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 
 resourcegroup = "{{ env['RESOURCE_GROUP'] }}"
-credentials = JSON.parse( {{ env['AZURE_CREDENTIALS'] }} )
-subscriptionid = credentials["subscriptionId"]
+{# credentials = JSON.parse( {{ env['AZURE_CREDENTIALS'] }} ) #}
+subscriptionid = "{{ env['SUBSCRIPTION_ID'] }}"
 templatename = "cbox02"
 
 sstemplate = AzManagers.build_sstemplate(
@@ -19,5 +19,5 @@ sstemplate = AzManagers.build_sstemplate(
 
 AzManagers.save_template_scaleset(templatename, sstemplate)
 
-AzSessions.write_manifest(;client_id=credentials["clientId"], client_secret=credentials["clientSecret"], tenant=credentials["tenantId"])
+AzSessions.write_manifest(;client_id="{{ env['CLIENT_ID'] }}", client_secret="{{ env['CLIENT_SECRET'] }}", tenant="{{ env['TENANT_ID'] }}")
 AzManagers.write_manifest(;resourcegroup=resourcegroup, subscriptionid=subscriptionid, ssh_user="cvx")
