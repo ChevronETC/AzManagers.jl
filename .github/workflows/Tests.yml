@@ -89,17 +89,30 @@ jobs:
       #     az network vnet create -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet" -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --subnet-name "default"
       #     az vm create -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vm" -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --image unit-test-image --public-ip-address "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip" --subnet "default" --vnet-name "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet"
           
-          
       - name: Run the unit tests
         run: |
           echo "about to start ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
           pubipresp=$(az network public-ip show -g ubuntu-latest-1.5-329937369 -n master-testing-vm-ip)
           echo "done 1 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
           echo "new var: $pubipresp"
-          ipaddress=$(echo jq -r '.ipAddress' <<< "${pubipresp}" )
-          echo "done 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-          echo ${ipAddress}
+          ipaddress=$( echo $pubipresp | jq '.ipAddress')
           echo "new var: ???? $ipAddress !!!!!!!!!!"
+          
+
+          # ipaddress=$(echo jq -r '.ipAddress' <<< "${pubipresp}" )
+          # echo "done 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+          # echo ${ipAddress}
+
+      # - name: Run the unit tests
+      #   run: |
+      #     echo "about to start ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+      #     pubipresp=$(az network public-ip show -g ubuntu-latest-1.5-329937369 -n master-testing-vm-ip)
+      #     echo "done 1 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+      #     echo "new var: $pubipresp"
+      #     ipaddress=$(echo jq -r '.ipAddress' <<< "${pubipresp}" )
+      #     echo "done 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+      #     echo ${ipAddress}
+      #     echo "new var: ???? $ipAddress !!!!!!!!!!"
 
         #ssh cvx@104.214.99.74 "julia -e 'using Pkg; pkg\"test AzManagers\"'"
 
