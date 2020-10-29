@@ -99,6 +99,8 @@ jobs:
           ipaddress=$(echo jq -r '.ipAddress' <<< "${pubipresp}" )
           echo "done 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
           echo ${ipAddress}
+          echo "new var: ???? $ipAddress !!!!!!!!!!"
+
         #ssh cvx@104.214.99.74 "julia -e 'using Pkg; pkg\"test AzManagers\"'"
 
         # ssh julia -e 'using Pkg;pkg"test AzManagers"'
