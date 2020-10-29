@@ -93,10 +93,10 @@ jobs:
       - name: Run the unit tests
         run: |
           echo "about to start ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-          $pubipresp="$(az network public-ip show -g ubuntu-latest-1.5-329937369 -n master-testing-vm-ip)"
+          pubipresp=$(az network public-ip show -g ubuntu-latest-1.5-329937369 -n master-testing-vm-ip)
           echo "done 1 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
           echo "new var: $pubipresp"
-          $ipaddress="$(echo jq -r '.ipAddress' <<< \"${pubipresp}\" )"
+          ipaddress=$(echo jq -r '.ipAddress' <<< "${pubipresp}" )
           echo "done 2 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
           echo ${ipAddress}
         #ssh cvx@104.214.99.74 "julia -e 'using Pkg; pkg\"test AzManagers\"'"
