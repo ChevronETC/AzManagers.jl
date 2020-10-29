@@ -91,12 +91,12 @@ jobs:
           
       - name: Run the unit tests
         run: |
-          echo "about to start ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+          echo "\n\nabout to start ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n\n"
           pubipresp=$(az network public-ip show -g ubuntu-latest-1.5-329937369 -n master-testing-vm-ip)
-          echo "done 1 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
-          echo "new var: $pubipresp"
+          echo "\n\ndone 1 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n\n"
+          echo "\n\nnew var: $pubipresp\n\n"
           ipaddress=$( echo $pubipresp | jq '.ipAddress')
-          echo "new var: ???? $ipAddress !!!!!!!!!!"
+          echo "\n\nnew var: ???? $ipAddress !!!!!!!!!!\n\n"
           
 
           # ipaddress=$(echo jq -r '.ipAddress' <<< "${pubipresp}" )
