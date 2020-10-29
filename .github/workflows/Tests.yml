@@ -91,12 +91,13 @@ jobs:
           
       - name: Run the unit tests
         run: |
-          pubipresp=$(az network public-ip show -g ubuntu-latest-1.5-329937369 -n master-testing-vm-ip)
-          printf "az cli response: $pubipresp\n\n"
-          sed 's/***/{/g' $pubipresp
-          printf "az cli response: $pubipresp\n\n"
-          ipaddress=$(echo $pubipresp | jq '.ipAddress')
-          printf "ipAddress: >>> $ipAddress <<<\n\n"
+          az network public-ip show -g ubuntu-latest-1.5-329937369 -n master-testing-vm-ip >> api-resp.txt
+          cat api-resp.txt
+        # printf "az cli response: $pubipresp\n\n"
+        # sed 's/***/{/g' $pubipresp
+        # printf "az cli response: $pubipresp\n\n"
+        # ipaddress=$(echo $pubipresp | jq '.ipAddress')
+        # printf "ipAddress: >>> $ipAddress <<<\n\n"
           
 
         # ipaddress=$(echo jq -r '.ipAddress' <<< "${pubipresp}" )
