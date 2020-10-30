@@ -87,7 +87,7 @@ jobs:
       - name: Create VNet, Subnet and Master VM
         run: |
           az network vnet create -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet" -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --subnet-name "default"
-          az vm create -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vm" -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --image unit-test-image --public-ip-address "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip" --subnet "default" --vnet-name "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet" --ssh-key-values "@/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu_key.pub" --admin-username cvx
+          az vm create -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vm" -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --image unit-test-image --public-ip-address "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip" --subnet "default" --vnet-name "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu_key.pub --admin-username cvx
           
       - name: Run the unit tests
         run: |
