@@ -1,5 +1,5 @@
 using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
-
+include("/home/cvx/azmanagers-setup.jl")
 
 # #####################################################################
 # ss_template_json = JSON.parse(ENV["SS_TEMPLATE_JSON"])
