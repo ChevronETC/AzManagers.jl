@@ -93,7 +93,7 @@ jobs:
         run: |
           ipaddress=$(az network public-ip show -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip" | jq '.ipAddress' | cut -d "\"" -f 2)
           echo "IP: $ipaddress"
-          ssh cvx@$ipaddress "julia -e 'using Pkg; pkg\"test AzManagers\"'"
+          ssh -o StrictHostKeyChecking=no cvx@$ipaddress "julia -e 'using Pkg; pkg\"test AzManagers\"'"
 
         # ssh julia -e 'using Pkg;pkg"test AzManagers"'
         # az vm create -n "cmdln-vm4" -g ubuntu-latest-1.5-329937369 --image unit-test-image --public-ip-address "cmdln-pubip4" --subnet "default" --vnet-name "ubuntu-latest-1.5-329937369-vnet" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub --admin-username cvx
