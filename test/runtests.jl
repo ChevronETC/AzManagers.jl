@@ -43,7 +43,7 @@ include("/home/cvx/azmanagers-setup.jl")
     #
     # Unit Test 1 - Create scale set and start Julia processes
     #
-    addprocs(template, ninstances; kwargs...) #add public ip to azmanagers for ScaleSet creation (add to templates.jl and to azmanagers.jl if needed)
+    addprocs(templatename, ninstances; kwargs...) #add public ip to azmanagers for ScaleSet creation (add to templates.jl and to azmanagers.jl if needed)
     
     # Verify that the scale set is present
     session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_secret=client_secret)
