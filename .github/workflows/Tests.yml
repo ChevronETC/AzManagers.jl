@@ -97,7 +97,7 @@ jobs:
         run: |
           ipaddress=$(az network public-ip show -g "ubuntu-latest-1.5-341814559" -n "new-pubip" | jq '.ipAddress' | cut -d "\"" -f 2)
           echo "IP: $ipaddress"
-          scp -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa.pub cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa.pub
+          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa.pub cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa.pub
           ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; pkg\"test AzManagers\"'"
 
       # - name: Run the unit tests
