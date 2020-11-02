@@ -91,7 +91,7 @@ jobs:
           
       - name: Create VNet, Subnet and Master VM
         run: |
-          az vm create -n "new-vm" -g "ubuntu-latest-1.5-341814559" --image unit-test-image --public-ip-address "new-pubip" --subnet "default" --vnet-name "ubuntu-latest-1.5-341814559-vnet" --ssh-key-values @/c/Users/mcpu/.ssh/id_rsa.pub --admin-username cvx
+          az vm create -n "new-vm" -g "ubuntu-latest-1.5-341814559" --image unit-test-image --public-ip-address "new-pubip" --subnet "default" --vnet-name "ubuntu-latest-1.5-341814559-vnet" --ssh-key-values  @/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu_key.pub --admin-username cvx
 
       - name: Run the unit tests
         run: |
