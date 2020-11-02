@@ -39,9 +39,9 @@ jobs:
         run: |
           az group create                -g "$RESOURCE_GROUP" -l southcentralus
           az group wait                  -g "$RESOURCE_GROUP" --created 
-          az sig create                  -g "$RESOURCE_GROUP" -r "{{ env.GALLERY_NAME }}"
-          az sig image-definition create -g "$RESOURCE_GROUP" -r "{{ env.GALLERY_NAME }}" -i "{{ env.IMAGE_NAME }}" -p "canonical" -f "0001-com-ubuntu-server-focal" -s "20_04-lts" --os-type linux
-          az network vnet create         -g "$RESOURCE_GROUP" -n "{{ env.VNET_NAME }}" --subnet-name "{{ env.SUBNET_NAME }}"
+          az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
+          az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-focal" -s "20_04-lts" --os-type linux
+          az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
 
       - name: Template the Packer Image file
         uses: cuchi/jinja2-action@v1.2.0
@@ -65,11 +65,11 @@ jobs:
         run: packer build -color=false -timestamp-ui /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
 
       - name: Create Master VM
-        run: az vm create -g "{{ env.RESOURCE_GROUP }}" -n "{{ env.VM_NAME }}" --image "{{ env.IMAGE_NAME }}" --public-ip-address "{{ env.PUBLIC_IP_NAME }}" --subnet "{{ env.SUBNET_NAME }}" --vnet-name "{{ env.VNET_NAME }}" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu_key.pub --admin-username cvx
+        run: az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "$IMAGE_NAME" --public-ip-address "$PUBLIC_IP_NAME" --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu_key.pub --admin-username cvx
 
       - name: Run the unit tests
         run: |
-          ipaddress=$(az network public-ip show -g "{{ env.RESOURCE_GROUP }}" -n "{{ env.PUBLIC_IP_NAME }}" | jq '.ipAddress' | cut -d "\"" -f 2)
+          ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq '.ipAddress' | cut -d "\"" -f 2)
           echo "IP: $ipaddress"
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa.pub cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa.pub
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa
