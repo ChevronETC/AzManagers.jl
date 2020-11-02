@@ -91,11 +91,11 @@ jobs:
           
       - name: Create VNet, Subnet and Master VM
         run: |
-          az vm create -n "new-vm" -g "ubuntu-latest-1.5-341814559" --image unit-test-image --public-ip-address "new-pubip" --subnet "default" --vnet-name "ubuntu-latest-1.5-341814559-vnet" --ssh-key-values  @/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu_key.pub --admin-username cvx
+          az vm create -n "new-vm2" -g "ubuntu-latest-1.5-341814559" --image unit-test-image --public-ip-address "new-pubip2" --subnet "default" --vnet-name "ubuntu-latest-1.5-341814559-vnet" --ssh-key-values  @/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu_key.pub --admin-username cvx
 
       - name: Run the unit tests
         run: |
-          ipaddress=$(az network public-ip show -g "ubuntu-latest-1.5-341814559" -n "new-pubip" | jq '.ipAddress' | cut -d "\"" -f 2)
+          ipaddress=$(az network public-ip show -g "ubuntu-latest-1.5-341814559" -n "new-pubip2" | jq '.ipAddress' | cut -d "\"" -f 2)
           echo "IP: $ipaddress"
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa.pub cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa.pub
           ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; pkg\"test AzManagers\"'"
