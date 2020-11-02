@@ -66,7 +66,6 @@ include("/home/cvx/azmanagers-setup.jl")
     master = gethostname()
     unique_workers = unique(myworkers)
 
-    write(stdout, "Master: $(master)\n\n U Workers: $(unique_workers)\n\n")
     @test length(unique_workers) == ninstances
     for worker in myworkers 
         @test master != worker
@@ -75,9 +74,9 @@ include("/home/cvx/azmanagers-setup.jl")
     #
     # Unit Test 5 - Verify that the cloud-init startup script ran successfully
     #
-    for i = 1:tppi
-        @test remotecall_fetch(isfile, workers()[i], ".git-credentials")
-    end
+    # for i = 1:tppi
+    #     @test remotecall_fetch(isfile, workers()[i], ".git-credentials")
+    # end
 
     #
     # Unit Test 6 - Delete the Julia processes, scale set instances and the scale set itself
