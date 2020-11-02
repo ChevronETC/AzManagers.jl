@@ -47,8 +47,7 @@ function build_sstemplate(name;
         vnet,
         subnet,
         skutier="Standard",
-        skuname,
-        publicipname = "")
+        skuname)
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
@@ -114,12 +113,6 @@ function build_sstemplate(name;
             )
         ) # properties
     )
-
-    if publicipname != ""
-        body["properties"]["virtualMachineProfile"]["networkProfile"]["networkInterfaceConfigurations"][1]["properties"]["ipConfigurations"][1]["properties"]["publicIPAddressConfiguration"] = Dict("name" => publicipname, "properties" => Dict("idleTimeoutInMinutes" => 15))
-    end
-    
-    body
 end
 
 templates_filename_scaleset() = joinpath(templates_folder(), "templates_scaleset.json")

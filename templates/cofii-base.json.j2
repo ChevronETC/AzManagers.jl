@@ -14,20 +14,19 @@
       "image_sku": "20_04-lts",
       "shared_image_gallery_destination": {
         "resource_group": "{{ env['RESOURCE_GROUP'] }}",
-        "gallery_name": "{{ env['SIG_NAME'] }}",
-        "image_name": "unit-test-image",
+        "gallery_name": "{{ env['GALLERY_NAME'] }}",
+        "image_name": "{{ env['IMAGE_NAME'] }}",
         "image_version": "1.0.0",
         "replication_regions": ["South Central US"]
       },
       "shared_image_gallery_timeout": "120m",
       "build_resource_group_name": "{{ env['RESOURCE_GROUP'] }}",
       "managed_image_resource_group_name": "{{ env['RESOURCE_GROUP'] }}",
-      "managed_image_name": "unit-test-image",
+      "managed_image_name": "{{ env['IMAGE_NAME'] }}",
       "managed_image_storage_account_type": "Premium_LRS",
-      "virtual_network_name":"dummy-vnet",
-      "virtual_network_subnet_name": "dummy-subnet",
-      "virtual_network_resource_group_name": "azmanagers-unittesting",
-      "private_virtual_network_with_public_ip": true,
+      "virtual_network_name":"{{ env['VNET_NAME'] }}",
+      "virtual_network_subnet_name": "default",
+      "virtual_network_resource_group_name": "{{ env['RESOURCE_GROUP'] }}",
       "ssh_username": "cvx"
     }
   ],
@@ -86,10 +85,7 @@
         "echo \"installing julia packages\"",
         "export JULIA_MPI_BINARY=\"system\"",
         "julia -e 'using Pkg; pkg\"add AzSessions AzManagers#{{ env['COMMIT_SHA'] }} Distributed JSON HTTP Test Random\"'",
-        "julia -e 'using Pkg; pkg\"precompile\"'",
-        
-        "echo \"running julia setup\"",
-        "julia /home/cvx/azmanagers-setup.jl"
+        "julia -e 'using Pkg; pkg\"precompile\"'"
       ]
     }
   ]

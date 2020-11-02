@@ -1,12 +1,13 @@
 using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 
-resourcegroup = "{{ env['RESOURCE_GROUP'] }}"
-{# credentials = JSON.parse( {{ env['AZURE_CREDENTIALS'] }} ) #}
+tenant_id = "{{ env['TENANT_ID'] }}"
 subscriptionid = "{{ env['SUBSCRIPTION_ID'] }}"
-templatename = "cbox02"
+resourcegroup = "{{ env['RESOURCE_GROUP'] }}"
 client_id = "{{ env['CLIENT_ID'] }}"
 client_secret = "{{ env['CLIENT_SECRET'] }}"
-tenant_id = "{{ env['TENANT_ID'] }}"
+imagename = "{{ env['IMAGE_NAME'] }}"
+
+templatename = "cbox02"
 
 sstemplate = AzManagers.build_sstemplate(
         templatename,
@@ -14,10 +15,10 @@ sstemplate = AzManagers.build_sstemplate(
         location             = "southcentralus",
         resourcegroup        = resourcegroup,
         resourcegroup_vnet   = resourcegroup,
-        vnet                 = "{{ env['RESOURCE_GROUP'] }}-vnet",
+        vnet                 = "{{ env['VNET_NAME'] }}",
         subnet               = "default",
-        imagegallery         = "{{ env['SIG_NAME'] }}",
-        imagename            = "unit-test-image",
+        imagegallery         = "{{ env['GALLERY_NAME'] }}",
+        imagename            = "{{ env['IMAGE_NAME'] }}",
         skuname              = "Standard_D2s_v3")
 
 AzManagers.save_template_scaleset(templatename, sstemplate)
