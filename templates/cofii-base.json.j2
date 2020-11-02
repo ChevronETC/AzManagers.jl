@@ -24,9 +24,10 @@
       "managed_image_resource_group_name": "{{ env['RESOURCE_GROUP'] }}",
       "managed_image_name": "{{ env['IMAGE_NAME'] }}",
       "managed_image_storage_account_type": "Premium_LRS",
-      "virtual_network_name":"{{ env['VNET_NAME'] }}",
-      "virtual_network_subnet_name": "default",
+      "virtual_network_name": "{{ env['VNET_NAME'] }}",
+      "virtual_network_subnet_name": "{{ env['SUBNET_NAME'] }}",
       "virtual_network_resource_group_name": "{{ env['RESOURCE_GROUP'] }}",
+      "private_virtual_network_with_public_ip": true,
       "ssh_username": "cvx"
     }
   ],

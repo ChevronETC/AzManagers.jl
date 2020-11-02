@@ -2,7 +2,7 @@ name: Tests
 on: [push, pull_request]
 jobs:
   test:
-    
+
     env:
       TENANT_ID: "${{ secrets.TENANT_ID }}" 
       SUBSCRIPTION_ID: "${{ secrets.SUBSCRIPTION_ID }}"
@@ -11,12 +11,15 @@ jobs:
       CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
       GALLERY_NAME: "${{ github.run_id }}${{ matrix.julia-version }}gallery"
       IMAGE_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image"
+      VM_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vm"
+      PUBLIC_IP_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip"
       VNET_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet"
+      SUBNET_NAME: "default"
       COMMIT_SHA: "${{ github.sha }}"
       JULIA_VERSION: "${{ matrix.julia-version }}"
-    
+
     runs-on: ${{ matrix.os }}
-    
+
     strategy:
       matrix:
         julia-version: [1.5] #1.0
@@ -34,11 +37,11 @@ jobs:
 
       - name: Create Resource Group, Shared Image Gallery, Image Definition, VNet and Subnet
         run: |
-          az group create -l southcentralus -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
-          az group wait --created --resource-group "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
-          az sig create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -r "${{ github.run_id }}${{ matrix.julia-version }}gallery"
-          az sig image-definition create -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --gallery-name "${{ github.run_id }}${{ matrix.julia-version }}gallery" --gallery-image-definition "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image" --publisher "canonical" --offer "0001-com-ubuntu-server-focal" --sku "20_04-lts" --os-type linux
-          az network vnet create -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet" -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --subnet-name "default"
+          az group create                -g "{{ env.RESOURCE_GROUP }}" -l southcentralus
+          az group wait                  -g "{{ env.RESOURCE_GROUP }}" --created 
+          az sig create                  -g "{{ env.RESOURCE_GROUP }}" -r "{{ env.GALLERY_NAME }}"
+          az sig image-definition create -g "{{ env.RESOURCE_GROUP }}" -r "{{ env.GALLERY_NAME }}" -i "{{ env.IMAGE_NAME }}" -p "canonical" -f "0001-com-ubuntu-server-focal" -s "20_04-lts" --os-type linux
+          az network vnet create         -g "{{ env.RESOURCE_GROUP }}" -n "{{ env.VNET_NAME }}" --subnet-name "{{ env.SUBNET_NAME }}"
 
       - name: Template the Packer Image file
         uses: cuchi/jinja2-action@v1.2.0
@@ -62,11 +65,11 @@ jobs:
         run: packer build -color=false -timestamp-ui /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
 
       - name: Create Master VM
-        run: az vm create -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vm" -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --image "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image" --public-ip-address "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip" --subnet "default" --vnet-name "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu_key.pub --admin-username cvx
+        run: az vm create -g "{{ env.RESOURCE_GROUP }}" -n "{{ env.VM_NAME }}" --image "{{ env.IMAGE_NAME }}" --public-ip-address "{{ env.PUBLIC_IP_NAME }}" --subnet "{{ env.SUBNET_NAME }}" --vnet-name "{{ env.VNET_NAME }}" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu_key.pub --admin-username cvx
 
       - name: Run the unit tests
         run: |
-          ipaddress=$(az network public-ip show -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip" | jq '.ipAddress' | cut -d "\"" -f 2)
+          ipaddress=$(az network public-ip show -g "{{ env.RESOURCE_GROUP }}" -n "{{ env.PUBLIC_IP_NAME }}" | jq '.ipAddress' | cut -d "\"" -f 2)
           echo "IP: $ipaddress"
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa.pub cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa.pub
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa
@@ -82,8 +85,6 @@ jobs:
       #     scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa.pub cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa.pub
       #     scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa
       #     ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; pkg\"test AzManagers\"'"
-
-      # - uses: julia-actions/julia-processcoverage@v1
 
       # - uses: codecov/codecov-action@v1
       #   with:
