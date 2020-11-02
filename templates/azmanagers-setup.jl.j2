@@ -16,9 +16,9 @@ sstemplate = AzManagers.build_sstemplate(
         resourcegroup        = resourcegroup,
         resourcegroup_vnet   = resourcegroup,
         vnet                 = "{{ env['VNET_NAME'] }}",
-        subnet               = "default",
+        subnet               = "{{ env['SUBNET_NAME'] }}",
         imagegallery         = "{{ env['GALLERY_NAME'] }}",
-        imagename            = "{{ env['IMAGE_NAME'] }}",
+        imagename            = imagename,
         skuname              = "Standard_D2s_v3")
 
 AzManagers.save_template_scaleset(templatename, sstemplate)

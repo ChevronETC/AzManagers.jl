@@ -37,11 +37,11 @@ jobs:
 
       - name: Create Resource Group, Shared Image Gallery, Image Definition, VNet and Subnet
         run: |
-          az group create                -g "{{ env.RESOURCE_GROUP }}" -l southcentralus
-          az group wait                  -g "{{ env.RESOURCE_GROUP }}" --created 
-          az sig create                  -g "{{ env.RESOURCE_GROUP }}" -r "{{ env.GALLERY_NAME }}"
-          az sig image-definition create -g "{{ env.RESOURCE_GROUP }}" -r "{{ env.GALLERY_NAME }}" -i "{{ env.IMAGE_NAME }}" -p "canonical" -f "0001-com-ubuntu-server-focal" -s "20_04-lts" --os-type linux
-          az network vnet create         -g "{{ env.RESOURCE_GROUP }}" -n "{{ env.VNET_NAME }}" --subnet-name "{{ env.SUBNET_NAME }}"
+          az group create                -g "$RESOURCE_GROUP" -l southcentralus
+          az group wait                  -g "$RESOURCE_GROUP" --created 
+          az sig create                  -g "$RESOURCE_GROUP" -r "{{ env.GALLERY_NAME }}"
+          az sig image-definition create -g "$RESOURCE_GROUP" -r "{{ env.GALLERY_NAME }}" -i "{{ env.IMAGE_NAME }}" -p "canonical" -f "0001-com-ubuntu-server-focal" -s "20_04-lts" --os-type linux
+          az network vnet create         -g "$RESOURCE_GROUP" -n "{{ env.VNET_NAME }}" --subnet-name "{{ env.SUBNET_NAME }}"
 
       - name: Template the Packer Image file
         uses: cuchi/jinja2-action@v1.2.0
