@@ -90,6 +90,7 @@ jobs:
           ipaddress=$(az network public-ip show -g "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip" | jq '.ipAddress' | cut -d "\"" -f 2)
           echo "IP: $ipaddress"
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa.pub cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa.pub
+          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa
           ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; pkg\"test AzManagers\"'"
 
       # - uses: julia-actions/julia-processcoverage@v1
