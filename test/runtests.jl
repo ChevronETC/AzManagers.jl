@@ -129,3 +129,5 @@ end
     job3 = @detach vm(;vm_template=templatename, session=session, persist=false) begin
     end
 end
+
+include("/home/cvx/julia-codecov.jl")
