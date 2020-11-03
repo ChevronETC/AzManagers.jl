@@ -82,7 +82,7 @@ jobs:
 
       - uses: codecov/codecov-action@v1
         with:
-          file: lcov.info
+          file: /home/runner/lcov.info
 
       # - name: Delete CI Resource Group
       #   run: |
