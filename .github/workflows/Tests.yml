@@ -75,6 +75,7 @@ jobs:
           ipaddress=$(az network public-ip show -g "ubuntu-latest-1.5-344189829" -n "ubuntu-latest-1.5-344189829-pubip-loc2" | jq '.ipAddress' | cut -d "\"" -f 2)
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa.pub cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa.pub
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa
+          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; pkg\"test AzManagers\"'"
           lcovpath=$(ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "locate lcov.info")
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:$lcovpath /home/runner/lcov.info
 
