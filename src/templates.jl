@@ -30,7 +30,8 @@ to the `~/.azmanagers` folder.
 * `subscriptionid_image` Azure subscription corresponding to the image gallery, defaults to `subscriptionid`
 * `resourcegroup_vnet` Azure resource group corresponding to the virtual network, defaults to `resourcegroup`
 * `resourcegroup_image` Azure resource group correcsponding to the image gallery, defaults to `resourcegroup`
-* `skutier="Standard"` Azure SKU tier.
+* `skutier = "Standard"` Azure SKU tier.
+* `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"` cloud-init commands used to mount or link to temporary disk
 """
 function build_sstemplate(name;
         subscriptionid,
@@ -44,6 +45,7 @@ function build_sstemplate(name;
         vnet,
         subnet,
         skutier="Standard",
+        tempdisk="sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         skuname)
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
@@ -51,64 +53,67 @@ function build_sstemplate(name;
     subnetid = "/subscriptions/$subscriptionid/resourceGroups/$resourcegroup_vnet/providers/Microsoft.Network/virtualNetworks/$vnet/subnets/$subnet"
     image = "/subscriptions/$subscriptionid_image/resourceGroups/$resourcegroup_image/providers/Microsoft.Compute/galleries/$imagegallery/images/$imagename"
 
-    body = Dict(
-        "sku" => Dict(
-            "tier" => skutier,
-            "capacity" => 2,
-            "name" => skuname
-        ),
-        "location" => location,
-        "properties" => Dict(
-            "overprovision" => true,
-            "singlePlacementGroup" => false,
-            "virtualMachineProfile" => Dict{String,Any}(
-                "storageProfile" => Dict(
-                    "imageReference" => Dict(
-                        "id" => image
-                    ),
-                    "osDisk" => Dict(
-                        "caching" => "ReadWrite",
-                        "managedDisk" => Dict(
-                            "storageAccountType" => "Standard_LRS"
+    Dict(
+        "tempdisk" => tempdisk,
+        "value" => Dict(
+            "sku" => Dict(
+                "tier" => skutier,
+                "capacity" => 2,
+                "name" => skuname
+            ),
+            "location" => location,
+            "properties" => Dict(
+                "overprovision" => true,
+                "singlePlacementGroup" => false,
+                "virtualMachineProfile" => Dict{String,Any}(
+                    "storageProfile" => Dict(
+                        "imageReference" => Dict(
+                            "id" => image
                         ),
-                        "createOption" => "FromImage"
-                    )
-                ),
-                "osProfile" => Dict(
-                    "computerNamePrefix" => name,
-                    "adminUsername" => "cvx",
-                    "linuxConfiguration" => Dict(
-                        "ssh" => Dict(
-                            "publicKeys" => []
+                        "osDisk" => Dict(
+                            "caching" => "ReadWrite",
+                            "managedDisk" => Dict(
+                                "storageAccountType" => "Standard_LRS"
                             ),
-                        "disablePasswordAuthentication" => true
-                    )
-                ),
-                "networkProfile" => Dict(
-                    "networkInterfaceConfigurations" => [
-                        Dict(
-                            "name" => name,
-                            "properties" => Dict(
-                                "primary" => true,
-                                "ipConfigurations" => [
-                                    Dict(
-                                        "name" => name,
-                                        "properties" => Dict(
-                                            "subnet" => Dict(
-                                                "id" => subnetid
+                            "createOption" => "FromImage"
+                        )
+                    ),
+                    "osProfile" => Dict(
+                        "computerNamePrefix" => name,
+                        "adminUsername" => "cvx",
+                        "linuxConfiguration" => Dict(
+                            "ssh" => Dict(
+                                "publicKeys" => []
+                                ),
+                            "disablePasswordAuthentication" => true
+                        )
+                    ),
+                    "networkProfile" => Dict(
+                        "networkInterfaceConfigurations" => [
+                            Dict(
+                                "name" => name,
+                                "properties" => Dict(
+                                    "primary" => true,
+                                    "ipConfigurations" => [
+                                        Dict(
+                                            "name" => name,
+                                            "properties" => Dict(
+                                                "subnet" => Dict(
+                                                    "id" => subnetid
+                                                )
                                             )
                                         )
-                                    )
-                                ] # ipConfigurations
+                                    ] # ipConfigurations
+                                )
                             )
-                        )
-                    ] # networkInterfaceConfigurations
-                ), # networkProfile
-            ), # virtualMachineProfile
-            "upgradePolicy" => Dict(
-                "mode" => "Manual"
-            )
-        ) # properties
+                        ] # networkInterfaceConfigurations
+                    ), # networkProfile
+                ), # virtualMachineProfile
+                "upgradePolicy" => Dict(
+                    "mode" => "Manual"
+                )
+            ) # properties
+        )
     )
 end
 
@@ -192,10 +197,11 @@ or written to AzManagers.jl configuration files.
 * `vmsize` Azure vm type, e.g. "Standard_D8s_v3"
 
 # Optional keyword arguments
-* resourcegroup_vnet` Azure resource group containing the virtual network, defaults to `resourcegroup`
-* subscriptionid_image` Azure subscription containing the image gallery, defaults to `subscriptionid`
-* resourcegroup_image` Azure resource group containing the image gallery, defaults to `subscriptionid`
-* nicname = "cbox-nic" Name of the NIC for this VM
+* `resourcegroup_vnet` Azure resource group containing the virtual network, defaults to `resourcegroup`
+* `subscriptionid_image` Azure subscription containing the image gallery, defaults to `subscriptionid`
+* `resourcegroup_image` Azure resource group containing the image gallery, defaults to `subscriptionid`
+* `nicname = "cbox-nic"` Name of the NIC for this VM
+* `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"`  cloud-init commands used to mount or link to temporary disk
 """
 function build_vmtemplate(name;
         subscriptionid,
@@ -209,6 +215,7 @@ function build_vmtemplate(name;
         vnet,
         subnet,
         vmsize,
+        tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         nicname = "cbox-nic")
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
@@ -217,43 +224,46 @@ function build_vmtemplate(name;
     image = "/subscriptions/$subscriptionid_image/resourceGroups/$resourcegroup_image/providers/Microsoft.Compute/galleries/$imagegallery/images/$imagename"
     subnetid = "/subscriptions/$subscriptionid/resourceGroups/$resourcegroup_vnet/providers/Microsoft.Network/virtualNetworks/$vnet/subnets/$subnet"
 
-    body = Dict(
-        "location" => location,
-        "properties" => Dict(
-            "hardwareProfile" => Dict(
-                "vmSize" => vmsize
-            ),
-            "storageProfile" => Dict(
-                "imageReference" => Dict(
-                    "id" => image
+    Dict(
+        "tempdisk" => tempdisk,
+        "value" => Dict(
+            "location" => location,
+            "properties" => Dict(
+                "hardwareProfile" => Dict(
+                    "vmSize" => vmsize
                 ),
-                "osDisk" => Dict(
-                    "caching" => "ReadWrite",
-                    "managedDisk" => Dict(
-                        "storageAccountType" => "Standard_LRS"
+                "storageProfile" => Dict(
+                    "imageReference" => Dict(
+                        "id" => image
                     ),
-                    "createOption" => "FromImage"
-                )
-            ),
-            "osProfile" => Dict(
-                "computerName" => name,
-                "adminUsername" => "cvx",
-                "linuxConfiguration" => Dict(
-                    "ssh" => Dict(
-                        "publicKeys" => []
-                    ),
-                    "disablePasswordAuthentication" => true
-                )
-            ),
-            "networkProfile" => Dict(
-                "networkInterfaces" => [
-                    Dict(
-                        "id" => "/subscription/$subscriptionid/resourceGroups/$resourcegroup_vnet/providers/Microsoft.Network/networkInterfaces/$nicname",
-                        "properties" => Dict(
-                            "primary" => true
-                        )
+                    "osDisk" => Dict(
+                        "caching" => "ReadWrite",
+                        "managedDisk" => Dict(
+                            "storageAccountType" => "Standard_LRS"
+                        ),
+                        "createOption" => "FromImage"
                     )
-                ]
+                ),
+                "osProfile" => Dict(
+                    "computerName" => name,
+                    "adminUsername" => "cvx",
+                    "linuxConfiguration" => Dict(
+                        "ssh" => Dict(
+                            "publicKeys" => []
+                        ),
+                        "disablePasswordAuthentication" => true
+                    )
+                ),
+                "networkProfile" => Dict(
+                    "networkInterfaces" => [
+                        Dict(
+                            "id" => "/subscription/$subscriptionid/resourceGroups/$resourcegroup_vnet/providers/Microsoft.Network/networkInterfaces/$nicname",
+                            "properties" => Dict(
+                                "primary" => true
+                            )
+                        )
+                    ]
+                )
             )
         )
     )
