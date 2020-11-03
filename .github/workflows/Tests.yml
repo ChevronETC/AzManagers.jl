@@ -67,12 +67,12 @@ jobs:
       # - name: Create Master VM
       #   run: az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "$IMAGE_NAME" --public-ip-address "$PUBLIC_IP_NAME" --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu_key.pub --admin-username cvx
       
-      # - name: Create Master VM
-      #   run: az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "$IMAGE_NAME" --public-ip-address "$PUBLIC_IP_NAME" --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu_key.pub --admin-username cvx
+      - name: Create Master VM
+        run: az vm create -g "ubuntu-latest-1.5-344189829" -n "ubuntu-latest-1.5-344189829-vm-loc" --image "ubuntu-latest-1.5-344189829-image" --public-ip-address "ubuntu-latest-1.5-344189829-pubip-loc" --subnet default --vnet-name "ubuntu-latest-1.5-344189829-vnet" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu_key.pub --admin-username cvx
       
       - name: Run the unit tests
         run: |
-          ipaddress=$(az network public-ip show -g "ubuntu-latest-1.5-344189829" -n "ubuntu-latest-1.5-344189829-pubip" | jq '.ipAddress' | cut -d "\"" -f 2)
+          ipaddress=$(az network public-ip show -g "ubuntu-latest-1.5-344189829" -n "ubuntu-latest-1.5-344189829-pubip-loc" | jq '.ipAddress' | cut -d "\"" -f 2)
           echo "IP: $ipaddress"
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa.pub cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa.pub
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa
