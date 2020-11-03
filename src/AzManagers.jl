@@ -263,7 +263,7 @@ end
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)
     @debug "getting image info"
-    sigimagename, sigimageversion, imagename = scaleset_image(manager, params[:template], params[:sigimagename], params[:sigimageversion], params[:imagename])
+    sigimagename, sigimageversion, imagename = scaleset_image(manager, params[:template]["value"], params[:sigimagename], params[:sigimageversion], params[:imagename])
 
     @debug "software sanity check"
     custom_environment = software_sanity_check(manager, imagename == "" ? sigimagename : imagename)
@@ -1278,11 +1278,10 @@ function detachedvminfo(request::HTTP.Request)
     HTTP.Response(200, Dict("Content-Type"=>"application/json"); body=json(AzManagers.DETACHED_VM[]))
 end
 
-function buildstartupscript(user::String, custom_environment::Bool)
+function buildstartupscript(user::String, disk::AbstractString, custom_environment::Bool)
     cmd = """
     #!/bin/sh
-    sudo mkdir -m 777 /mnt/scratch
-    ln -s /mnt/scratch /scratch
+    $disk
     """
     
     if isfile(joinpath(homedir(), ".gitconfig"))
@@ -1376,14 +1375,14 @@ function addproc(vm_template::Dict, nic_template=nothing;
         nic_template = nic_templates[nic_template]
     end
 
-    vm_template["properties"]["osProfile"]["computerName"] = vmname
+    vm_template["value"]["properties"]["osProfile"]["computerName"] = vmname
 
-    subnetid = vm_template["properties"]["networkProfile"]["networkInterfaces"][1]["id"]
+    subnetid = vm_template["value"]["properties"]["networkProfile"]["networkInterfaces"][1]["id"]
 
     manager = AzManager(session)
     
     @debug "getting image info"
-    sigimagename, sigimageversion, imagename = scaleset_image(manager, vm_template, sigimagename, sigimageversion, imagename)
+    sigimagename, sigimageversion, imagename = scaleset_image(manager, vm_template["value"], sigimagename, sigimageversion, imagename)
 
     @debug "software sanity check"
     custom_environment = software_sanity_check(manager, imagename == "" ? sigimagename : imagename)
@@ -1398,11 +1397,11 @@ function addproc(vm_template::Dict, nic_template=nothing;
 
     nic_id = JSON.parse(String(r.body))["id"]
 
-    vm_template["properties"]["networkProfile"]["networkInterfaces"][1]["id"] = nic_id
+    vm_template["value"]["properties"]["networkProfile"]["networkInterfaces"][1]["id"] = nic_id
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
-    push!(vm_template["properties"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
+    push!(vm_template["value"]["properties"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
 
-    cmd = buildstartupscript(user, custom_environment)
+    cmd = buildstartupscript(user, vm_template["tempdisk"], custom_environment)
 
     cmd *= """
 
@@ -1419,12 +1418,12 @@ function addproc(vm_template::Dict, nic_template=nothing;
 
     _cmd = base64encode(cmd)
 
-    vm_template["properties"]["osProfile"]["customData"] = _cmd
+    vm_template["value"]["properties"]["osProfile"]["customData"] = _cmd
 
     # vm quota check
     @debug "quota check"
     while true
-        navailable_cores, navailable_cores_spot = quotacheck(manager, subscriptionid, vm_template, 1, nretry, verbose)
+        navailable_cores, navailable_cores_spot = quotacheck(manager, subscriptionid, vm_template["value"], 1, nretry, verbose)
         navailable_cores >= 0 && break
         @warn "Insufficient quota for VM.  VM will start when usage allows; sleeping for 60 seconds, and trying again."
         try
@@ -1442,7 +1441,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2019-07-01",
         Dict("Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"),
-        String(json(vm_template)))
+        String(json(vm_template["value"])))
 
     spincount = 1
     starttime = tic = time()
@@ -1716,14 +1715,14 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         Dict("Authorization"=>"Bearer $(token(manager.session))"))
     r = JSON.parse(String(_r.body))
 
-    _template = deepcopy(template)
+    _template = deepcopy(template["value"])
 
     _template["properties"]["virtualMachineProfile"]["osProfile"]["computerNamePrefix"] = string(scalesetname, "-", randstring('a':'z', 4), "-")
 
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
     
-    cmd = buildstartupscript(user, custom_environment)
+    cmd = buildstartupscript(user, template["tempdisk"], custom_environment)
     _cmd = base64encode(cmd)
 
     _template["properties"]["virtualMachineProfile"]["osProfile"]["customData"] = _cmd
