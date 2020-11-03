@@ -49,9 +49,9 @@ include("/home/cvx/azmanagers-setup.jl")
     #
     # Unit Test 5 - Verify that the cloud-init startup script ran successfully
     #
-    # for i = 1:tppi
-    #     @test remotecall_fetch(isfile, workers()[i], ".git-credentials")
-    # end
+    for i = 1:tppi
+        @test_broken remotecall_fetch(isfile, workers()[i], ".git-credentials")
+    end
 
     #
     # Unit Test 6 - Delete the Julia processes, scale set instances and the scale set itself
@@ -126,6 +126,6 @@ end
     #
     # Unit Test 4 - create a new job on a new detached server that auto-destructs upon completion of its work
     #
-    job3 = @detach vm(;vm_template=templatename, session=kwargs.session, persist=false) begin
+    job3 = @detach vm(;vm_template=templatename, session=session, persist=false) begin
     end
 end
