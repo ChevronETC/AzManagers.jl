@@ -50,11 +50,14 @@
       "inline":
       [
         "sleep 30s",
-        "ping -c 1 azure.archive.ubuntu.com",
         "sudo apt-get -y clean",
+        "sleep 30s",
         "sudo apt-get -y update",
+        "sleep 30s",
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" upgrade",
+        "sleep 30s",
         "sudo apt-get -y install build-essential mpich libcurl4-openssl-dev emacs-nox nodejs npm git vim",
+        "sleep 30s",
         "sudo sed -i '1 i *     soft    nofile  1000000' /etc/security/limits.conf",
         "sudo sed -i '1 i *     hard    nofile  1000000' /etc/security/limits.conf",
         "sudo sed -i '1 i fs.inotify.max_user_watches=65536' /etc/sysctl.conf",
