@@ -49,6 +49,10 @@
       "type": "shell",
       "inline":
       [
+        "echo \"waiting 180 seconds for cloud-init to update /etc/apt/sources.list\"",
+        "timeout 180 /bin/bash -c 'until stat /var/lib/cloud/instance/boot-finished 2>/dev/null; do echo waiting ...; sleep 1; done'",
+        "echo \"running apt-get update ...\"",
+        "cat /etc/apt/sources.list",
         "sudo apt-get -y update",
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" upgrade",
         "sudo apt-get -y install build-essential mpich libcurl4-openssl-dev emacs-nox nodejs npm git vim",
