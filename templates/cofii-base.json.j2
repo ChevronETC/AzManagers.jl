@@ -49,6 +49,8 @@
       "type": "shell",
       "inline":
       [
+        "sleep 30s",
+        "ping -c 1 azure.archive.ubuntu.com",
         "sudo apt-get -y clean",
         "sudo apt-get -y update",
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" upgrade",
