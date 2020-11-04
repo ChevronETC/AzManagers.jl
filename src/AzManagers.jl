@@ -1749,9 +1749,6 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
 
     if !scaleset_exists
         _template["sku"]["capacity"] = 0
-        write(stdout, "template: $(_template)\n")
-        json_template = JSON.json(_template)
-        write(stdout, "JSON template: $(json_template)\n")
 
         @retry nretry azrequest(
             "PUT",
@@ -1887,7 +1884,6 @@ function getnextlinks!(manager::AzManager, value, nextlink, nretry, verbose)
 end
 
 function ispublic(template)
-write(stdout, "INSIDE IS PUBLIC: $(template)\n\n")
     try
         haskey(template["properties"]["virtualMachineProfile"]["networkProfile"]["networkInterfaceConfigurations"][1]["properties"]["ipConfigurations"][1]["properties"], "publicIPAddressConfiguration")
     catch e
@@ -1910,14 +1906,12 @@ function scaleset_listvms(manager::AzManager, template, subscriptionid, resource
 
     @debug "getting network interfaces from scaleset"
     if ispublic(template)
-        write(stdout, "The template was eval'd as public\n\n")
         _r = @retry nretry azrequest(
             "GET",
             verbose,
             "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/publicipaddresses?api-version=2018-10-01",
             Dict("Authorization"=>"Bearer $(token(manager.session))"))
     else
-        write(stdout, "The template was eval'd as private")
         _r = @retry nretry azrequest(
             "GET",
             verbose,
@@ -1926,7 +1920,6 @@ function scaleset_listvms(manager::AzManager, template, subscriptionid, resource
     end
     r = JSON.parse(String(_r.body))
     networkinterfaces = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
-    write(stdout, "Network Interfaces: $(networkinterfaces)\n\n")
     @debug "done getting network interfaces from scaleset"
 
     _r = @retry nretry azrequest(
@@ -1946,7 +1939,6 @@ function scaleset_listvms(manager::AzManager, template, subscriptionid, resource
             i = findfirst(id->id == vm["id"], networkinterfaces_vmids)
             if i != nothing
                 bind_address = (ispublic(template)) ? networkinterfaces["value"][i]["properties"]["ipAddress"] : networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["privateIPAddress"]
-                write(stdout, "BIND_ADDRESS: $(bind_address)\n\n")
                 push!(vms, Dict("name"=>vm["name"], "host"=>vm["properties"]["osProfile"]["computerName"], "bindaddr"=>bind_address, "instanceid"=>vm["instanceId"]))
             end
         end

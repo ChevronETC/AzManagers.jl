@@ -70,10 +70,10 @@ jobs:
       # could use detach functionality from AzManagers in place of ssh here
       - name: Run the unit tests
         run: |
-          ipaddress=$(az network public-ip show -g "ubuntu-latest-1.5-344189829" -n "ubuntu-latest-1.5-344189829-pubip-loc7" | jq '.ipAddress' | cut -d "\"" -f 2)
+          ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq '.ipAddress' | cut -d "\"" -f 2)
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa.pub cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa.pub
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa
-          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; pkg\"test AzManagers\"'"
+          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia --code-coverage=user -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true)'"
           ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'include(\"/home/cvx/julia-codecov.jl\")'"
           lcovpath=$(ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "find -name lcov.info")
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:$lcovpath /home/runner/lcov.info
