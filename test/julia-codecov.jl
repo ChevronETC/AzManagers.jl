@@ -10,4 +10,4 @@ using CoverageTools
 # Also I'm pretty sure this is the wrong path, it's supposed to be a package src file
 pf = process_folder("/home/cvx/.julia/packages/AzManagers/")
 
-LCOV.writefile("lcov.info", pf) 
+LCOV.writefile("lcov.info", pf)
