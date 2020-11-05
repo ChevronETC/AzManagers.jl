@@ -17,7 +17,7 @@ jobs:
       CLIENT_ID: "${{ secrets.CLIENT_ID }}"
       CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
       GALLERY_NAME: "${{ github.run_id }}${{ matrix.julia-version }}gallery"
-      IMAGE_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image"
+      IMAGE_NAME: "${{ matrix.os }}-${{ github.run_id }}-image"
       VM_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vm"
       PUBLIC_IP_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip"
       VNET_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet"
