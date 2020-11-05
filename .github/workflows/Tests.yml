@@ -68,7 +68,7 @@ jobs:
           vm-size: "Standard_D8s_v3"
           source-os-type: "linux"        
           source-image-type: "PlatformImage"
-          source-image: Canonical:UbuntuServer:20.04-LTS:latest 
+          source-image: Canonical:UbuntuServer:18.04-LTS:latest 
           customizer-script: |
             echo "Host *" > ~/.ssh/config
             echo "    StrictHostKeyChecking    no" >> ~/.ssh/config
