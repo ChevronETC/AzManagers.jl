@@ -40,7 +40,7 @@ jobs:
 
       - name: Create Resource Group, Shared Image Gallery, Image Definition, VNet and Subnet
         run: |
-          az group create                -g "$RESOURCE_GROUP" -l southcentralus
+          az group create                -g "$RESOURCE_GROUP" -l "$LOCATION"
           az group wait                  -g "$RESOURCE_GROUP" --created 
           az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
           az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-focal" -s "20_04-lts" --os-type linux
@@ -97,7 +97,7 @@ jobs:
             export JULIA_MPI_BINARY="system"
             julia -e 'using Pkg; pkg"add AzSessions AzManagers#${{ env.COMMIT_SHA }} Distributed JSON HTTP Test Random Coverage"'
             julia -e 'using Pkg; pkg"precompile"'
-          distributor-type: "SharedImageGallery"
+          dist-type: "SharedImageGallery"
           dist-resource-id: "/subscriptions/${{ env.SUBSCRIPTION_ID }}/resourceGroups/${{ env.RESOURCE_GROUP }}/providers/Microsoft.Compute/galleries/${{ env.GALLERY_NAME }}/images/${{ env.IMAGE_NAME }}"
           dist-location: ${{ env.LOCATION }}
 
@@ -142,7 +142,7 @@ jobs:
       # #   with:
       # #     file: /home/runner/lcov.info
 
-      # # - name: Delete the Resource Group
-      # #   run: |
-      # #     az group delete -g "$RESOURCE_GROUP" --yes
-      # #   if: ${{ always() }}
+      - name: Delete the Resource Group
+        run: |
+          az group delete -g "$RESOURCE_GROUP" --yes
+        if: ${{ always() }}
