@@ -34,6 +34,10 @@ jobs:
       - uses: azure/login@v1.1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
+        
+      # azure ubuntu repo can be flaky so add an alternate source
+      - if: runner.os == 'ubuntu-latest'
+        run: sed -e 's/azure.archive.ubuntu.com/us.archive.ubuntu.com/g' -e t -e d /etc/apt/sources.list | sudo tee /etc/apt/sources.list.d/nonazure.list
 
       - name: Create Resource Group, Shared Image Gallery, Image Definition, VNet and Subnet
         run: |

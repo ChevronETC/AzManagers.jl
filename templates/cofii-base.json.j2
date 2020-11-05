@@ -52,7 +52,7 @@
         "sudo apt-get -y clean",
         "sudo apt-get -y update",
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" upgrade",
-        {# "sudo apt-get -y install build-essential mpich libcurl4-openssl-dev emacs-nox nodejs npm git vim", #}
+        "sudo apt-get -y install build-essential mpich libcurl4-openssl-dev emacs-nox nodejs npm git vim",
         "sudo sed -i '1 i *     soft    nofile  1000000' /etc/security/limits.conf",
         "sudo sed -i '1 i *     hard    nofile  1000000' /etc/security/limits.conf",
         "sudo sed -i '1 i fs.inotify.max_user_watches=65536' /etc/sysctl.conf",
