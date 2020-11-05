@@ -12,6 +12,7 @@ jobs:
     env:
       TENANT_ID: "${{ secrets.TENANT_ID }}" 
       SUBSCRIPTION_ID: "${{ secrets.SUBSCRIPTION_ID }}"
+      LOCATION: "southcentralus"
       RESOURCE_GROUP: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
       CLIENT_ID: "${{ secrets.CLIENT_ID }}"
       CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
@@ -21,6 +22,7 @@ jobs:
       PUBLIC_IP_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip"
       VNET_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet"
       SUBNET_NAME: "default"
+      IDENTITY_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-identity"
       COMMIT_SHA: "${{ github.sha }}"
       JULIA_VERSION: "${{ matrix.julia-version }}"
 
@@ -43,6 +45,7 @@ jobs:
           az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
           az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-focal" -s "20_04-lts" --os-type linux
           az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
+          az identity create             -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME"
 
       - name: Template the Packer Image file
         uses: cuchi/jinja2-action@v1.2.0
@@ -56,47 +59,90 @@ jobs:
           template: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/azmanagers-setup.jl.j2
           output_file: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/azmanagers-setup.jl
 
-      # - name: Install Packer
+      - name: BUILD-CUSTOM-VM-IMAGE      
+        uses: azure/build-vm-image@v0
+        with:        
+          resource-group-name: ${{ env.RESOURCE_GROUP }}
+          managed-identity: ${{ env.IDENTITY_NAME }}
+          location: ${{ env.LOCATION }}
+          vm-size: "Standard_D8s_v3"
+          source-os-type: "linux"        
+          source-image-type: "PlatformImage"
+          source-image: Canonical:UbuntuServer:20.04-LTS:latest 
+          customizer-script: |
+            echo "Host *" > ~/.ssh/config
+            echo "    StrictHostKeyChecking    no" >> ~/.ssh/config
+            echo "    LogLevel                 ERROR" >> ~/.ssh/config
+            echo "    UserKnownHostsFile       /dev/null" >> ~/.ssh/config
+            echo "ssl_verify: false" >> ~/.condarc
+            sudo apt-get -y clean
+            sudo apt-get -y update
+            sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
+            sudo apt-get -y install build-essential mpich libcurl4-openssl-dev emacs-nox nodejs npm git vim
+            sudo sed -i '1 i *     soft    nofile  1000000' /etc/security/limits.conf
+            sudo sed -i '1 i *     hard    nofile  1000000' /etc/security/limits.conf
+            sudo sed -i '1 i fs.inotify.max_user_watches=65536' /etc/sysctl.conf
+            sudo mkdir -p /opt/julia
+            cd /tmp
+            sudo wget https://julialang-s3.julialang.org/bin/linux/x64/${{ env.JULIA_VERSION }}/julia-${{ env.JULIA_VERSION }}.0-linux-x86_64.tar.gz
+            echo "installing Julia"
+            mkdir ~/.julia
+            sudo tar --strip-components=1 -xzvf julia-${{ env.JULIA_VERSION }}.0-linux-x86_64.tar.gz -C /opt/julia
+            sudo rm -f julia-${{ env.JULIA_VERSION }}.0-linux-x86_64.tar.gz
+            cd
+            sed -i '1 i export PATH="${PATH}:/opt/julia/bin"' .bashrc
+            sed -i '1 i export JULIA_WORKER_TIMEOUT="720"' .bashrc
+            export PATH="${PATH}:/opt/julia/bin"
+            echo "installing julia packages"
+            export JULIA_MPI_BINARY="system"
+            julia -e 'using Pkg; pkg"add AzSessions AzManagers#${{ env.COMMIT_SHA }} Distributed JSON HTTP Test Random Coverage"'
+            julia -e 'using Pkg; pkg"precompile"'
+          distributor-type: "SharedImageGallery"
+          dist-resource-id: "/subscriptions/${{ env.SUBSCRIPTION_ID }}/resourceGroups/${{ env.RESOURCE_GROUP }}/providers/Microsoft.Compute/galleries/${{ env.GALLERY_NAME }}/images/${{ env.IMAGE_NAME }}"
+          dist-location: ${{ env.LOCATION }}
+
+
+      # # - name: Install Packer
+      # #   run: |
+      # #     curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+      # #     sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+      # #     sudo apt-get update && sudo apt-get install packer
+
+      # # - name: Build the Packer Image
+      # #   run: packer build -color=false -timestamp-ui /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+
+      # - name: Create the Master VM
+      #   run: az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "UbuntuLTS" --public-ip-address "$PUBLIC_IP_NAME" --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu-key.pub --admin-username cvx
+
+      # # could use detach functionality from AzManagers in place of ssh here
+      # - name: Run the Unit Tests on the Master VM
       #   run: |
-      #     curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-      #     sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-      #     sudo apt-get update && sudo apt-get install packer
-
-      # - name: Build the Packer Image
-      #   run: packer build -color=false -timestamp-ui /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
-
-      - name: Create the Master VM
-        run: az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "UbuntuLTS" --public-ip-address "$PUBLIC_IP_NAME" --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub @/home/runner/work/AzManagers.jl/AzManagers.jl/mcpu-key.pub --admin-username cvx
-
-      # could use detach functionality from AzManagers in place of ssh here
-      - name: Run the Unit Tests on the Master VM
-        run: |
-          echo "Grabbing the Master VM's Pubic IP Address..."
-          ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq '.ipAddress' | cut -d "\"" -f 2)
+      #     echo "Grabbing the Master VM's Pubic IP Address..."
+      #     ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq '.ipAddress' | cut -d "\"" -f 2)
           
-          echo "scp-ing the Runner ssh keys and the coverage script to the Master VM..."
-          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa.pub cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa.pub
-          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa
-          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/work/AzManagers.jl/AzManagers.jl/test/julia-codecov.jl cvx@$ipaddress:/home/cvx/julia-codecov.jl
-          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json cvx@$ipaddress:/home/cvx/cofii-base.json
-          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/work/AzManagers.jl/AzManagers.jl/templates/azmanagers-setup.jl cvx@$ipaddress:/home/cvx/azmanagers-setup.jl
+      #     echo "scp-ing the Runner ssh keys and the coverage script to the Master VM..."
+      #     scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa.pub cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa.pub
+      #     scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa
+      #     scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/work/AzManagers.jl/AzManagers.jl/test/julia-codecov.jl cvx@$ipaddress:/home/cvx/julia-codecov.jl
+      #     scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json cvx@$ipaddress:/home/cvx/cofii-base.json
+      #     scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/work/AzManagers.jl/AzManagers.jl/templates/azmanagers-setup.jl cvx@$ipaddress:/home/cvx/azmanagers-setup.jl
           
-        # echo "Running the Unit Tests..."
-        # ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia --code-coverage=user -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true)'"
+      #   # echo "Running the Unit Tests..."
+      #   # ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia --code-coverage=user -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true)'"
 
-        # echo "Running the Code Coverage Script..."
-        # ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'include(\"/home/cvx/julia-codecov.jl\")'"
+      #   # echo "Running the Code Coverage Script..."
+      #   # ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'include(\"/home/cvx/julia-codecov.jl\")'"
 
-        # echo "Grabbing and scp-ing the Coverage Report path..."
-        # lcovpath=$(ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "find -name lcov.info")
-        # scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:$lcovpath /home/runner/lcov.info
+      #   # echo "Grabbing and scp-ing the Coverage Report path..."
+      #   # lcovpath=$(ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "find -name lcov.info")
+      #   # scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:$lcovpath /home/runner/lcov.info
 
-      # - name: Upload the Code Coverage Report to Codecov
-      #   uses: codecov/codecov-action@v1
-      #   with:
-      #     file: /home/runner/lcov.info
+      # # - name: Upload the Code Coverage Report to Codecov
+      # #   uses: codecov/codecov-action@v1
+      # #   with:
+      # #     file: /home/runner/lcov.info
 
-      # - name: Delete the Resource Group and its Resources
-      #   run: |
-      #     az group delete -n "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}" --yes
-      #   if: ${{ always() }}
+      # # - name: Delete the Resource Group
+      # #   run: |
+      # #     az group delete -g "$RESOURCE_GROUP" --yes
+      # #   if: ${{ always() }}
