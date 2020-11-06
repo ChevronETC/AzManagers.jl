@@ -49,7 +49,7 @@ jobs:
           az network vnet create          -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
           az identity create              -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME"
           ID_CLIENT_ID=$(az identity show -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME" | jq '.principalId' | cut -d "\"" -f 2)
-          sleep 2
+          sleep 1m
           az role assignment create --assignee-object-id "$ID_CLIENT_ID" --role "Contributor" --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
         # az image builder create         -g "$RESOURCE_GROUP" -n "$IMAGE_BUILDER_NAME" --shared-image-destinations "$GALLERY_NAME/$IMAGE_DEFINITION_NAME=$LOCATION" --managed-image-destinations "$IMAGE_NAME=$LOCATION" --image-source "Canonical:UbuntuServer:18.04-LTS:latest" --identity "$IDENTITY_NAME"
 
