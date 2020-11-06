@@ -18,6 +18,8 @@ jobs:
       CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
       GALLERY_NAME: "${{ github.run_id }}${{ matrix.julia-version }}gallery"
       IMAGE_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image"
+      IMAGE_DEFINITION_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image-definition"
+      IMAGE_BUILDER_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image-builder"
       VM_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vm"
       PUBLIC_IP_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip"
       VNET_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet"
@@ -43,23 +45,19 @@ jobs:
           az group create                 -g "$RESOURCE_GROUP" -l "$LOCATION"
           az group wait                   -g "$RESOURCE_GROUP" --created 
           az sig create                   -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
-          az sig image-definition create  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-focal" -s "20_04-lts" --os-type linux
+          az sig image-definition create  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_DEFINITION_NAME" -p "canonical" -f "0001-com-ubuntu-server-focal" -s "20_04-lts" --os-type linux
           az network vnet create          -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
           az identity create              -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME"
           ID_CLIENT_ID=$(az identity show -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME" | jq '.principalId' | cut -d "\"" -f 2)
-          ID_CLIENT_ID2=$(az identity show -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME" | jq '.principalId')
-          echo "HELLO: $ID_CLIENT_ID"
-          echo "HELLO: $ID_CLIENT_ID2"
-          az account show
-          az login --service-principal -u 7f4e2cd1-20a8-47fd-ab49-d3df30121c9a -p "$CLIENT_SECRET" --tenant fd799da1-bfc1-4234-a91c-72b3a1cb9e26
-          sleep 2
+          sleep 1
           az role assignment create --assignee-object-id "$ID_CLIENT_ID" --role "Contributor" --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
+        # az image builder create         -g "$RESOURCE_GROUP" -n "$IMAGE_BUILDER_NAME" --shared-image-destinations "$GALLERY_NAME/$IMAGE_DEFINITION_NAME=$LOCATION" --managed-image-destinations "$IMAGE_NAME=$LOCATION" --image-source "Canonical:UbuntuServer:18.04-LTS:latest" --identity "$IDENTITY_NAME"
 
-      - name: Template the Packer Image file
-        uses: cuchi/jinja2-action@v1.2.0
-        with:
-          template: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json.j2
-          output_file: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
+      # - name: Template the Packer Image file
+      #   uses: cuchi/jinja2-action@v1.2.0
+      #   with:
+      #     template: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json.j2
+      #     output_file: /home/runner/work/AzManagers.jl/AzManagers.jl/templates/cofii-base.json
 
       - name: Template the AzManagers Setup script
         uses: cuchi/jinja2-action@v1.2.0
@@ -77,34 +75,6 @@ jobs:
           source-os-type: "linux"        
           source-image-type: "PlatformImage"
           source-image: Canonical:UbuntuServer:18.04-LTS:latest 
-          customizer-script: |
-            echo "Host *" > ~/.ssh/config
-            echo "    StrictHostKeyChecking    no" >> ~/.ssh/config
-            echo "    LogLevel                 ERROR" >> ~/.ssh/config
-            echo "    UserKnownHostsFile       /dev/null" >> ~/.ssh/config
-            echo "ssl_verify: false" >> ~/.condarc
-            sudo apt-get -y clean
-            sudo apt-get -y update
-            sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
-            sudo apt-get -y install build-essential mpich libcurl4-openssl-dev emacs-nox nodejs npm git vim
-            sudo sed -i '1 i *     soft    nofile  1000000' /etc/security/limits.conf
-            sudo sed -i '1 i *     hard    nofile  1000000' /etc/security/limits.conf
-            sudo sed -i '1 i fs.inotify.max_user_watches=65536' /etc/sysctl.conf
-            sudo mkdir -p /opt/julia
-            cd /tmp
-            sudo wget https://julialang-s3.julialang.org/bin/linux/x64/${{ env.JULIA_VERSION }}/julia-${{ env.JULIA_VERSION }}.0-linux-x86_64.tar.gz
-            echo "installing Julia"
-            mkdir ~/.julia
-            sudo tar --strip-components=1 -xzvf julia-${{ env.JULIA_VERSION }}.0-linux-x86_64.tar.gz -C /opt/julia
-            sudo rm -f julia-${{ env.JULIA_VERSION }}.0-linux-x86_64.tar.gz
-            cd
-            sed -i '1 i export PATH="${PATH}:/opt/julia/bin"' .bashrc
-            sed -i '1 i export JULIA_WORKER_TIMEOUT="720"' .bashrc
-            export PATH="${PATH}:/opt/julia/bin"
-            echo "installing julia packages"
-            export JULIA_MPI_BINARY="system"
-            julia -e 'using Pkg; pkg"add AzSessions AzManagers#${{ env.COMMIT_SHA }} Distributed JSON HTTP Test Random Coverage"'
-            julia -e 'using Pkg; pkg"precompile"'
           dist-type: "SharedImageGallery"
           dist-resource-id: "/subscriptions/${{ env.SUBSCRIPTION_ID }}/resourceGroups/${{ env.RESOURCE_GROUP }}/providers/Microsoft.Compute/galleries/${{ env.GALLERY_NAME }}/images/${{ env.IMAGE_NAME }}"
           dist-location: ${{ env.LOCATION }}
