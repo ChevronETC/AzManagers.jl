@@ -46,7 +46,7 @@ jobs:
           az sig image-definition create   -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-focal" -s "20_04-lts" --os-type linux
           az network vnet create           -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
           az identity create               -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME"
-          $ID_CLIENT_ID=$(az identity show -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME" | grep "clientId" | cut -c16- | tr -d '",')
+          ID_CLIENT_ID=$(az identity show -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME" | grep "clientId" | cut -c16- | tr -d '",')
           az role assignment create --assignee $ID_CLIENT_ID --role Contributor --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
 
       - name: Template the Packer Image file
