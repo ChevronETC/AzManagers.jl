@@ -78,6 +78,35 @@ jobs:
           dist-type: "SharedImageGallery"
           dist-resource-id: "/subscriptions/${{ env.SUBSCRIPTION_ID }}/resourceGroups/${{ env.RESOURCE_GROUP }}/providers/Microsoft.Compute/galleries/${{ env.GALLERY_NAME }}/images/${{ env.IMAGE_DEFINITION_NAME }}"
           dist-location: ${{ env.LOCATION }}
+          customizer-script: |
+            echo "Host *" > ~/.ssh/config
+            echo "    StrictHostKeyChecking    no" >> ~/.ssh/config
+            echo "    LogLevel                 ERROR" >> ~/.ssh/config
+            echo "    UserKnownHostsFile       /dev/null" >> ~/.ssh/config
+            echo "ssl_verify: false" >> ~/.condarc
+            sudo apt-get -y clean
+            sudo apt-get -y update
+            sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
+            sudo apt-get -y install build-essential mpich libcurl4-openssl-dev emacs-nox nodejs npm git vim
+            sudo sed -i '1 i *     soft    nofile  1000000' /etc/security/limits.conf
+            sudo sed -i '1 i *     hard    nofile  1000000' /etc/security/limits.conf
+            sudo sed -i '1 i fs.inotify.max_user_watches=65536' /etc/sysctl.conf
+            sudo mkdir -p /opt/julia
+            cd /tmp
+            sudo wget https://julialang-s3.julialang.org/bin/linux/x64/${{ env.JULIA_VERSION }}/julia-${{ env.JULIA_VERSION }}.0-linux-x86_64.tar.gz
+            echo "installing Julia"
+            mkdir ~/.julia
+            sudo tar --strip-components=1 -xzvf julia-${{ env.JULIA_VERSION }}.0-linux-x86_64.tar.gz -C /opt/julia
+            sudo rm -f julia-${{ env.JULIA_VERSION }}.0-linux-x86_64.tar.gz
+            cd
+            sed -i '1 i export PATH="${PATH}:/opt/julia/bin"' .bashrc
+            sed -i '1 i export JULIA_WORKER_TIMEOUT="720"' .bashrc
+            export PATH="${PATH}:/opt/julia/bin"
+            echo "installing julia packages"
+            export JULIA_MPI_BINARY="system"
+            julia -e 'using Pkg; pkg"add AzSessions AzManagers#${{ env.COMMIT_SHA }} Distributed JSON HTTP Test Random Coverage"'
+            julia -e 'using Pkg; pkg"precompile"'
+
 
 
       # # - name: Install Packer
