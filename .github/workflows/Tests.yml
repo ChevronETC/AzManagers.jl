@@ -76,7 +76,7 @@ jobs:
           source-image-type: "PlatformImage"
           source-image: Canonical:UbuntuServer:18.04-LTS:latest 
           dist-type: "SharedImageGallery"
-          dist-resource-id: "/subscriptions/${{ env.SUBSCRIPTION_ID }}/resourceGroups/${{ env.RESOURCE_GROUP }}/providers/Microsoft.Compute/galleries/${{ env.GALLERY_NAME }}/images/${{ env.IMAGE_NAME }}"
+          dist-resource-id: "/subscriptions/${{ env.SUBSCRIPTION_ID }}/resourceGroups/${{ env.RESOURCE_GROUP }}/providers/Microsoft.Compute/galleries/${{ env.GALLERY_NAME }}/images/${{ env.IMAGE_DEFINITION_NAME }}"
           dist-location: ${{ env.LOCATION }}
 
 
