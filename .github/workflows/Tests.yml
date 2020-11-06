@@ -50,6 +50,7 @@ jobs:
           ID_CLIENT_ID2=$(az identity show -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME" | jq '.principalId')
           echo "HELLO: $ID_CLIENT_ID"
           echo "HELLO: $ID_CLIENT_ID2"
+          az account show
           az role assignment create --assignee-object-id "$ID_CLIENT_ID" --role "Contributor" --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
 
       - name: Template the Packer Image file
