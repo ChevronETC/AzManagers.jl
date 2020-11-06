@@ -40,13 +40,16 @@ jobs:
 
       - name: Create Resource Group, Shared Image Gallery, Image Definition, VNet and Subnet
         run: |
-          az group create                  -g "$RESOURCE_GROUP" -l "$LOCATION"
-          az group wait                    -g "$RESOURCE_GROUP" --created 
-          az sig create                    -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
-          az sig image-definition create   -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-focal" -s "20_04-lts" --os-type linux
-          az network vnet create           -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
-          az identity create               -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME"
+          az group create                 -g "$RESOURCE_GROUP" -l "$LOCATION"
+          az group wait                   -g "$RESOURCE_GROUP" --created 
+          az sig create                   -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
+          az sig image-definition create  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-focal" -s "20_04-lts" --os-type linux
+          az network vnet create          -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
+          az identity create              -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME"
           ID_CLIENT_ID=$(az identity show -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME" | jq '.principalId' | cut -d "\"" -f 2)
+          ID_CLIENT_ID2=$(az identity show -g "$RESOURCE_GROUP" -n "$IDENTITY_NAME" | jq '.principalId')
+          echo "HELLO: $ID_CLIENT_ID"
+          echo "HELLO: $ID_CLIENT_ID2"
           az role assignment create --assignee-object-id "$ID_CLIENT_ID" --role "Contributor" --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
 
       - name: Template the Packer Image file
