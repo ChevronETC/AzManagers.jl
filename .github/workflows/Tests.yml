@@ -51,6 +51,7 @@ jobs:
           echo "HELLO: $ID_CLIENT_ID"
           echo "HELLO: $ID_CLIENT_ID2"
           az account show
+          az login --service-principal -u 7f4e2cd1-20a8-47fd-ab49-d3df30121c9a -p "$CLIENT_SECRET" --tenant fd799da1-bfc1-4234-a91c-72b3a1cb9e26
           az role assignment create --assignee-object-id "$ID_CLIENT_ID" --role "Contributor" --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
 
       - name: Template the Packer Image file
