@@ -228,6 +228,7 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `ppi=1` The number of Julia processes to start per Azure scale set instance.
 * `julia_num_threads=Threads.nthreads()` set the number of Julia threads to run on each worker
 * `omp_num_threads=get(ENV, "OMP_NUM_THREADS", 1)` set the number of OpenMP threads to run on each worker
+* `env=Dict()` each dictionary entry is an environment variable set on the worker before Julia starts. e.g. `env=Dict("OMP_PROC_BIND"=>"close")`
 * `nretry=20` Number of retries for HTTP REST calls to Azure services.
 * `verbose=0` verbose flag used in HTTP requests.
 * `user=AzManagers._manifest["ssh_user"]` ssh user.
@@ -257,6 +258,7 @@ function Distributed.addprocs(template::Dict, n::Int;
         ppi = 1,
         julia_num_threads = Threads.nthreads(),
         omp_num_threads = get(ENV, "OMP_NUM_THREADS", 1),
+        env = Dict(),
         nretry = 20,
         verbose = 0,
         user = "",
@@ -277,7 +279,7 @@ function Distributed.addprocs(template::Dict, n::Int;
     sigimagename,sigimageversion,imagename = scaleset_image(manager, template["value"], sigimagename, sigimageversion, imagename)
     custom_environment = software_sanity_check(manager, imagename == "" ? sigimagename : imagename)
     ntotal = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename,
-        nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, spot, maxprice,
+        nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, spot, maxprice,
         verbose, custom_environment)
 
     if haskey(manager.scaleset_count, (subscriptionid,resourcegroup,group))
@@ -929,7 +931,15 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
     cmd
 end
 
-function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, julia_num_threads::Int, omp_num_threads::Int, user::String,
+function build_envstring(env::Dict)
+    envstring = ""
+    for (key,value) in env
+        envstring *= "export $key=$value\n"
+    end
+    envstring
+end
+
+function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, julia_num_threads::Int, omp_num_threads::Int, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool)
     cmd = buildstartupscript(manager, user, disk, custom_environment)
 
@@ -937,12 +947,15 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
     master_address = string(getipaddr())
     master_port = manager.port
 
+    envstring = build_envstring(env)
+
     if mpi_ranks_per_worker == 0
         cmd *= """
 
         sudo su - $user <<EOF
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
+        $envstring
         julia -e 'using AzManagers; AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
@@ -952,6 +965,7 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         sudo su - $user <<EOF
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
+        $envstring
         mpirun -n $mpi_ranks_per_worker $mpi_flags julia -e 'using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
@@ -960,14 +974,16 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
     cmd
 end
 
-function buildstartupscript_detached(manager::AzManager, julia_num_threads::Int, omp_num_threads::Int, user::String,
+function buildstartupscript_detached(manager::AzManager, julia_num_threads::Int, omp_num_threads::Int, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool, subscriptionid, resourcegroup, vmname)
-
     cmd = buildstartupscript(manager, user, disk, custom_environment)
+
+    envstring = build_envstring(env)
 
     cmd *= """
 
     sudo su - $user <<EOF
+    $envstring
     export JULIA_NUM_THREADS=$julia_num_threads
     export OMP_NUM_THREADS=$omp_num_threads
     ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N ''
@@ -1120,7 +1136,7 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
 end
 
 function scaleset_create_or_update(manager::AzManager, user, subscriptionid, resourcegroup, scalesetname, sigimagename, sigimageversion,
-        imagename, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, spot, maxprice, verbose, custom_environment)
+        imagename, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, spot, maxprice, verbose, custom_environment)
     load_manifest()
     ssh_key = _manifest["ssh_public_key_file"]
 
@@ -1139,7 +1155,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
     
-    cmd = buildstartupscript_cluster(manager, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, user, template["tempdisk"], custom_environment)
+    cmd = buildstartupscript_cluster(manager, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, user, template["tempdisk"], custom_environment)
     _cmd = base64encode(cmd)
 
     _template["properties"]["virtualMachineProfile"]["osProfile"]["customData"] = _cmd
@@ -1461,6 +1477,9 @@ Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` w
 * `imagename=""` Azure image name used as an alternative to `sigimagename` and `sigimageversion` (used for development work)
 * `nretry=10` Max retries for re-tryable REST call failures
 * `verbose=0` Verbosity flag passes to HTTP.jl methods
+* `julia_num_threads=Threads.nthreads()` set `JULIA_NUM_THREADS` environment variable before starting the detached process
+* `omp_num_threads = get(ENV, "OMP_NUM_THREADS", 1)` set `OMP_NUM_THREADS` environment variable before starting the detached process
+* `env=Dict()` Dictionary of environemnt variables that will be exported before starting the detached process
 * `detachedservice=true` start the detached service allowing for RESTful remote code execution
 """
 function addproc(vm_template::Dict, nic_template=nothing;
@@ -1476,6 +1495,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         verbose = 0,
         julia_num_threads = Threads.nthreads(),
         omp_num_threads = get(ENV, "OMP_NUM_THREADS", 1),
+        env = Dict(),
         detachedservice = true)
     load_manifest()
     subscriptionid == "" && (subscriptionid = AzManagers._manifest["subscriptionid"])
@@ -1530,7 +1550,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
 
     local cmd
     if detachedservice
-        cmd = buildstartupscript_detached(manager, julia_num_threads, omp_num_threads, user,
+        cmd = buildstartupscript_detached(manager, julia_num_threads, omp_num_threads, env, user,
             disk, custom_environment, subscriptionid, resourcegroup, vmname)
     else
         cmd = buildstartupscript(manager, user, disk, custom_environment)
