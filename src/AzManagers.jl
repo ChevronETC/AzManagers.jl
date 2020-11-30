@@ -509,6 +509,10 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
     write(c, _vm*"\n")
     redirect_stdout(c)
     redirect_stderr(c)
+
+    # work-a-round https://github.com/JuliaLang/julia/issues/38482
+    global_logger(ConsoleLogger(c, Logging.Info))
+
     c
 end
 
