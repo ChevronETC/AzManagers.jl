@@ -257,7 +257,7 @@ function Distributed.addprocs(template::Dict, n::Int;
         group = "cbox",
         ppi = 1,
         julia_num_threads = Threads.nthreads(),
-        omp_num_threads = get(ENV, "OMP_NUM_THREADS", 1),
+        omp_num_threads = parse(Int, get(ENV, "OMP_NUM_THREADS", "1")),
         env = Dict(),
         nretry = 20,
         verbose = 0,
@@ -1498,7 +1498,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         nretry = 10,
         verbose = 0,
         julia_num_threads = Threads.nthreads(),
-        omp_num_threads = get(ENV, "OMP_NUM_THREADS", 1),
+        omp_num_threads = parse(Int, get(ENV, "OMP_NUM_THREADS", "1")),
         env = Dict(),
         detachedservice = true)
     load_manifest()
