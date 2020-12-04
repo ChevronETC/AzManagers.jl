@@ -48,6 +48,7 @@ To create a scale-set template, use `AzManagers.build_sstemplate` and
 using AzManagers
 myscaleset = AzManagers.build_sstemplate("myvm",
     subscriptionid       = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+    admin_username       = "linuxuser",
     location             = "southcentralus",
     resourcegroup        = "my-resource-group",
     vnet                 = "my-vnet",

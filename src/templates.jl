@@ -18,6 +18,7 @@ to the `~/.azmanagers` folder.
 
 # required key-word arguments
 * `subscriptionid` Azure subscription
+* `admin_username` ssh user for the scaleset virtual machines
 * `location` Azure data-center location
 * `resourcegroup` Azure resource-group
 * `imagegallery` Azure image gallery that contains the VM image
@@ -36,6 +37,7 @@ to the `~/.azmanagers` folder.
 function build_sstemplate(name;
         subscriptionid,
         subscriptionid_image = "",
+        admin_username,
         location,
         resourcegroup,
         resourcegroup_vnet = "",
@@ -80,7 +82,7 @@ function build_sstemplate(name;
                     ),
                     "osProfile" => Dict(
                         "computerNamePrefix" => name,
-                        "adminUsername" => "cvx",
+                        "adminUsername" => admin_username,
                         "linuxConfiguration" => Dict(
                             "ssh" => Dict(
                                 "publicKeys" => []
@@ -188,6 +190,7 @@ or written to AzManagers.jl configuration files.
 
 # Required keyword arguments
 * `subscriptionid` Azure subscription
+* `admin_username` ssh user for the scaleset virtual machines
 * `location` Azure data center location
 * `resourcegroup` Azure resource group where the VM will reside
 * `imagegallery` Azure shared image gallery name
@@ -205,6 +208,7 @@ or written to AzManagers.jl configuration files.
 """
 function build_vmtemplate(name;
         subscriptionid,
+        admin_username,
         subscriptionid_image = "",
         location,
         resourcegroup,
@@ -246,7 +250,7 @@ function build_vmtemplate(name;
                 ),
                 "osProfile" => Dict(
                     "computerName" => name,
-                    "adminUsername" => "cvx",
+                    "adminUsername" => admin_username,
                     "linuxConfiguration" => Dict(
                         "ssh" => Dict(
                             "publicKeys" => []
