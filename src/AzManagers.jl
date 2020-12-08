@@ -922,8 +922,11 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
         environmentname = LibGit2.branch(repo)
         cmd *= """
         
-        sudo su - $user <<EOF
-        cd /home/$user/.julia/environments/v$(VERSION.major).$(VERSION.minor)
+        sudo su - $user <<'EOF'
+        JDPATH=`julia -e 'write(stdout, DEPOT_PATH[1])'`
+        JMAJOR=`julia -e 'write(stdout, string(VERSION.major))'`
+        JMINOR=`julia -e 'write(stdout, string(VERSION.minor))'`
+        cd \${JDPATH}/environments/v\${JMAJOR}.\${JMINOR}
         git fetch
         git checkout $environmentname
         julia -e 'using Pkg; pkg"instantiate"; pkg"precompile"'
