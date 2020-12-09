@@ -121,13 +121,14 @@ mutable struct AzManager <: ClusterManager
     session::AzSessionAbstract
     nretry::Int
     verbose::Int
-    scaleset_count::Dict{Tuple{String,String,String},Int}
+    scalesets::Dict{Tuple{String,String,String},Dict{String,Any}}
     pending_up::Channel{TCPSocket}
     pending_down::Vector{Task}
     port::UInt16
     server::Sockets.TCPServer
     task_add::Task
     task_process::Task
+    task_scalesets::Task
 
     AzManager() = new()
 end
@@ -156,14 +157,64 @@ function azmanager!(session, nretry, verbose)
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(32)
     _manager.pending_down = Task[]
-    _manager.scaleset_count = Dict{Tuple{String,String,String},Int}()
+    _manager.scalesets = Dict{Tuple{String,String,String},Dict{String,Any}}()
     _manager.task_add = @async add_pending_connections()
     _manager.task_process = @async process_pending_connections()
+    _manager.task_scalesets = @async monitor_scalesets()
 
     _manager
 end
 
 azmanager() = _manager
+
+function monitor_scalesets()
+    manager = azmanager()
+    while true
+        @debug "monitoring scaleset..."
+        for (key, scaleset) in manager.scalesets
+            @debug "monitoring scaleset: key=$key"
+            subscriptionid,resourcegroup,group = key[1],key[2],key[3]
+            status = scaleset_status(manager, subscriptionid, resourcegroup, group, manager.nretry, manager.verbose)
+            @info "line $(@__LINE__), status=$status"
+
+            if status == "Failed"
+                @warn "scaleset $group failed, deleting and retrying."
+                rmgroup(manager, subscriptionid, resourcegroup, scalesetname)
+                while true
+                    groupnames = list_scalesets(manager, subscriptionid, resourcegroup, nretry, verbose)
+                    if group ∉ groupnames
+                        break
+                    end
+                    sleep(60)
+                end
+
+                scaleset_create_or_update(
+                    manager,
+                    scaleset["user"],
+                    subscriptionid,
+                    resourcegroup,
+                    group,
+                    scaleset["sigimagename"],
+                    scaleset["sigimageversion"],
+                    scaleset["imagename"],
+                    manager.nretry,
+                    scaleset["template"],
+                    scaleset["count"],
+                    scaleset["ppi"],
+                    scaleset["mpi_ranks_per_worker"],
+                    scaleset["mpi_flags"],
+                    scaleset["julia_num_threads"],
+                    scaleset["omp_num_threads"],
+                    scaleset["env"],
+                    scaleset["spot"],
+                    scaleset["maxprice"],
+                    manager.verbose,
+                    scaleset["custom_environment"])
+            end
+        end
+        sleep(60)
+    end
+end
 
 function add_pending_connections()
     manager = azmanager()
@@ -282,10 +333,26 @@ function Distributed.addprocs(template::Dict, n::Int;
         nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, spot, maxprice,
         verbose, custom_environment)
 
-    if haskey(manager.scaleset_count, (subscriptionid,resourcegroup,group))
-        manager.scaleset_count[(subscriptionid,resourcegroup,group)] += n
+    if haskey(manager.scalesets, (subscriptionid,resourcegroup,group))
+        manager.scalesets[(subscriptionid,resourcegroup,group)]["count"] += n
     else
-        manager.scaleset_count[(subscriptionid,resourcegroup,group)] = n
+        manager.scalesets[(subscriptionid,resourcegroup,group)] =
+            Dict(
+                "count" => n,
+                "user" => user,
+                "sigimagename" => sigimagename,
+                "sigimageversion" => sigimageversion,
+                "imagename" => imagename,
+                "template" => template,
+                "ppi" => ppi,
+                "mpi_ranks_per_worker" => mpi_ranks_per_worker,
+                "mpi_flags" => mpi_flags,
+                "julia_num_threads" => julia_num_threads,
+                "omp_num_threads" => omp_num_threads,
+                "env" => env,
+                "spot" => spot,
+                "maxprice" => maxprice,
+                "custom_environment" => custom_environment)
     end
 
     if waitfor
@@ -335,7 +402,7 @@ function _kill(manager::AzManager, id::Int, config::WorkerConfig)
     sleep(1+10*rand()) # Azure seems to have fairly strict rate limits for it API.  This tries to reduce the number of retries that are required.
 
     # check if we expect the scale-set to be marked for deletion
-    if manager.scaleset_count[(config.userdata["subscriptionid"],config.userdata["resourcegroup"],config.userdata["scalesetname"])] == 0
+    if manager.scalesets[(config.userdata["subscriptionid"],config.userdata["resourcegroup"],config.userdata["scalesetname"])]["count"] == 0
         @debug "rmprocs: scaleset is marked for deletion"
         return nothing
     end
@@ -401,11 +468,11 @@ regardless if they are added to the cluster yet.
 function nworkers_provisioned()
     manager = azmanager()
     n = 0
-    if !isdefined(manager, :scaleset_count)
+    if !isdefined(manager, :scalesets)
         return n
     end
-    for value in values(manager.scaleset_count)
-        n += value
+    for value in values(manager.scalesets)
+        n += value["count"]
     end
     n
 end
@@ -461,8 +528,8 @@ function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfi
     end
 
     if op == :deregister || op == :interrupt
-        manager.scaleset_count[(config.userdata["subscriptionid"],config.userdata["resourcegroup"],config.userdata["scalesetname"])] -= 1
-        if manager.scaleset_count[(config.userdata["subscriptionid"],config.userdata["resourcegroup"],config.userdata["scalesetname"])] == 0
+        manager.scalesets[(config.userdata["subscriptionid"],config.userdata["resourcegroup"],config.userdata["scalesetname"])]["count"] -= 1
+        if manager.scalesets[(config.userdata["subscriptionid"],config.userdata["resourcegroup"],config.userdata["scalesetname"])]["count"] == 0
             @debug "removing scaleset=$(config.userdata["scalesetname"]) in resourcegroup=$(config.userdata["resourcegroup"]) and subscription=$(config.userdata["subscriptionid"])"
             rmgroup(manager, config.userdata["subscriptionid"], config.userdata["resourcegroup"], config.userdata["scalesetname"])
         end
@@ -1110,6 +1177,21 @@ function list_scalesets(manager::AzManager, subscriptionid, resourcegroup, nretr
     r = JSON.parse(String(_r.body))
     scalesets = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
     [get(scaleset, "name", "") for scaleset in scalesets]
+end
+
+function scaleset_status(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
+    scalesetnames = list_scalesets(manager, subscriptionid, resourcegroup, nretry, verbose)
+    if scalesetname ∉ scalesetnames
+        return "Unknown"
+    end
+    _r = @retry nretry azrequest(
+        "GET",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2020-06-01",
+        Dict("Authorization"=>"Bearer $(token(manager.session))"))
+
+    r = JSON.parse(String(_r.body))
+    get(get(r, "properties", Dict()), "provisioningState", "Unknown")
 end
 
 function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
