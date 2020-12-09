@@ -917,22 +917,30 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
     end
 
     if custom_environment
-        environmentfolder = joinpath(DEPOT_PATH[1], "environments", "v$(VERSION.major).$(VERSION.minor)")
-        repo = LibGit2.GitRepo(environmentfolder)
-        environmentname = LibGit2.branch(repo)
-        cmd *= """
-        
-        sudo su - $user <<'EOF'
-        JDPATH=`julia -e 'write(stdout, DEPOT_PATH[1])'`
-        JMAJOR=`julia -e 'write(stdout, string(VERSION.major))'`
-        JMINOR=`julia -e 'write(stdout, string(VERSION.minor))'`
-        cd \${JDPATH}/environments/v\${JMAJOR}.\${JMINOR}
-        git fetch
-        git checkout $environmentname
-        julia -e 'using Pkg; pkg"instantiate"; pkg"precompile"'
-        touch /tmp/julia_instantiate_done
-        EOF
-        """
+        try
+            environmentfolder = joinpath(DEPOT_PATH[1], "environments", "v$(VERSION.major).$(VERSION.minor)")
+            repo = LibGit2.GitRepo(environmentfolder)
+            LibGit2.fetch(repo)
+            remoteurl = LibGit2.fetchheads(repo)[1].url
+            environmentname = LibGit2.branch(repo)
+
+            cmd *= """
+            
+            sudo su - $user <<'EOF'
+            JDPATH=`julia -e 'write(stdout, DEPOT_PATH[1])'`
+            JMAJOR=`julia -e 'write(stdout, string(VERSION.major))'`
+            JMINOR=`julia -e 'write(stdout, string(VERSION.minor))'`
+            cd \${JDPATH}/environments
+            rm -rf v\${JMAJOR}.\${JMINOR}
+            git clone -b $environmentname $remoteurl v\${JMAJOR}.\${JMINOR}
+            julia -e 'using Pkg; pkg"instantiate"; pkg"precompile"'
+            touch /tmp/julia_instantiate_done
+            EOF
+            """
+        catch e
+            @warn "Unable to use a custom environment.  Please ensure that your environment is in a git repository with an accessible remote."
+            showerror(stderr, e)
+        end
     end
 
     cmd
