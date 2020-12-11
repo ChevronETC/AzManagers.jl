@@ -3,8 +3,7 @@ using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 include("/home/cvx/azmanagers-setup.jl")
 
 @testset "AzManagers, addprocs" for kwargs in (
-    (subscriptionid = subscriptionid, resourcegroup = resourcegroup, imagename = imagename,          ninstances = 1, group = "test$(randstring('a':'z',4))"),
-    (subscriptionid = subscriptionid, resourcegroup = resourcegroup, imagename = imagename, ppi = 2, ninstances = 2, group = "test$(randstring('a':'z',4))") )
+    (subscriptionid = subscriptionid, resourcegroup = resourcegroup, imagename = imagename,          ninstances = 1, group = "test$(randstring('a':'z',4))"))
     
     # Set up iteration vars
     url = "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$(kwargs.group)?api-version=2019-12-01"
