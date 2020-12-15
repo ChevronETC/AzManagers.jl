@@ -82,7 +82,7 @@ jobs:
 
           echo "Preparing for proper Code Coverage..."
           ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; pkg\"dev AzManagers\"'"
-          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "cd ~/.julia/dev/AzManagers/"
+          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "cd ~/.julia/dev/AzManagers/; git checkout $COMMIT_SHA"
           echo ""
 
           echo "Running the Unit Tests and Code Coverage..."
