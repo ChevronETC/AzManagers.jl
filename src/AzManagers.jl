@@ -846,7 +846,8 @@ function scaleset_image(manager::AzManager, template, sigimagename, sigimagevers
 end
 
 function software_sanity_check(manager, imagename)
-    envpath = joinpath(DEPOT_PATH[1], "environments", "v$(VERSION.major).$(VERSION.minor)")
+    projectinfo = Pkg.project()
+    envpath = normpath(joinpath(projectinfo.path, ".."))
     local repo
     try
         repo = LibGit2.GitRepo(envpath)
@@ -916,24 +917,30 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
         """
     end
 
+    remote_julia_environment_name = ""
     if custom_environment
         try
-            environmentfolder = joinpath(DEPOT_PATH[1], "environments", "v$(VERSION.major).$(VERSION.minor)")
-            repo = LibGit2.GitRepo(environmentfolder)
+            projectinfo = Pkg.project()
+            julia_environment_folder = normpath(joinpath(projectinfo.path, ".."))
+            repo = LibGit2.GitRepo(julia_environment_folder)
             LibGit2.fetch(repo)
             remoteurl = LibGit2.fetchheads(repo)[1].url
             environmentname = LibGit2.branch(repo)
 
+            #=
+            There is no guarantee that `julia_environment_folder` will exist on the worker.
+            Therefore, we will put the environment into a sub-folder of Pkg.envdir().
+            =#
+            remote_julia_environment_name = splitpath(julia_environment_folder)[end]
+
             cmd *= """
             
             sudo su - $user <<'EOF'
-            JDPATH=`julia -e 'write(stdout, DEPOT_PATH[1])'`
-            JMAJOR=`julia -e 'write(stdout, string(VERSION.major))'`
-            JMINOR=`julia -e 'write(stdout, string(VERSION.minor))'`
-            cd \${JDPATH}/environments
-            rm -rf v\${JMAJOR}.\${JMINOR}
-            git clone -b $environmentname $remoteurl v\${JMAJOR}.\${JMINOR}
-            julia -e 'using Pkg; pkg"instantiate"; pkg"precompile"'
+            JULIA_ENVIRONMENT_FOLDER=`julia -e 'using Pkg; write(stdout, joinpath(Pkg.envdir(), "$remote_julia_environment_name"))'`
+            mkdir -p \${JULIA_ENVIRONMENT_FOLDER}
+            rm -rf \${JULIA_ENVIRONMENT_FOLDER}
+            git clone -b $environmentname $remoteurl \${JULIA_ENVIRONMENT_FOLDER}
+            julia -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); Pkg.instantiate(); Pkg.precompile()'
             touch /tmp/julia_instantiate_done
             EOF
             """
@@ -943,7 +950,7 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
         end
     end
 
-    cmd
+    cmd, remote_julia_environment_name
 end
 
 function build_envstring(env::Dict)
@@ -956,13 +963,15 @@ end
 
 function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, julia_num_threads::Int, omp_num_threads::Int, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool)
-    cmd = buildstartupscript(manager, user, disk, custom_environment)
+    cmd, remote_julia_environment_name = buildstartupscript(manager, user, disk, custom_environment)
 
     cookie = Distributed.cluster_cookie()
     master_address = string(getipaddr())
     master_port = manager.port
 
     envstring = build_envstring(env)
+
+    juliaenvstring = remote_julia_environment_name == "" ? "" : """; using Pkg; Pkg.activate(joinpath(Pkg.envdir(), "$remote_julia_environment_name")); Pkg.instantiate(); """
 
     if mpi_ranks_per_worker == 0
         cmd *= """
@@ -971,7 +980,7 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        julia -e 'using AzManagers; AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
+        julia -e '$(juliaenvstring)using AzManagers; AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     else
@@ -981,7 +990,7 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -e 'using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
+        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     end
@@ -991,9 +1000,11 @@ end
 
 function buildstartupscript_detached(manager::AzManager, julia_num_threads::Int, omp_num_threads::Int, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool, subscriptionid, resourcegroup, vmname)
-    cmd = buildstartupscript(manager, user, disk, custom_environment)
+    cmd, remote_julia_environment_name = buildstartupscript(manager, user, disk, custom_environment)
 
     envstring = build_envstring(env)
+
+    juliaenvstring = remote_julia_environment_name == "" ? "" : """; using Pkg; Pkg.activate(joinpath(Pkg.envdir(), "$remote_julia_environment_name")); Pkg.instantiate(); """
 
     cmd *= """
 
@@ -1003,7 +1014,7 @@ function buildstartupscript_detached(manager::AzManager, julia_num_threads::Int,
     export OMP_NUM_THREADS=$omp_num_threads
     ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N '' <<<y
     cd /home/$user
-    julia -e 'using AzManagers; AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
+    julia -e '$(juliaenvstring)using AzManagers; AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
     EOF
     """
 

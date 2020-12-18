@@ -1,4 +1,4 @@
-using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
+using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON, Pkg
 
 include(joinpath(homedir(), "azmanagers-setup.jl"))
 
@@ -80,6 +80,72 @@ session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_s
         end
         sleep(5)
     end
+end
+
+@testset "environment, addproc" begin
+    mkpath("myproject")
+    cd("myproject")
+    Pkg.activate(".")
+    Pkg.add("AzSessions")
+    Pkg.add("Distributed")
+    Pkg.add("JSON")
+    Pkg.add("HTTP")
+    Pkg.add(PackageSpec(name="AzManagers", rev="$(ENV["COMMIT_SHA"])"))
+    run(`git init`)
+    run(`git add Manifest.toml`)
+    run(`git add Project.toml`)
+    run(`git commit -m "up"`)
+    branchname = randstring()
+    run(`git branch $branchname`)
+    run(`git checkout $branchname`)
+    run(`git remote add origin https://github.com/ChevronETC/juliaenvironments.git`)
+    run(`git push origin $branchname`)
+
+    r = randstring('a':'z',4)
+    bname = "test$r"
+
+    testvm = addproc(templatename; basename=bname, session=session)
+    testjob = @detachat testvm begin
+        using Pkg
+        pinfo = Pkg.project()
+        write(stdout, "project path is $(pinfo.path)\n")
+    end
+    read(testjob)
+    @test contains(read(testjob), "myproject")
+    rmproc(testvm; session=session)
+    
+    run(`git push origin --delete $branchname`)
+end
+
+@testset "environment, addprocs" begin
+    mkpath("myproject")
+    cd("myproject")
+    Pkg.activate(".")
+    Pkg.add("AzSessions")
+    Pkg.add("Distributed")
+    Pkg.add("JSON")
+    Pkg.add("HTTP")
+    Pkg.add(PackageSpec(name="AzManagers", rev="$(ENV["COMMIT_SHA"])"))
+    run(`git init`)
+    run(`git add Manifest.toml`)
+    run(`git add Project.toml`)
+    run(`git commit -m "up"`)
+    branchname = randstring()
+    run(`git branch $branchname`)
+    run(`git checkout $branchname`)
+    run(`git remote add origin https://github.com/ChevronETC/juliaenvironments.git`)
+    run(`git push origin $branchname`)
+
+    group = "test$(randstring('a':'z',4))"
+
+    addprocs(templatename, 1; waitfor=true, group=group)
+    @everywhere using Pkg
+    pinfo = remotecall_fetch(Pkg.project, workers()[1])
+    rmprocs(workers())
+
+    @test contains(pinfo.path, "myproject")
+    
+    run(`git push origin --delete $branchname`)
 end
 
 @testset "AzManagers, addproc" begin
