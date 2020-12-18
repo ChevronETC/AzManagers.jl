@@ -1,26 +1,30 @@
 using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 
-include("/home/cvx/azmanagers-setup.jl")
+include(joinpath(homedir(), "azmanagers-setup.jl"))
 
-@testset "AzManagers, addprocs" for kwargs in (
-    (subscriptionid = subscriptionid, resourcegroup = resourcegroup, imagename = imagename,          ninstances = 1, group = "test$(randstring('a':'z',4))"))
+session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_secret=client_secret)
+
+@testset "AzManagers, addprocs, ppi=$ppi" for ppi in (1,)
+    ninstances = 1
+    group = "test$(randstring('a':'z',4))"
     
     # Set up iteration vars
-    url = "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$(kwargs.group)?api-version=2019-12-01"
-    ninstances = kwargs.ninstances              # Number of new scale set instances to be added to the scale set
-    ppi = haskey(kwargs, :ppi) ? kwargs.ppi : 1 # Number of Julia processes to be present on each scale set instance
+    url = "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$group?api-version=2019-12-01"
     tppi = ppi*ninstances                       # Total number of Julia processes in the entire scale set
-    session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_secret=client_secret)
-    # Get rid of ninstances, it is not needed for addprocs
-    kwargs = (subscriptionid = kwargs.subscriptionid, resourcegroup = kwargs.resourcegroup, sigimagename = kwargs.imagename, sigimageversion = "1.0.0", ppi = ppi, group = kwargs.group, session = session)
 
     #
     # Unit Test 1 - Create scale set and start Julia processes
     #
-    addprocs(templatename, ninstances; waitfor=true, kwargs...) #add public ip to azmanagers for ScaleSet creation (add to templates.jl and to azmanagers.jl if needed)
+    addprocs(templatename, ninstances;
+        waitfor = true,
+        subscriptionid = subscriptionid,
+        resourcegroup = resourcegroup,
+        sigimagename = imagename,
+        ppi = ppi,
+        group = group,
+        session = session)
     
     # Verify that the scale set is present
-    session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_secret=client_secret)
     _r = HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
     @test _r.status == 200
 
@@ -57,7 +61,6 @@ include("/home/cvx/azmanagers-setup.jl")
     #
 
     # First, verify that the scale set is present
-    session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_secret=client_secret)
     _r = HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
     @test _r.status == 200
 
@@ -67,7 +70,6 @@ include("/home/cvx/azmanagers-setup.jl")
     # Last, verify that the scale set has been deleted
     while true
         try
-            session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_secret=client_secret)
             HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
         catch _e
             e = JSON.parse(String(_e.response.body))
@@ -86,8 +88,6 @@ end
 # end
 
 @testset "AzManagers, detach" for kwargs in ( (dummy="dummy"), )
-
-    session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_secret=client_secret)
 
     #
     # Unit Test 1 - Create a detached job and persist the server

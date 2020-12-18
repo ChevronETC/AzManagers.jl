@@ -32,6 +32,18 @@ jobs:
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
 
+      - name: Template the Packer Image file
+        uses: cuchi/jinja2-action@v1.2.0
+        with:
+          template: test/templates/cofii-base.json.j2
+          output_file: test/templates/cofii-base.json
+
+      - name: Template the AzManagers Setup script
+        uses: cuchi/jinja2-action@v1.2.0
+        with:
+          template: test/templates/azmanagers-setup.jl.j2
+          output_file: test/templates/azmanagers-setup.jl
+
       - name: Create Prereq. Azure Resources
         run: |
           az login --service-principal   -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
@@ -44,18 +56,6 @@ jobs:
           az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
           az network vnet subnet update  -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" --vnet-name "$VNET_NAME" --network-security-group "$NSG_NAME"
 
-      - name: Template the Packer Image file
-        uses: cuchi/jinja2-action@v1.2.0
-        with:
-          template: /home/runner/work/AzManagers.jl/AzManagers.jl/test/templates/cofii-base.json.j2
-          output_file: /home/runner/work/AzManagers.jl/AzManagers.jl/test/templates/cofii-base.json
-
-      - name: Template the AzManagers Setup script
-        uses: cuchi/jinja2-action@v1.2.0
-        with:
-          template: /home/runner/work/AzManagers.jl/AzManagers.jl/test/templates/azmanagers-setup.jl.j2
-          output_file: /home/runner/work/AzManagers.jl/AzManagers.jl/test/templates/azmanagers-setup.jl
-
       - name: Install Packer
         run: |
           curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
@@ -63,7 +63,7 @@ jobs:
           sudo apt-get update && sudo apt-get install packer
 
       - name: Build Packer Image
-        run: packer build -color=false -timestamp-ui /home/runner/work/AzManagers.jl/AzManagers.jl/test/templates/cofii-base.json
+        run: packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.json
 
       - name: Create Master VM
         run: |
@@ -75,24 +75,12 @@ jobs:
           ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq '.ipAddress' | cut -d "\"" -f 2)
           echo ""
 
-          echo "scp-ing the Runner ssh keys to the Master VM..."
-          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa.pub cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa.pub
-          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/.ssh/azmanagers_rsa
-          echo ""
-
-          echo "Preparing for proper Code Coverage..."
-          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; pkg\"dev AzManagers\"'"
-          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "cd ~/.julia/dev/AzManagers/"
-          echo ""
-
           echo "Running the Unit Tests and Code Coverage..."
-          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia --code-coverage -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true)'"
-          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "cd ~/.julia/dev/AzManagers/; julia -e 'include(\"/home/cvx/julia-codecov.jl\")'"
+          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true); using AzManagers; include(joinpath(pkgdir(AzManagers), \"test\", \"julia-codecov.jl\"))'"
           echo ""
 
-          echo "Grabbing and scp-ing the Coverage Report..."
-          lcovpath=$(ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "find -name lcov.info")
-          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:$lcovpath /home/runner/lcov.info
+          echo "scp-ing the Coverage Report..."
+          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/lcov.info lcov.info
 
       - uses: codecov/codecov-action@v1
         with:
