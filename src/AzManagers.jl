@@ -1001,7 +1001,7 @@ function buildstartupscript_detached(manager::AzManager, julia_num_threads::Int,
     $envstring
     export JULIA_NUM_THREADS=$julia_num_threads
     export OMP_NUM_THREADS=$omp_num_threads
-    ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N ''
+    ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N '' <<<y
     cd /home/$user
     julia -e 'using AzManagers; AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
     EOF

@@ -34,7 +34,6 @@
   "provisioners":
   [
     {
-      "only": ["azure-arm"],
       "type": "shell",
       "inline":
       [
@@ -51,7 +50,7 @@
       [
         "sudo apt-get -y update",
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" upgrade",
-        "sudo apt-get -y install build-essential mpich libcurl4-openssl-dev emacs-nox nodejs npm git vim",
+        "sudo apt-get -y install build-essential mpich git",
         "sudo sed -i '1 i *     soft    nofile  1000000' /etc/security/limits.conf",
         "sudo sed -i '1 i *     hard    nofile  1000000' /etc/security/limits.conf",
         "sudo sed -i '1 i fs.inotify.max_user_watches=65536' /etc/sysctl.conf",
@@ -63,24 +62,20 @@
       "type": "shell",
       "inline":
       [
-        "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/{{ env['JULIA_VERSION'] }}/julia-{{ env['JULIA_VERSION'] }}.0-linux-x86_64.tar.gz"
+        "ssh-keygen -f /home/cvx/.ssh/azmanagers_rsa -N ''"
       ]
     },
     {
       "type": "file",
-      "source": "/home/runner/work/AzManagers.jl/AzManagers.jl/test/templates/azmanagers-setup.jl",
+      "source": "test/templates/azmanagers-setup.jl",
       "destination": "/home/cvx/azmanagers-setup.jl"
-    },
-    {
-      "type": "file",
-      "source": "/home/runner/work/AzManagers.jl/AzManagers.jl/test/julia-codecov.jl",
-      "destination": "/home/cvx/julia-codecov.jl"
     },
     {
       "type": "shell",
       "inline":
       [
         "echo \"installing Julia\"",
+        "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/{{ env['JULIA_VERSION'] }}/julia-{{ env['JULIA_VERSION'] }}.0-linux-x86_64.tar.gz",
         "mkdir ~/.julia",
         "sudo tar --strip-components=1 -xzvf julia-{{ env['JULIA_VERSION'] }}.0-linux-x86_64.tar.gz -C /opt/julia",
         "sudo rm -f julia-{{ env['JULIA_VERSION'] }}.0-linux-x86_64.tar.gz",
