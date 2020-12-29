@@ -82,10 +82,19 @@ session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_s
     end
 end
 
-# Needs work - Default VM sku causes a failure here
-# @testset "AzManagers, addproc" for kwargs in ( (basename = "test$(randstring('a':'z',4))"), )
-#     addproc(template; basename=kwargs.basename)
-# end
+@testset "AzManagers, addproc" begin
+    r = randstring('a':'z',4)
+    basename = "test$r"
+    testvm = addproc(templatename; basename=basename, session=session)
+    testjob = @detachat testvm begin
+        write(stdout, "write to stdout\n")
+        write(stderr, "write to stderr\n")
+    end
+    wait(testjob)
+    @test read(testjob) == "write to stdout\n"
+    @test read(testjob; stdio=stderr) == "write to stderr\n"
+    rmproc(testvm; session=session)
+end
 
 @testset "AzManagers, detach" for kwargs in ( (dummy="dummy"), )
 

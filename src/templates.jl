@@ -146,18 +146,22 @@ to AzManagers.jl configuration files.
 * `vnet` Azure virtual network for the NIC to attach to.
 * `subnet` Azure sub-network name.
 * `location` location of the Azure data center where the NIC correspond to.
+
+# Optional keyword arguments
+* `accelerated=true` use accelerated networking (not all VM sizes support accelerated networking).
 """
 function build_nictemplate(name;
         subscriptionid,
         resourcegroup_vnet,
         vnet,
         subnet,
+        accelerated = true,
         location)
     subnetid = "/subscriptions/$subscriptionid/resourceGroups/$resourcegroup_vnet/providers/Microsoft.Network/virtualNetworks/$vnet/subnets/$subnet"
 
     body = Dict(
         "properties" => Dict(
-            "enableAcceleratedNetworking" => true,
+            "enableAcceleratedNetworking" => accelerated,
             "ipConfigurations" => [
                 Dict(
                     "name" => "ipConfig1",
