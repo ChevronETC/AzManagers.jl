@@ -37,6 +37,7 @@ vmtemplate = AzManagers.build_vmtemplate(
 
 nictemplate = AzManagers.build_nictemplate(
         templatename,
+        accelerated          = false,
         subscriptionid       = subscriptionid,
         location             = "southcentralus",
         resourcegroup_vnet   = resourcegroup,
