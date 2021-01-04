@@ -1,8 +1,13 @@
-using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON, Pkg
+using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
 
 include(joinpath(homedir(), "azmanagers-setup.jl"))
 
 session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_secret=client_secret)
+
+azmanagers_pinfo = Pkg.project()
+pkgs=TOML.parse(read(joinpath(dirname(azmanagers_pinfo.path),"Manifest.toml"), String))
+pkg=pkgs["AzManagers"][1]
+azmanagers_rev=get(pkg, "repo-rev", "")
 
 @testset "AzManagers, addprocs, ppi=$ppi" for ppi in (1,)
     ninstances = 1
@@ -90,7 +95,9 @@ end
     Pkg.add("Distributed")
     Pkg.add("JSON")
     Pkg.add("HTTP")
-    Pkg.add(PackageSpec(name="AzManagers", rev="$(ENV["COMMIT_SHA"])"))
+
+    Pkg.add(PackageSpec(name="AzManagers", rev=azmanagers_rev))
+
     run(`git init`)
     run(`git add Manifest.toml`)
     run(`git add Project.toml`)
@@ -125,7 +132,9 @@ end
     Pkg.add("Distributed")
     Pkg.add("JSON")
     Pkg.add("HTTP")
-    Pkg.add(PackageSpec(name="AzManagers", rev="$(ENV["COMMIT_SHA"])"))
+
+    Pkg.add(PackageSpec(name="AzManagers", rev=azmanagers_rev))
+
     run(`git init`)
     run(`git add Manifest.toml`)
     run(`git add Project.toml`)
