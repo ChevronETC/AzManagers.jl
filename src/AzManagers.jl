@@ -1278,8 +1278,6 @@ function detachedrun(request::HTTP.Request)
         end
 
         _tempname = tempname(;cleanup=false)
-        @info "_tempname=$_tempname"
-
         io = open(_tempname, "w")
 
         if haskey(r, "variablebundle")
@@ -1288,6 +1286,7 @@ function detachedrun(request::HTTP.Request)
 
         code = r["code"]
         codelines = split(code, "\n")
+
         if strip(codelines[1]) == "begin"
             popfirst!(codelines)
             while length(codelines) > 0
@@ -1299,7 +1298,6 @@ function detachedrun(request::HTTP.Request)
         end
 
         code = join(codelines, "\n")
-        @info "code=$code"
 
         write(io, code)
         close(io)
@@ -1308,12 +1306,15 @@ function detachedrun(request::HTTP.Request)
         outfile = "job-$id.out"
         errfile = "job-$id.err"
         task = @async begin
-           open(outfile, "w") do out
-               open(errfile, "w") do err
-                      redirect_stdout(out) do
-                          redirect_stderr(err) do
+            open(outfile, "w") do out
+                open(errfile, "w") do err
+                    redirect_stdout(out) do
+                        redirect_stderr(err) do
                             try
-                                Base.eval(Main, :(include($_tempname)))
+                                modulename = Symbol("DetachedRun$id")
+                                @eval Main module $modulename end
+                                current_module = getfield(Main, modulename)
+                                @eval current_module include($_tempname)
                             catch e
                                 showerror(stderr, e)
 
@@ -1331,10 +1332,10 @@ function detachedrun(request::HTTP.Request)
                                 flush(stderr)
                                 throw(e)
                             end
-                          end
-                      end
-               end
-           end
+                        end
+                    end
+                end
+            end
         end
         DETACHED_JOBS[string(id)] = Dict("task"=>task, "request"=>request, "stdout"=>outfile, "stderr"=>errfile, "codefile"=>_tempname, "code"=>code)
     catch e
@@ -1342,14 +1343,23 @@ function detachedrun(request::HTTP.Request)
         showerror(io, e, catch_backtrace())
         return HTTP.Response(500, Dict("Content-Type"=>"application/json"); body=json(Dict("error"=>String(take!(io)))))
     end
-    if !r["persist"]
-        @async begin
-            wait(task)
+    @async begin
+        wait(task)
+        # free up memory by assigning the module's global variables to `nothing`
+        modulename = Symbol("DetachedRun$id")
+        current_module = getfield(Main, modulename)
+        for name in names(current_module; all=true)
+            try
+                @eval current_module $name = nothing
+            catch
+            end
+        end
+        if !r["persist"]
             vm = AzManagers.DETACHED_VM[]
             rmproc(vm; session=sessionbundle(:management))
         end
     end
-    return HTTP.Response(200, Dict("Content-Type"=>"application/json"); body=json(Dict("id"=>id)))
+    HTTP.Response(200, Dict("Content-Type"=>"application/json"); body=json(Dict("id"=>id)))
 end
 
 function detachedstatus(request::HTTP.Request)
