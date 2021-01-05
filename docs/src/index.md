@@ -160,19 +160,16 @@ VM via a mix of MPI and OpenMP.
 
 # Custom environments
 AzManagers can create an on-the-fly custom Julia software environment for the workers.
-This is managed via Julia environments.  If you update your Julia environment, then
-you can, commit those updates to a branch and push that branch to a remote.  Subsequently, 
-when you create a cluster, the worker nodes will, at boot time, instantiate the environment.
-For example:
-```sh
-julia -e `using Pkg; pkg"add FFTW"`
-cd /home/cvx/.julia/environments/v1.5
-git branch custom_environment
-git add Manifest.toml
-git add Project.toml
-git commit -m "custom environment"
-git push origin custom_environment
+This is managed via Julia environments.  If you use the `customenv=true` keyword argument, then
+when you create a cluster, the worker nodes will, at boot time, instantiate the
+environment. For example:
+```julia
+using Pkg
+Pkg.instantiate(".")
+Pkg.add("AzManagers")
+Pkg.add("Jets")
+addprocs("cbox16",2;customenv=true)
 ```
 Now, when worker VMs are initialized, they will have the software stack
-defined in `custom_environment`.  Please note that this can add significant
+defined by the current project.  Please note that this can add significant
 overhead to the boot-time of the VMs.

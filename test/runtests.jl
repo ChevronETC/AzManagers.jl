@@ -1,8 +1,13 @@
-using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
+using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
 
 include(joinpath(homedir(), "azmanagers-setup.jl"))
 
 session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_secret=client_secret)
+
+azmanagers_pinfo = Pkg.project()
+pkgs=TOML.parse(read(joinpath(dirname(azmanagers_pinfo.path),"Manifest.toml"), String))
+pkg=pkgs["AzManagers"][1]
+azmanagers_rev=get(pkg, "repo-rev", "")
 
 @testset "AzManagers, addprocs, ppi=$ppi" for ppi in (1,)
     ninstances = 1
@@ -80,6 +85,52 @@ session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_s
         end
         sleep(5)
     end
+end
+
+@testset "environment, addproc" begin
+    mkpath("myproject")
+    cd("myproject")
+    Pkg.activate(".")
+    Pkg.add("AzSessions")
+    Pkg.add("Distributed")
+    Pkg.add("JSON")
+    Pkg.add("HTTP")
+
+    Pkg.add(PackageSpec(name="AzManagers", rev=azmanagers_rev))
+
+    r = randstring('a':'z',4)
+    bname = "test$r"
+
+    testvm = addproc(templatename; basename=bname, session=session, customenv=true)
+    testjob = @detachat testvm begin
+        using Pkg
+        pinfo = Pkg.project()
+        write(stdout, "project path is $(pinfo.path)\n")
+    end
+    read(testjob)
+    @test contains(read(testjob), "myproject")
+    rmproc(testvm; session=session)
+end
+
+@testset "environment, addprocs" begin
+    mkpath("myproject")
+    cd("myproject")
+    Pkg.activate(".")
+    Pkg.add("AzSessions")
+    Pkg.add("Distributed")
+    Pkg.add("JSON")
+    Pkg.add("HTTP")
+
+    Pkg.add(PackageSpec(name="AzManagers", rev=azmanagers_rev))
+
+    group = "test$(randstring('a':'z',4))"
+
+    addprocs(templatename, 1; waitfor=true, group=group, session=session, customenv=true)
+    @everywhere using Pkg
+    pinfo = remotecall_fetch(Pkg.project, workers()[1])
+    rmprocs(workers())
+
+    @test contains(pinfo.path, "myproject")
 end
 
 @testset "AzManagers, addproc" begin

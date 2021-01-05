@@ -1,6 +1,6 @@
 module AzManagers
 
-using AzSessions, Base64, Distributed, HTTP, JSON, LibGit2, Logging, MPI, Pkg, Printf, Random, Serialization, Sockets
+using AzSessions, Base64, CodecZlib, Distributed, HTTP, JSON, LibGit2, Logging, MPI, Pkg, Printf, Random, Serialization, Sockets
 
 const _manifest = Dict("resourcegroup"=>"", "ssh_user"=>"", "ssh_private_key_file"=>"", "ssh_public_key_file"=>"", "subscriptionid"=>"")
 
@@ -223,6 +223,7 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `sigimagename=""` The name of the SIG image[1].
 * `sigimageversion=""` The version of the `sigimagename`[1].
 * `imagename=""` The name of the image (alternative to `sigimagename` and `sigimageversion` used for development work).
+* `customenv=false` If true, then send the current project environment to the workers where it will be instantiated.
 * `session=AzSession(;lazy=true)` The Azure session used for authentication.
 * `group="cbox"` The name of the Azure scale set.  If the scale set does not yet exist, it will be created.
 * `ppi=1` The number of Julia processes to start per Azure scale set instance.
@@ -253,6 +254,7 @@ function Distributed.addprocs(template::Dict, n::Int;
         sigimagename = "",
         sigimageversion = "",
         imagename = "",
+        customenv = false,
         session = AzSession(;lazy=true),
         group = "cbox",
         ppi = 1,
@@ -277,10 +279,10 @@ function Distributed.addprocs(template::Dict, n::Int;
     @info "Provisioning scale-set..."
     manager = azmanager!(session, nretry, verbose)
     sigimagename,sigimageversion,imagename = scaleset_image(manager, template["value"], sigimagename, sigimageversion, imagename)
-    custom_environment = software_sanity_check(manager, imagename == "" ? sigimagename : imagename)
+    software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
     ntotal = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename,
         nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, spot, maxprice,
-        verbose, custom_environment)
+        verbose, customenv)
 
     if haskey(manager.scaleset_count, (subscriptionid,resourcegroup,group))
         manager.scaleset_count[(subscriptionid,resourcegroup,group)] += n
@@ -845,24 +847,15 @@ function scaleset_image(manager::AzManager, template, sigimagename, sigimagevers
     sigimagename, sigimageversion, imagename
 end
 
-function software_sanity_check(manager, imagename)
-    envpath = joinpath(DEPOT_PATH[1], "environments", "v$(VERSION.major).$(VERSION.minor)")
-    local repo
-    try
-        repo = LibGit2.GitRepo(envpath)
-    catch
-        @warn "Julia environment is not versioned"
-        return false
-    end
-    branchname = LibGit2.branch(repo)
+function software_sanity_check(manager, imagename, custom_environment)
+    custom_environment && return
+
+    # TODO... parse the toml file
+    # TODO... throw an error if custom_environment is true, and there are packages that are locally dev'd.
+    projectinfo = Pkg.project()
+    envpath = normpath(joinpath(projectinfo.path, ".."))
 
     @debug "sofware sanity, imagename=$imagename, branchname=$branchname"
-
-    custom_environment = false
-    if imagename != branchname
-        # assume that the user has modified and comitted an environment to a branch, and wants that environment initialized on the workers
-        custom_environment = true
-    end
 
     _tempname = tempname()
     open(_tempname, "w") do io
@@ -887,7 +880,25 @@ function software_sanity_check(manager, imagename)
     if isdev || isup || isdown || isadd || isrm
         @warn "Julia environment has modifications.  It will be inconsistent with the Julia environment on the created VM(s)."
     end
-    custom_environment
+    nothing
+end
+
+function compress_environment(julia_environment_folder)
+    project_text = read(joinpath(julia_environment_folder, "Project.toml"), String)
+    manifest_text = read(joinpath(julia_environment_folder, "Manifest.toml"), String)
+    project_compressed = base64encode(transcode(ZlibCompressor, project_text))
+    manifest_compressed = base64encode(transcode(ZlibCompressor, manifest_text))
+
+    project_compressed, manifest_compressed
+end
+
+function decompress_environment(project_compressed, manifest_compressed, remote_julia_environment_name)
+    mkpath(joinpath(Pkg.envdir(), remote_julia_environment_name))
+
+    text = String(transcode(ZlibDecompressor, base64decode(project_compressed)))
+    write(joinpath(Pkg.envdir(), remote_julia_environment_name, "Project.toml"), text)
+    text = String(transcode(ZlibDecompressor, base64decode(manifest_compressed)))
+    write(joinpath(Pkg.envdir(), remote_julia_environment_name, "Manifest.toml"), text)
 end
 
 function buildstartupscript(manager::AzManager, user::String, disk::AbstractString, custom_environment::Bool)
@@ -916,24 +927,25 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
         """
     end
 
+    remote_julia_environment_name = ""
     if custom_environment
         try
-            environmentfolder = joinpath(DEPOT_PATH[1], "environments", "v$(VERSION.major).$(VERSION.minor)")
-            repo = LibGit2.GitRepo(environmentfolder)
-            LibGit2.fetch(repo)
-            remoteurl = LibGit2.fetchheads(repo)[1].url
-            environmentname = LibGit2.branch(repo)
+            projectinfo = Pkg.project()
+            julia_environment_folder = normpath(joinpath(projectinfo.path, ".."))
+
+            #=
+            There is no guarantee that `julia_environment_folder` will exist on the worker.
+            Therefore, we will put the environment into a sub-folder of Pkg.envdir().
+            =#
+            remote_julia_environment_name = splitpath(julia_environment_folder)[end]
+
+            project_compressed, manifest_compressed = compress_environment(julia_environment_folder)
 
             cmd *= """
             
             sudo su - $user <<'EOF'
-            JDPATH=`julia -e 'write(stdout, DEPOT_PATH[1])'`
-            JMAJOR=`julia -e 'write(stdout, string(VERSION.major))'`
-            JMINOR=`julia -e 'write(stdout, string(VERSION.minor))'`
-            cd \${JDPATH}/environments
-            rm -rf v\${JMAJOR}.\${JMINOR}
-            git clone -b $environmentname $remoteurl v\${JMAJOR}.\${JMINOR}
-            julia -e 'using Pkg; pkg"instantiate"; pkg"precompile"'
+            julia -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$remote_julia_environment_name")'
+            julia -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); Pkg.instantiate(); Pkg.precompile()'
             touch /tmp/julia_instantiate_done
             EOF
             """
@@ -943,7 +955,7 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
         end
     end
 
-    cmd
+    cmd, remote_julia_environment_name
 end
 
 function build_envstring(env::Dict)
@@ -956,13 +968,15 @@ end
 
 function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, julia_num_threads::Int, omp_num_threads::Int, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool)
-    cmd = buildstartupscript(manager, user, disk, custom_environment)
+    cmd, remote_julia_environment_name = buildstartupscript(manager, user, disk, custom_environment)
 
     cookie = Distributed.cluster_cookie()
     master_address = string(getipaddr())
     master_port = manager.port
 
     envstring = build_envstring(env)
+
+    juliaenvstring = remote_julia_environment_name == "" ? "" : """using Pkg; Pkg.activate(joinpath(Pkg.envdir(), "$remote_julia_environment_name")); """
 
     if mpi_ranks_per_worker == 0
         cmd *= """
@@ -971,7 +985,7 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        julia -e 'using AzManagers; AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
+        julia -e '$(juliaenvstring)using AzManagers; AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     else
@@ -981,7 +995,7 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -e 'using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
+        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     end
@@ -991,9 +1005,11 @@ end
 
 function buildstartupscript_detached(manager::AzManager, julia_num_threads::Int, omp_num_threads::Int, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool, subscriptionid, resourcegroup, vmname)
-    cmd = buildstartupscript(manager, user, disk, custom_environment)
+    cmd, remote_julia_environment_name = buildstartupscript(manager, user, disk, custom_environment)
 
     envstring = build_envstring(env)
+
+    juliaenvstring = remote_julia_environment_name == "" ? "" : """using Pkg; Pkg.activate(joinpath(Pkg.envdir(), "$remote_julia_environment_name")); """
 
     cmd *= """
 
@@ -1003,7 +1019,7 @@ function buildstartupscript_detached(manager::AzManager, julia_num_threads::Int,
     export OMP_NUM_THREADS=$omp_num_threads
     ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N '' <<<y
     cd /home/$user
-    julia -e 'using AzManagers; AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
+    julia -e '$(juliaenvstring)using AzManagers; AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
     EOF
     """
 
@@ -1172,6 +1188,10 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     
     cmd = buildstartupscript_cluster(manager, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, user, template["tempdisk"], custom_environment)
     _cmd = base64encode(cmd)
+
+    if length(_cmd) > 64_000
+        error("cloud init custom data is too large.")
+    end
 
     _template["properties"]["virtualMachineProfile"]["osProfile"]["customData"] = _cmd
 
@@ -1513,6 +1533,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         subscriptionid = "",
         resourcegroup = "",
         session = AzSession(;lazy=true),
+        customenv = false,
         sigimagename = "",
         sigimageversion = "",
         imagename = "",
@@ -1555,7 +1576,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     sigimagename, sigimageversion, imagename = scaleset_image(manager, vm_template["value"], sigimagename, sigimageversion, imagename)
 
     @debug "software sanity check"
-    custom_environment = software_sanity_check(manager, imagename == "" ? sigimagename : imagename)
+    software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
 
     @debug "making nic"
     r = @retry nretry azrequest(
@@ -1576,12 +1597,16 @@ function addproc(vm_template::Dict, nic_template=nothing;
     local cmd
     if detachedservice
         cmd = buildstartupscript_detached(manager, julia_num_threads, omp_num_threads, env, user,
-            disk, custom_environment, subscriptionid, resourcegroup, vmname)
+            disk, customenv, subscriptionid, resourcegroup, vmname)
     else
-        cmd = buildstartupscript(manager, user, disk, custom_environment)
+        cmd = buildstartupscript(manager, user, disk, customenv)
     end
     
     _cmd = base64encode(cmd)
+
+    if length(_cmd) > 64_000
+        error("custom data is too large.")
+    end
 
     vm_template["value"]["properties"]["osProfile"]["customData"] = _cmd
 
@@ -1654,8 +1679,8 @@ function addproc(vm_template::Dict, nic_template=nothing;
         "subscriptionid"=>string(subscriptionid), "resourcegroup"=>string(resourcegroup))
 
     if detachedservice
-        detached_service_wait(vm, custom_environment)
-    elseif custom_environment
+        detached_service_wait(vm, customenv)
+    elseif customenv
         @info "There will be a delay before the custom environment is instantiated, but this work is happening asynchronously"
     end
 
@@ -1874,6 +1899,7 @@ variablebundle(key) = AzManagers.VARIABLE_BUNDLE[Symbol(key)]
 function detached_run(code, ip::String="";
         persist=true,
         vm_template = "",
+        customenv = false,
         nic_template = nothing,
         basename = "cbox",
         user = "",
@@ -1895,6 +1921,7 @@ function detached_run(code, ip::String="";
             subscriptionid = subscriptionid,
             resourcegroup = resourcegroup,
             session = session,
+            customenv = customenv,
             sigimagename = sigimagename,
             sigimageversion = sigimageversion,
             imagename = imagename,
