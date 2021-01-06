@@ -855,7 +855,7 @@ function software_sanity_check(manager, imagename, custom_environment)
     projectinfo = Pkg.project()
     envpath = normpath(joinpath(projectinfo.path, ".."))
 
-    @debug "sofware sanity, imagename=$imagename, branchname=$branchname"
+    @debug "sofware sanity, imagename=$imagename, project=$envpath"
 
     _tempname = tempname()
     open(_tempname, "w") do io
