@@ -848,39 +848,17 @@ function scaleset_image(manager::AzManager, template, sigimagename, sigimagevers
 end
 
 function software_sanity_check(manager, imagename, custom_environment)
-    custom_environment && return
-
-    # TODO... parse the toml file
-    # TODO... throw an error if custom_environment is true, and there are packages that are locally dev'd.
     projectinfo = Pkg.project()
     envpath = normpath(joinpath(projectinfo.path, ".."))
+    packages = TOML.parse(read(joinpath(envpath, "Manifest.toml"), String))
 
-    @debug "sofware sanity, imagename=$imagename, project=$envpath"
-
-    _tempname = tempname()
-    open(_tempname, "w") do io
-        redirect_stdout(io) do
-            Pkg.status(;diff=true)
+    if custom_environment
+        for (packagename, packageinfo) in packages
+            if haskey(package, "path")
+                error("Project/environment has dev'd packages that will not be accessible from workers.")
+            end
         end
     end
-    statuslines = readlines(_tempname)
-    isdev = isup = isdown = isadd = isrm = false
-    for statusline in statuslines[2:end]
-        tokens = split(strip(statusline))
-        if length(tokens) > 1
-            isdev = occursin("~", tokens[2])
-            isup = occursin("↑", tokens[2])
-            isdown = occursin("↓", tokens[2])
-            isadd = occursin("+", tokens[2])
-            isrm = occursin("-", tokens[2])
-            (isdev || isup || isdown || isadd || isrm) && break
-        end
-    end
-
-    if isdev || isup || isdown || isadd || isrm
-        @warn "Julia environment has modifications.  It will be inconsistent with the Julia environment on the created VM(s)."
-    end
-    nothing
 end
 
 function compress_environment(julia_environment_folder)
