@@ -854,7 +854,7 @@ function software_sanity_check(manager, imagename, custom_environment)
 
     if custom_environment
         for (packagename, packageinfo) in packages
-            if haskey(package, "path")
+            if haskey(packageinfo, "path")
                 error("Project/environment has dev'd packages that will not be accessible from workers.")
             end
         end
