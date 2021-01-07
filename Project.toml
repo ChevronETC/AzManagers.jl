@@ -18,6 +18,7 @@ Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 
 [compat]
 AzSessions = "1"
@@ -25,11 +26,11 @@ CodecZlib = "0.7"
 HTTP = "0.8, 0.9"
 JSON = "0.21"
 MPI = "0.14, 0.15, 0.16"
+TOML = "1"
 julia = "^1.4"
 
 [extras]
-TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["TOML", "Test"]
+test = ["Test"]
