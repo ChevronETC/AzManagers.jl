@@ -1,6 +1,6 @@
 module AzManagers
 
-using AzSessions, Base64, CodecZlib, Distributed, HTTP, JSON, LibGit2, Logging, MPI, Pkg, Printf, Random, Serialization, Sockets
+using AzSessions, Base64, CodecZlib, Distributed, HTTP, JSON, LibGit2, Logging, MPI, Pkg, Printf, Random, Serialization, Sockets, TOML
 
 const _manifest = Dict("resourcegroup"=>"", "ssh_user"=>"", "ssh_private_key_file"=>"", "ssh_public_key_file"=>"", "subscriptionid"=>"")
 
