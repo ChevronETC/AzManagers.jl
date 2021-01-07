@@ -147,22 +147,6 @@ end
     rmproc(testvm; session=session)
 end
 
-@testset "AzManagers, detachat, eval in modules" begin
-    r = randstring('a':'z',4)
-    basename = "test$r"
-    testvm = addproc(templatename; basename=basename, session=session)
-    job1 = @detachat testvm begin
-        write(stdout, "module $(@__MODULE__)\n")
-    end
-    wait(job1)
-    job2 = @detachat testvm begin
-        write(stdout, "module $(@__MODULE__)\n")
-    end
-    wait(job2)
-    @test read(job1) != read(job2)
-    rmproc(testvm; session=session)
-end
-
 @testset "AzManagers, detach" for kwargs in ( (dummy="dummy"), )
 
     #

@@ -1331,10 +1331,7 @@ function detachedrun(request::HTTP.Request)
                     redirect_stdout(out) do
                         redirect_stderr(err) do
                             try
-                                modulename = Symbol("DetachedRun$id")
-                                @eval Main module $modulename end
-                                current_module = getfield(Main, modulename)
-                                @eval current_module include($_tempname)
+                                @eval Main include($_tempname)
                             catch e
                                 showerror(stderr, e)
 
@@ -1365,12 +1362,10 @@ function detachedrun(request::HTTP.Request)
     end
     @async begin
         wait(task)
-        # free up memory by assigning the module's global variables to `nothing`
-        modulename = Symbol("DetachedRun$id")
-        current_module = getfield(Main, modulename)
-        for name in names(current_module; all=true)
+        # free up memory by assigning the global variables to `nothing`
+        for name in names(Main; all=true)
             try
-                @eval current_module $name = nothing
+                @eval Main $name = nothing
             catch
             end
         end
