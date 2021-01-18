@@ -145,6 +145,16 @@ end
     @test read(testjob) == "write to stdout\n"
     @test read(testjob; stdio=stderr) == "write to stderr\n"
     rmproc(testvm; session=session)
+
+    testvm = addproc(templatename, name=basename, session=session)
+    testjob = @detachat testvm begin
+        write(stdout, "write to stdout\n")
+        write(stderr, "write to stderr\n")
+    end
+    wait(testjob)
+    @test read(testjob) == "write to stdout\n"
+    @test read(testjob; stdio=stderr) == "write to stderr\n"
+    rmproc(testvm; session=session)
 end
 
 @testset "AzManagers, detach" for kwargs in ( (dummy="dummy"), )
