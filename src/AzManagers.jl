@@ -1939,7 +1939,7 @@ returns the stdout from a detached job.
 function Base.read(job::DetachedJob; stdio=stdout)
     r = HTTP.request(
         "GET",
-        "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/$(stdio==stdout ? "stdout" : "stderr")")
+        "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/$(stdio==stdout ? "stdout" : "stderr")", readtimeout=60)
     String(r.body)
 end
 
@@ -1949,11 +1949,18 @@ end
 returns the status of a detached job.
 """
 function status(job::DetachedJob)
-    _r = HTTP.request(
-        "GET",
-        "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/status")
-    r = JSON.parse(String(_r.body))
-    r["status"]
+    local _r
+    try
+        # the timeout is needed in the event that the vm is deleted
+        _r = HTTP.request(
+            "GET",
+            "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/status", readtimeout=60)
+        r = JSON.parse(String(_r.body))
+        _r = r["status"]
+    catch
+        _r = "failed"
+    end
+    _r
 end
 
 """
@@ -1964,7 +1971,7 @@ blocks until the detached job, `job`, is complete.
 function Base.wait(job::DetachedJob)
     HTTP.request(
         "POST",
-        "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/wait")
+        "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/wait", readtimeout=60)
 end
 
 export AzManager, DetachedJob, addproc, nworkers_provisioned, preempted, rmproc, status, variablebundle, variablebundle!, vm, @detach, @detachat
