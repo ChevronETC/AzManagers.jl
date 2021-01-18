@@ -1480,12 +1480,13 @@ end
 # detached service client API
 #
 """
-    addproc(template[; basename="cbox", subscriptionid="myid", resourcegroup="mygroup", nretry=10, verbose=0, session=AzSession(;lazy=true), sigimagename="", sigimageversion="", imagename="", detachedservice=true])
+    addproc(template[; name="", basename="cbox", subscriptionid="myid", resourcegroup="mygroup", nretry=10, verbose=0, session=AzSession(;lazy=true), sigimagename="", sigimageversion="", imagename="", detachedservice=true])
 
 Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` where `name` is the name of the VM, and `ip` is the ip address of the VM.
 `resourcegroup` and `subscriptionid` denote where the VM resides on Azure.
 
 # Parameters
+* `name=""` name for the VM.  If it is not an empty string, then the next paramter (`basename`) is ignored
 * `basename="cbox"` base name for the VM, we append a random suffix to ensure uniqueness
 * `subscriptionid=AzManagers._manifest["subscriptionid"]` Existing Azure subscription
 * `resourcegorup=AzManagers._manifest["resourcegroup"]` Existing Azure resource group inside the subscription in which the VM is put
@@ -1501,6 +1502,7 @@ Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` w
 * `detachedservice=true` start the detached service allowing for RESTful remote code execution
 """
 function addproc(vm_template::Dict, nic_template=nothing;
+        name = "",
         basename = "cbox",
         user = "",
         subscriptionid = "",
@@ -1523,7 +1525,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     user == "" && (user = AzManagers._manifest["ssh_user"])
     timeout = Distributed.worker_timeout()
 
-    vmname = basename*"-"*randstring('a':'z', 6)
+    vmname = name == "" ? basename*"-"*randstring('a':'z', 6) : name
     nicname = vmname*"-nic"
 
     if nic_template == nothing
