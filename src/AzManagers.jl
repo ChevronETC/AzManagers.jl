@@ -1171,6 +1171,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         error("cloud init custom data is too large.")
     end
 
+    _template["properties"]["doNotRunExtensionsOnOverprovisionedVMs"] = true
     _template["properties"]["virtualMachineProfile"]["osProfile"]["customData"] = _cmd
 
     if spot
