@@ -117,11 +117,17 @@ function azrequest(rtype, verbose, url, headers, body=nothing)
     r
 end
 
+struct ScaleSet
+    subscriptionid
+    resourcegroup
+    scalesetname
+end
+
 mutable struct AzManager <: ClusterManager
     session::AzSessionAbstract
     nretry::Int
     verbose::Int
-    scaleset_count::Dict{Tuple{String,String,String},Int}
+    scalesets::Vector{ScaleSet}
     pending_up::Channel{TCPSocket}
     pending_down::Vector{Task}
     port::UInt16
@@ -142,8 +148,6 @@ function wait_for_pending_down()
     nothing
 end
 
-__init__() = atexit(AzManagers.wait_for_pending_down)
-
 function azmanager!(session, nretry, verbose)
     _manager.session = session
     _manager.nretry = nretry
@@ -156,14 +160,53 @@ function azmanager!(session, nretry, verbose)
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(32)
     _manager.pending_down = Task[]
-    _manager.scaleset_count = Dict{Tuple{String,String,String},Int}()
+    _manager.scalesets = Vector{ScaleSet}[]
     _manager.task_add = @async add_pending_connections()
     _manager.task_process = @async process_pending_connections()
+
+    @async scaleset_monitor()
 
     _manager
 end
 
 azmanager() = _manager
+
+function __init__()
+    atexit(AzManagers.delete_scalesets)
+    atexit(AzManagers.wait_for_pending_down)
+end
+
+function scaleset_monitor()
+    manager = azmanager()
+    try
+        while true
+            sleep(60)
+            delete_empty_scalesets()
+        end
+    catch e
+        @error "scaleset monitor error:"
+        showerror(stderr, e)
+    end
+end
+
+function delete_empty_scalesets()
+    manager = azmanager()
+    idxs = Int[]
+    for (j,scaleset) in enumerate(manager.scalesets)
+        if scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose) == 0
+            rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+            push!(idxs, j)
+        end
+    end
+    deleteat!(manager.scalesets, idxs)
+end
+
+function delete_scalesets()
+    manager = azmanager()
+    for scaleset in manager.scalesets
+        rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+    end
+end
 
 function add_pending_connections()
     manager = azmanager()
@@ -284,11 +327,8 @@ function Distributed.addprocs(template::Dict, n::Int;
         nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, spot, maxprice,
         verbose, customenv)
 
-    if haskey(manager.scaleset_count, (subscriptionid,resourcegroup,group))
-        manager.scaleset_count[(subscriptionid,resourcegroup,group)] += n
-    else
-        manager.scaleset_count[(subscriptionid,resourcegroup,group)] = n
-    end
+    j = findfirst(scaleset->scaleset==ScaleSet(subscriptionid, resourcegroup, group), manager.scalesets)
+    j == nothing && push!(manager.scalesets, ScaleSet(subscriptionid, resourcegroup, group))
 
     if waitfor
         @info "Initiating cluster..."
@@ -336,12 +376,6 @@ function _kill(manager::AzManager, id::Int, config::WorkerConfig)
     body = String(json(Dict("instanceIds" => [u["instanceid"]])))
     sleep(1+10*rand()) # Azure seems to have fairly strict rate limits for it API.  This tries to reduce the number of retries that are required.
 
-    # check if we expect the scale-set to be marked for deletion
-    if manager.scaleset_count[(config.userdata["subscriptionid"],config.userdata["resourcegroup"],config.userdata["scalesetname"])] == 0
-        @debug "rmprocs: scaleset is marked for deletion"
-        return nothing
-    end
-
     # check if the vm was removed without the help of AzManagers (e.g. a SPOT instance that we did not catch in time)
     if !is_vm_in_scaleset(manager, config)
         @debug "rmprocs: vm is not in scale-set"
@@ -383,7 +417,6 @@ function _kill(manager::AzManager, id::Int, config::WorkerConfig)
         end
         sleep(60+10*rand()) # attempt to avoid Azure's hourly rate limit (error 429) -- is there a better way to do this?
     end
-    @debug "Deleting id=$id, pending: done=$(sum([istaskdone(tsk) for tsk in manager.pending_down])+1), total=$(length(manager.pending_down))" # '+1' optimistically includes itself
 
     nothing
 end
@@ -398,20 +431,18 @@ end
     nworkers_provisioned()
 
 Count of the number of scale-set machines that are provisioned
-regardless if they are added to the cluster yet.
+regardless if their status withing the Julia cluster.
 """
 function nworkers_provisioned()
     manager = azmanager()
     n = 0
-    if !isdefined(manager, :scaleset_count)
-        return n
-    end
-    for value in values(manager.scaleset_count)
-        n += value
+    if isdefined(manager, :scalesets)
+        for scaleset in manager.scalesets
+            n += scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+        end
     end
     n
 end
-
 
 """
     rmgroup(groupname;, kwargs...])
@@ -463,11 +494,7 @@ function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfi
     end
 
     if op == :deregister || op == :interrupt
-        manager.scaleset_count[(config.userdata["subscriptionid"],config.userdata["resourcegroup"],config.userdata["scalesetname"])] -= 1
-        if manager.scaleset_count[(config.userdata["subscriptionid"],config.userdata["resourcegroup"],config.userdata["scalesetname"])] == 0
-            @debug "removing scaleset=$(config.userdata["scalesetname"]) in resourcegroup=$(config.userdata["resourcegroup"]) and subscription=$(config.userdata["subscriptionid"])"
-            rmgroup(manager, config.userdata["subscriptionid"], config.userdata["resourcegroup"], config.userdata["scalesetname"])
-        end
+        # TODO
     end
 end
 
@@ -1106,6 +1133,16 @@ function list_scalesets(manager::AzManager, subscriptionid, resourcegroup, nretr
     [get(scaleset, "name", "") for scaleset in scalesets]
 end
 
+function scaleset_capacity(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
+    _r = @retry nretry azrequest(
+        "GET",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2020-06-01",
+        ["Authorization"=>"Bearer $(token(manager.session))"])
+    r = JSON.parse(String(_r.body))
+    r["sku"]["capacity"]
+end
+
 function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
     scalesetnames = list_scalesets(manager, subscriptionid, resourcegroup, nretry, verbose)
     scalesetname ∉ scalesetnames && return String[]
@@ -1171,6 +1208,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         error("cloud init custom data is too large.")
     end
 
+    _template["properties"]["doNotRunExtensionsOnOverprovisionedVMs"] = true
     _template["properties"]["virtualMachineProfile"]["osProfile"]["customData"] = _cmd
 
     if spot
@@ -1184,7 +1222,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     scaleset_exists = false
     for scaleset in scalesets
         if scaleset["name"] == scalesetname
-            n = length(scaleset_listvms(manager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)) #scaleset["sku"]["capacity"]
+            n = scaleset_capacity(manager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
             _template["properties"]["virtualMachineProfile"]["osProfile"]["computerNamePrefix"] = scaleset["properties"]["virtualMachineProfile"]["osProfile"]["computerNamePrefix"]
             scaleset_exists = true
             break
