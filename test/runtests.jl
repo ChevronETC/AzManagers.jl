@@ -73,13 +73,19 @@ azmanagers_rev=get(pkg, "repo-rev", "")
     rmprocs(workers())
 
     # Last, verify that the scale set has been deleted
+    itry = 0
     while true
+        itry += 1
         try
             HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
         catch _e
             e = JSON.parse(String(_e.response.body))
             if _e.status == 404 && e["error"]["code"] == "ResourceNotFound"
                 @info "Cluster deleted!"
+                break
+            end
+            if itry == 10
+                @warn "cluster not deleted"
                 break
             end
         end
