@@ -192,10 +192,12 @@ end
 function delete_empty_scalesets()
     manager = azmanager()
     idxs = Int[]
-    for (j,scaleset) in enumerate(manager.scalesets)
-        if scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose) == 0
-            rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
-            push!(idxs, j)
+    if isdefined(manager, :scalesets)
+        for (j,scaleset) in enumerate(manager.scalesets)
+            if scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose) == 0
+                rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+                push!(idxs, j)
+            end
         end
     end
     deleteat!(manager.scalesets, idxs)
@@ -203,8 +205,10 @@ end
 
 function delete_scalesets()
     manager = azmanager()
-    for scaleset in manager.scalesets
-        rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+    if isdefined(manager, :scalesets)
+        for scaleset in manager.scalesets
+            rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+        end
     end
 end
 
