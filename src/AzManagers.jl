@@ -189,7 +189,7 @@ function scaleset_monitor()
     end
 end
 
-scalesets(manager::AzManager) = isdefined(manager, :scaleset) ? manager.scalesets : ScaleSet[]
+scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : ScaleSet[]
 
 function delete_empty_scalesets()
     manager = azmanager()
