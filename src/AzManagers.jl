@@ -129,7 +129,7 @@ mutable struct AzManager <: ClusterManager
     verbose::Int
     scalesets::Vector{ScaleSet}
     pending_up::Channel{TCPSocket}
-    pending_down::Vector{Task}
+    pending_down::Dict{ScaleSet,Vector{String}}
     port::UInt16
     server::Sockets.TCPServer
     task_add::Task
@@ -139,14 +139,6 @@ mutable struct AzManager <: ClusterManager
 end
 
 const _manager = AzManager()
-
-function wait_for_pending_down()
-    if isdefined(_manager, :pending_down)
-        wait.(_manager.pending_down)
-        empty!(_manager.pending_down)
-    end
-    nothing
-end
 
 function azmanager!(session, nretry, verbose)
     _manager.session = session
@@ -159,7 +151,7 @@ function azmanager!(session, nretry, verbose)
 
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(32)
-    _manager.pending_down = Task[]
+    _manager.pending_down = Dict{ScaleSet,Vector{Int}}()
     _manager.scalesets = Vector{ScaleSet}[]
     _manager.task_add = @async add_pending_connections()
     _manager.task_process = @async process_pending_connections()
@@ -172,16 +164,19 @@ end
 azmanager() = _manager
 
 function __init__()
-    atexit(AzManagers.delete_scalesets)
-    atexit(AzManagers.wait_for_pending_down)
+    if myid() == 1
+        atexit(AzManagers.delete_scalesets)
+        atexit(AzManagers.delete_pending_down_vms)
+    end
 end
 
 function scaleset_monitor()
     manager = azmanager()
     try
         while true
-            sleep(60)
+            sleep(10)
             delete_empty_scalesets()
+            delete_pending_down_vms()
         end
     catch e
         @error "scaleset monitor error:"
@@ -190,6 +185,7 @@ function scaleset_monitor()
 end
 
 scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : ScaleSet[]
+pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Vector{String}}()
 
 function delete_empty_scalesets()
     manager = azmanager()
@@ -203,10 +199,28 @@ function delete_empty_scalesets()
     deleteat!(scalesets(manager), idxs)
 end
 
+function delete_pending_down_vms()
+    manager = azmanager()
+    _pending_down = pending_down(manager)
+    @sync while !isempty(_pending_down)
+        scaleset,ids = pop!(_pending_down)
+        @async begin
+            try
+                delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
+            catch e
+                @error "error deleting scaleset vms, manual clean-up may be required."
+                showerror(stdout, e)
+                stacktrace(catch_backtrace())
+            end
+        end
+    end
+end
+
 function delete_scalesets()
     manager = azmanager()
-    for scaleset in scalesets(manager)
-        rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+    _scalesets = scalesets(manager)
+    @sync for scaleset in _scalesets
+        @async rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
     end
 end
 
@@ -368,64 +382,19 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     notify(c)
 end
 
-function _kill(manager::AzManager, id::Int, config::WorkerConfig)
+function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     remote_do(exit, id)
 
     u = config.userdata
 
     u == nothing && (return nothing) # rely on additional workers (on an instance) not having their config.userdata populated
 
-    body = String(json(Dict("instanceIds" => [u["instanceid"]])))
-    sleep(1+10*rand()) # Azure seems to have fairly strict rate limits for it API.  This tries to reduce the number of retries that are required.
-
-    # check if the vm was removed without the help of AzManagers (e.g. a SPOT instance that we did not catch in time)
-    if !is_vm_in_scaleset(manager, config)
-        @debug "rmprocs: vm is not in scale-set"
-        if haskey(Distributed.map_pid_wrkr, id)
-            w = Distributed.map_pid_wrkr[id]
-            Distributed.set_worker_state(w, Distributed.W_TERMINATED)
-        end
-        return nothing
+    scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
+    if haskey(manager.pending_down, scaleset)
+        push!(manager.pending_down[scaleset], u["instanceid"])
+    else
+        manager.pending_down[scaleset] = [u["instanceid"]]
     end
-
-    @debug "posting delete request for id=$id"
-    @retry manager.nretry azrequest(
-        "POST",
-        manager.verbose,
-        "https://management.azure.com/subscriptions/$(u["subscriptionid"])/resourceGroups/$(u["resourcegroup"])/providers/Microsoft.Compute/virtualMachineScaleSets/$(u["scalesetname"])/delete?api-version=2018-06-01",
-        Dict("Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"),
-        body)
-
-    while true
-        local _r
-        try
-            _r = @retry manager.nretry azrequest(
-                "GET",
-                manager.verbose,
-                "https://management.azure.com/subscriptions/$(u["subscriptionid"])/resourceGroups/$(u["resourcegroup"])/providers/Microsoft.Compute/virtualMachineScaleSets/$(u["scalesetname"])/virtualmachines/$(u["instanceid"])?api-version=2018-06-01",
-                Dict("Authorization"=>"Bearer $(token(manager.session))"))
-        catch e
-            if isa(e, HTTP.ExceptionRequest.StatusError) && e.status == 404
-                break
-            end
-            @warn "failed to verify removal of $(config.host) from scale-set, manual clean-up may be needed (error=$e)"
-            break
-        end
-        r = JSON.parse(String(_r.body))
-        @debug "instance status for id=$id: $(r["properties"]["provisioningState"])"
-
-        if r["properties"]["provisioningState"] != "Succeeded"
-            break
-        end
-        sleep(60+10*rand()) # attempt to avoid Azure's hourly rate limit (error 429) -- is there a better way to do this?
-    end
-
-    nothing
-end
-
-function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
-    t = @async _kill(manager, id, config)
-    push!(manager.pending_down, t)
     nothing
 end
 
@@ -1274,6 +1243,16 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         String(json(_template)))
 
     n
+end
+
+function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, ids, nretry, verbose)
+    body = Dict("instanceIds"=>ids)
+    @retry nretry azrequest(
+        "POST",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/delete?api-version=2020-06-01",
+        ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
+        json(body))
 end
 
 #
