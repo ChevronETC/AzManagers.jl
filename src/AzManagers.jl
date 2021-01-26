@@ -1101,7 +1101,7 @@ function getnextlinks!(manager::AzManager, value, nextlink, nretry, verbose)
             "GET",
             verbose,
             nextlink,
-            Dict("Authorization"=>"Bearer $(token(managersession))"))
+            Dict("Authorization"=>"Bearer $(token(manager.session))"))
         r = JSON.parse(String(_r.body))
         value = [value;get(r,"value",[])]
         nextlink = get(r, "nextLink", "")
