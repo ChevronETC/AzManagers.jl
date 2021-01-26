@@ -227,8 +227,16 @@ end
 function add_pending_connections()
     manager = azmanager()
     while true
-        let s = accept(manager.server)
-            push!(manager.pending_up, s)
+        try
+            let s = accept(manager.server)
+                push!(manager.pending_up, s)
+            end
+        catch
+            @error "AzManagers, error adding pending connection"
+            for (exc, bt) in Base.catch_stack()
+                showerror(stderr, exc, bt)
+                println()
+            end
         end
     end
 end
@@ -236,9 +244,17 @@ end
 function process_pending_connections()
     manager = azmanager()
     while true
-        socket = take!(manager.pending_up)
-        @debug "adding new vm to cluster"
-        addprocs(manager; socket)
+        try
+            socket = take!(manager.pending_up)
+            @debug "adding new vm to cluster"
+            addprocs(manager; socket)
+        catch
+            @error "AzManagers, error processing pending connection"
+            for (exc, bt) in Base.catch_stack()
+                showerror(stderr, exc, bt)
+                println()
+            end
+        end
     end
 end
 
