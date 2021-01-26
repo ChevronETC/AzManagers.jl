@@ -381,10 +381,48 @@ function Distributed.addprocs(template::AbstractString, n::Int; kwargs...)
 end
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)
-    cookie = String(read(params[:socket], Distributed.HDR_COOKIE_LEN))
+    socket = params[:socket]
+
+    local _cookie
+    try
+        _cookie = read(params[:socket], Distributed.HDR_COOKIE_LEN)
+    catch e
+        @error "unable to read cookie from socket"
+        for (exc, bt) in Base.catch_stack()
+            showerror(stderr, exc, bt)
+            println()
+        end
+        return
+    end
+
+    cookie = String(_cookie)
     cookie == Distributed.cluster_cookie() || error("Invalid cookie sent by remote worker.")
 
-    vm = JSON.parse(String(base64decode(readline(params[:socket]))))
+    local _connection_string
+    try
+        _connection_string = readline(socket)
+    catch e
+        @error "unable to read connection string from socket"
+        for (exc, bt) in Base.catch_stack()
+            showerror(stderr, exc, bt)
+            println()
+        end
+        return
+    end
+
+    connection_string = String(base64decode(_connection_string))
+
+    local vm
+    try
+        vm = JSON.parse(connection_string)
+    catch e
+        @error "unable to parse connection string, string=$connection_string, cookie=$cookie"
+        for (exc, bt) in Base.catch_stack()
+            showerror(stderr, exc, bt)
+            println()
+        end
+        return
+    end
 
     wconfig = WorkerConfig()
     wconfig.io = params[:socket]
