@@ -241,15 +241,23 @@ function add_pending_connections()
     end
 end
 
+let ADDPROCS_ID::Int = 1
+    global _addprocs_nextid
+    _addprocs_nextid() = (id = ADDPROCS_ID; ADDPROCS_ID += 1; id)
+end
+
 function _addprocs(manager; socket)
     itry = 0
+    id = _addprocs_nextid()
     while true
         itry += 1
         try
+            @info "$(now()), id=$id, itry=$itry -- calling addprocs..."
             addprocs(manager; socket)
+            @info "...$(now()), id=$id, itry=$itry -- finished calling addprocs."
             break
         catch
-            if itry >= 1
+            if itry >= 10
                 @error "AzManagers, error processing pending connection"
                 for (exc, bt) in Base.catch_stack()
                     showerror(stderr, exc, bt)
@@ -1019,6 +1027,7 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         cmd *= """
 
         sudo su - $user <<EOF
+        export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
@@ -1029,6 +1038,7 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         cmd *= """
 
         sudo su - $user <<EOF
+        export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
