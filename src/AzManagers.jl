@@ -263,7 +263,7 @@ function process_pending_connections()
         try
             socket = take!(manager.pending_up)
             let s = socket
-                push!(manager.pending_tasks, @async _addprocs(manager; s))
+                @async _addprocs(manager; s)
             end
         catch
             @error "AzManagers, error processing pending connection"
