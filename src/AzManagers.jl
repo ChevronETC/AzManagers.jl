@@ -175,7 +175,6 @@ function scaleset_monitor()
     try
         while true
             sleep(10)
-            check_pending_connect()
             delete_empty_scalesets()
             delete_pending_down_vms()
         end
@@ -242,12 +241,12 @@ function add_pending_connections()
     end
 end
 
-function _addprocs(manager; s)
+function _addprocs(manager; socket)
     itry = 0
     while true
         itry += 1
         try
-            addprocs(manager; s)
+            addprocs(manager; socket)
             break
         catch
             if itry >= 1
@@ -267,9 +266,9 @@ function process_pending_connections()
     manager = azmanager()
     while true
         try
-            socket = take!(manager.pending_up)
-            let s = socket
-                @async _addprocs(manager; s)
+            _socket = take!(manager.pending_up)
+            let socket = _socket
+                @async _addprocs(manager; socket)
             end
         catch
             @error "AzManagers, error processing pending connection"
