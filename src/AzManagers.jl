@@ -247,43 +247,39 @@ let ADDPROCS_ID::Int = 1
 end
 
 function _addprocs(manager; socket)
-    itry = 0
     id = _addprocs_nextid()
-    while true
-        itry += 1
-        try
-            @info "id=$id, itry=$itry -- calling addprocs..."
-            addprocs(manager; socket)
-            @info "...id=$id, itry=$itry -- finished calling addprocs."
-            break
-        catch
-            if itry >= 10
-                @error "AzManagers, error processing pending connection"
-                for (exc, bt) in Base.catch_stack()
-                    showerror(stderr, exc, bt)
-                    println()
-                end
-                break
-            end
-            sleep(10)
+    try
+        @info "id=$id -- calling addprocs..."
+        Distributed.addprocs_locked(manager; socket)
+        @info "...id=$id -- finished calling addprocs."
+    catch
+        @error "AzManagers, error processing pending connection"
+        for (exc, bt) in Base.catch_stack()
+            showerror(stderr, exc, bt)
+            println()
         end
     end
 end
 
 function process_pending_connections()
+    Distributed.init_multi()
+    Distributed.cluster_mgmt_from_master_check()
+
     manager = azmanager()
     while true
+        local _socket
         try
             _socket = take!(manager.pending_up)
-            let socket = _socket
-                @async _addprocs(manager; socket)
-            end
         catch
-            @error "AzManagers, error processing pending connection"
+            @error "AzManagers, error retrieving pending connection"
             for (exc, bt) in Base.catch_stack()
                 showerror(stderr, exc, bt)
                 println()
             end
+        end
+
+        let socket = _socket
+            @async _addprocs(manager; socket)
         end
     end
 end
