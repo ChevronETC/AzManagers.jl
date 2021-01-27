@@ -191,8 +191,13 @@ function delete_empty_scalesets()
     manager = azmanager()
     idxs = Int[]
     for (j,scaleset) in enumerate(scalesets(manager))
-        if scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose) == 0
-            rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+        scalesets = list_scalesets(manager, scaleset.subscriptionid, scaleset.resourcegroup, manager.nretry, manager.verbose)
+        if scaleset.scalesetname ∈ scalesets
+            if scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose) == 0
+                rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+                push!(idxs, j)
+            end
+        else
             push!(idxs, j)
         end
     end
