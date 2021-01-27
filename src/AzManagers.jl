@@ -252,9 +252,9 @@ function _addprocs(manager; socket)
     while true
         itry += 1
         try
-            @info "$(now()), id=$id, itry=$itry -- calling addprocs..."
+            @info "id=$id, itry=$itry -- calling addprocs..."
             addprocs(manager; socket)
-            @info "...$(now()), id=$id, itry=$itry -- finished calling addprocs."
+            @info "...id=$id, itry=$itry -- finished calling addprocs."
             break
         catch
             if itry >= 10
