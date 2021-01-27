@@ -241,13 +241,30 @@ function add_pending_connections()
     end
 end
 
+function _addprocs(manager; s)
+    itry = 0
+    while true
+        itry += 1
+        try
+            addprocs(manager; s)
+            break
+        catch e
+            if itry > 10
+                throw(e)
+            end
+            sleep(10)
+        end
+    end
+end
+
 function process_pending_connections()
     manager = azmanager()
     while true
         try
             socket = take!(manager.pending_up)
-            @debug "adding new vm to cluster"
-            addprocs(manager; socket)
+            let s = socket
+                push!(manager.pending_tasks, @async _addprocs(manager; s))
+            end
         catch
             @error "AzManagers, error processing pending connection"
             for (exc, bt) in Base.catch_stack()
@@ -384,6 +401,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     cookie = String(read(params[:socket], Distributed.HDR_COOKIE_LEN))
     cookie == Distributed.cluster_cookie() || error("Invalid cookie sent by remote worker.")
 
+    # this line sometimes generates an error (unexpected end of input)
     vm = JSON.parse(String(base64decode(readline(params[:socket]))))
 
     wconfig = WorkerConfig()
