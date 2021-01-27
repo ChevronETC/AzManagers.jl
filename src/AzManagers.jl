@@ -132,6 +132,7 @@ mutable struct AzManager <: ClusterManager
     pending_down::Dict{ScaleSet,Vector{String}}
     port::UInt16
     server::Sockets.TCPServer
+    worker_socket::TCPSocket
     task_add::Task
     task_process::Task
 
@@ -473,13 +474,15 @@ function rmgroup(manager::AzManager, subscriptionid, resourcegroup, groupname, n
 end
 
 function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfig, op::Symbol)
+    if op == :register
+        remote_do(AzManagers.logging, id)
+    end
     if op == :interrupt
         # TODO
     end
     if op == :finalize
         # TODO
     end
-
     if op == :deregister || op == :interrupt
         # TODO
     end
@@ -505,7 +508,7 @@ end
 preempted(id) = remotecall_fetch(preempted, id)
 
 function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
-    nretry = 100
+    nretry = 10
     connection_attempt = 0
     local c
 
@@ -528,9 +531,12 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
             sleep(10+10*rand())
         end
     end
-    write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
 
-    _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2020-06-01", Dict("Metadata"=>"true"); retry=false, redirect=false)
+    nbytes_written = write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
+    nbytes_written == Distributed.HDR_COOKIE_LEN || error("unable to write bytes")
+    flush(c)
+
+    _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2020-06-01", Dict("Metadata"=>"true"); redirect=false)
     r = JSON.parse(String(_r.body))
     vm = Dict(
         "bind_addr" => string(getipaddr(IPv4)),
@@ -544,19 +550,107 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
             "mpi" => mpi_size > 0,
             "mpi_size" => mpi_size))
     _vm = base64encode(json(vm))
-    write(c, _vm*"\n")
-    redirect_stdout(c)
-    redirect_stderr(c)
 
-    # work-a-round https://github.com/JuliaLang/julia/issues/38482
-    global_logger(ConsoleLogger(c, Logging.Info))
+    nbytes_written = write(c, _vm*"\n")
+    nbytes_written == length(_vm)+1 || error("wrote wrong number of bytes")
+    flush(c)
 
     c
 end
 
+function logging()
+    manager = azmanager()
+    out = manager.worker_socket
+
+    redirect_stdout(out)
+    redirect_stderr(out)
+
+    # work-a-round https://github.com/JuliaLang/julia/issues/38482
+    global_logger(ConsoleLogger(out, Logging.Info))
+    nothing
+end
+
+function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
+    Distributed.init_multi()
+
+    close_stdin && close(stdin) # workers will not use it
+    stderr_to_stdout && redirect_stderr(stdout)
+
+    Distributed.init_worker(cookie)
+    interface = IPv4(Distributed.LPROC.bind_addr)
+    if Distributed.LPROC.bind_port == 0
+        port_hint = 9000 + (getpid() % 1000)
+        (port, sock) = listenany(interface, UInt16(port_hint))
+        Distributed.LPROC.bind_port = port
+    else
+        sock = listen(interface, Distributed.LPROC.bind_port)
+    end
+
+    tsk_messages = nothing
+    @async while isopen(sock)
+        client = accept(sock)
+        tsk_messages = Distributed.process_messages(client, client, true)
+    end
+    print(out, "julia_worker:")  # print header
+    print(out, "$(string(Distributed.LPROC.bind_port))#") # print port
+    print(out, Distributed.LPROC.bind_addr)
+    print(out, '\n')
+    flush(out)
+
+    Sockets.nagle(sock, false)
+    Sockets.quickack(sock, true)
+
+    if ccall(:jl_running_on_valgrind,Cint,()) != 0
+        println(out, "PID = $(getpid())")
+    end
+
+    manager = azmanager()
+    manager.worker_socket = out
+
+    while true
+        if tsk_messages != nothing
+            try
+                wait(tsk_messages)
+
+                #=
+                We throw an error regardless of whether the tsk_messages task completes
+                or throws an error.  We throw when it complete due to the complex error
+                handling in the Distributed.process_messages method.  We can be a bit
+                messy about process clean-up here since when we remove a worker from the
+                cluster, we delete the corresponding Azure VM.
+                =#
+                error("")
+            catch e
+                close(sock)
+                throw(e)
+            end
+        end
+        sleep(10)
+    end
+    close(sock)
+end
+
 function azure_worker(cookie, master_address, master_port, ppi)
-    c = azure_worker_init(cookie, master_address, master_port, ppi, 0)
-    start_worker(c, cookie)
+    itry = 0
+
+    #=
+    The following `azure_worker_start` call, on occasion, fails within the
+    `Distributed.process_messages` method.  The following retry logic is a
+    work-a-round until the root cause can be investigated.
+    =#
+    while true
+        itry += 1
+        try
+            c = azure_worker_init(cookie, master_address, master_port, ppi, 0)
+            azure_worker_start(c, cookie)
+        catch e
+            @error "error starting worker, attempt $itry, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
+            if itry > 10
+                throw(e)
+            end
+        end
+        sleep(60)
+    end
 end
 
 #
