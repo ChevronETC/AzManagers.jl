@@ -175,6 +175,7 @@ function scaleset_monitor()
     try
         while true
             sleep(10)
+            check_pending_connect()
             delete_empty_scalesets()
             delete_pending_down_vms()
         end
@@ -248,9 +249,14 @@ function _addprocs(manager; s)
         try
             addprocs(manager; s)
             break
-        catch e
-            if itry > 10
-                throw(e)
+        catch
+            if itry >= 1
+                @error "AzManagers, error processing pending connection"
+                for (exc, bt) in Base.catch_stack()
+                    showerror(stderr, exc, bt)
+                    println()
+                end
+                break
             end
             sleep(10)
         end
