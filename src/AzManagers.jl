@@ -694,11 +694,18 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
 end
 
 function azure_worker(cookie, master_address, master_port, ppi)
-    c = azure_worker_init(cookie, master_address, master_port, ppi, 0)
+    local c
+    try
+        c = azure_worker_init(cookie, master_address, master_port, ppi, 0)
+    catch e
+        @error "error initializing worker, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
+        throw(e)
+    end
+
     try
         start_worker(c, cookie)
     catch e
-        @info "error starting worker, cookie=$cookie"
+        @error "error starting worker, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
         throw(e)
     end
 end
