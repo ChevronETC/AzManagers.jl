@@ -180,7 +180,10 @@ function scaleset_monitor()
         end
     catch e
         @error "scaleset monitor error:"
-        showerror(stderr, e)
+        for (exc, bt) in Base.catch_stack()
+            showerror(stderr, exc, bt)
+            println()
+        end
     end
 end
 
@@ -232,26 +235,26 @@ function add_pending_connections()
                 push!(manager.pending_up, s)
             end
         catch
-            @error "AzManagers, error adding pending connection"
-            for (exc, bt) in Base.catch_stack()
-                showerror(stderr, exc, bt)
-                println()
-            end
+            # @error "AzManagers, error adding pending connection"
+            # for (exc, bt) in Base.catch_stack()
+            #     showerror(stderr, exc, bt)
+            #     println()
+            # end
         end
     end
 end
 
-let ADDPROCS_ID::Int = 1
-    global _addprocs_nextid
-    _addprocs_nextid() = (id = ADDPROCS_ID; ADDPROCS_ID += 1; id)
-end
+# let ADDPROCS_ID::Int = 1
+#     global _addprocs_nextid
+#     _addprocs_nextid() = (id = ADDPROCS_ID; ADDPROCS_ID += 1; id)
+# end
 
 function _addprocs(manager; socket)
-    id = _addprocs_nextid()
+    # id = _addprocs_nextid()
     try
-        @info "id=$id -- calling addprocs..."
+        # @info "id=$id -- calling addprocs..."
         Distributed.addprocs_locked(manager; socket)
-        @info "...id=$id -- finished calling addprocs."
+        # @info "...id=$id -- finished calling addprocs."
     catch
         @error "AzManagers, error processing pending connection"
         for (exc, bt) in Base.catch_stack()
@@ -260,6 +263,71 @@ function _addprocs(manager; socket)
         end
     end
 end
+
+# function Distributed.addprocs_locked(manager::AzManager; kwargs...)
+#     @info "my addprocs_locked"
+#     params = merge(Distributed.default_addprocs_params(), Dict{Symbol,Any}(kwargs))
+#     Distributed.topology(Symbol(params[:topology]))
+
+#     if Distributed.PGRP.topology !== :all_to_all
+#         params[:lazy] = false
+#     end
+
+#     if Distributed.PGRP.lazy === nothing || nprocs() == 1
+#         Distributed.PGRP.lazy = params[:lazy]
+#     elseif Distributed.isclusterlazy() != params[:lazy]
+#         throw(ArgumentError(string("Active workers with lazy=", Distributed.isclusterlazy(),
+#                                     ". Cannot set lazy=", params[:lazy])))
+#     end
+
+#     # References to launched workers, filled when each worker is fully initialized and
+#     # has connected to all nodes.
+#     launched_q = Int[]   # Asynchronously filled by the launch method
+
+#     # The `launch` method should add an object of type WorkerConfig for every
+#     # worker launched. It provides information required on how to connect
+#     # to it.
+#     launched = Distributed.WorkerConfig[]
+#     launch_ntfy = Condition()
+
+#     # call manager's `launch` is a separate task. This allows the master
+#     # process initiate the connection setup process as and when workers come
+#     # online
+#     @info "calling launch..."
+#     Distributed.launch(manager, params, launched, launch_ntfy)
+#     @info "...done calling launch"
+
+#     if !isempty(launched)
+#         wconfig = launched[1]
+
+#         @info "setting up launched worker..."
+#         # this calls create_worker...process_messages which throws an error due to a bad cookie
+#         itry = 0
+#         while true
+#             itry += 1
+#             try
+#                 Distributed.setup_launched_worker(manager, wconfig, launched_q)
+#                 break
+#             catch e
+#                 if itry > 3
+#                     throw(e)
+#                 end
+#                 sleep(1)
+#             end
+#         end
+#         @info "...done setting up launched worker, launched_q=$launched_q"
+
+#         # Since all worker-to-worker setups may not have completed by the time this
+#         # function returns to the caller, send the complete list to all workers.
+#         # Useful for nprocs(), nworkers(), etc to return valid values on the workers.
+#         all_w = workers()
+#         for pid in all_w
+#             remote_do(Distributed.set_valid_processes, pid, launched_q)
+#         end
+#     end
+
+#     nothing
+# end
 
 function process_pending_connections()
     Distributed.init_multi()
@@ -271,11 +339,11 @@ function process_pending_connections()
         try
             _socket = take!(manager.pending_up)
         catch
-            @error "AzManagers, error retrieving pending connection"
-            for (exc, bt) in Base.catch_stack()
-                showerror(stderr, exc, bt)
-                println()
-            end
+            # @error "AzManagers, error retrieving pending connection"
+            # for (exc, bt) in Base.catch_stack()
+            #     showerror(stderr, exc, bt)
+            #     println()
+            # end
         end
 
         let socket = _socket
@@ -407,11 +475,48 @@ function Distributed.addprocs(template::AbstractString, n::Int; kwargs...)
 end
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)
-    cookie = String(read(params[:socket], Distributed.HDR_COOKIE_LEN))
+    socket = params[:socket]
+
+    local _cookie
+    try
+        _cookie = read(params[:socket], Distributed.HDR_COOKIE_LEN)
+    catch e
+        @error "unable to read cookie from socket"
+        for (exc, bt) in Base.catch_stack()
+            showerror(stderr, exc, bt)
+            println()
+        end
+        return
+    end
+
+    cookie = String(_cookie)
     cookie == Distributed.cluster_cookie() || error("Invalid cookie sent by remote worker.")
 
-    # this line sometimes generates an error (unexpected end of input)
-    vm = JSON.parse(String(base64decode(readline(params[:socket]))))
+    local _connection_string
+    try
+        _connection_string = readline(socket)
+    catch e
+        @error "unable to read connection string from socket"
+        for (exc, bt) in Base.catch_stack()
+            showerror(stderr, exc, bt)
+            println()
+        end
+        return
+    end
+
+    connection_string = String(base64decode(_connection_string))
+
+    local vm
+    try
+        vm = JSON.parse(connection_string)
+    catch e
+        @error "unable to parse connection string, string=$connection_string, cookie=$cookie"
+        for (exc, bt) in Base.catch_stack()
+            showerror(stderr, exc, bt)
+            println()
+        end
+        return
+    end
 
     wconfig = WorkerConfig()
     wconfig.io = params[:socket]
@@ -555,9 +660,12 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
             sleep(10+10*rand())
         end
     end
-    write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
 
-    _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2020-06-01", Dict("Metadata"=>"true"); retry=false, redirect=false)
+    nbytes_written = write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
+    nbytes_written == Distributed.HDR_COOKIE_LEN || error("unable to write bytes")
+    flush(c)
+
+    _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2020-06-01", Dict("Metadata"=>"true"); redirect=false)
     r = JSON.parse(String(_r.body))
     vm = Dict(
         "bind_addr" => string(getipaddr(IPv4)),
@@ -571,7 +679,11 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
             "mpi" => mpi_size > 0,
             "mpi_size" => mpi_size))
     _vm = base64encode(json(vm))
-    write(c, _vm*"\n")
+
+    nbytes_written = write(c, _vm*"\n")
+    nbytes_written == length(_vm)+1 || error("wrote wrong number of bytes")
+    flush(c)
+    
     redirect_stdout(c)
     redirect_stderr(c)
 
@@ -583,7 +695,12 @@ end
 
 function azure_worker(cookie, master_address, master_port, ppi)
     c = azure_worker_init(cookie, master_address, master_port, ppi, 0)
-    start_worker(c, cookie)
+    try
+        start_worker(c, cookie)
+    catch e
+        @info "error starting worker, cookie=$cookie"
+        throw(e)
+    end
 end
 
 #
@@ -1023,11 +1140,16 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         cmd *= """
 
         sudo su - $user <<EOF
+        echo "starting worker (1)"
         export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
+        echo "starting worker (2)"
         export JULIA_NUM_THREADS=$julia_num_threads
+        echo "starting worker (3)"
         export OMP_NUM_THREADS=$omp_num_threads
+        echo "starting worker (4)"
         $envstring
-        julia -e '$(juliaenvstring)using AzManagers; AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
+        echo "starting worker (5)"
+        julia -e 'write(stdout, "starting worker (6)\n"); $(juliaenvstring)using AzManagers; write(stdout, "starting worker (7)\n"); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     else
