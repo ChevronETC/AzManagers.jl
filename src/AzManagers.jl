@@ -745,9 +745,11 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     else
         sock = listen(interface, Distributed.LPROC.bind_port)
     end
-    tsk = @async while isopen(sock)
+
+    tsk_messages = nothing
+    @async while isopen(sock)
         client = accept(sock)
-        Distributed.process_messages(client, client, true)
+        tsk_messages = Distributed.process_messages(client, client, true)
     end
     print(out, "julia_worker:")  # print header
     print(out, "$(string(Distributed.LPROC.bind_port))#") # print port
@@ -762,13 +764,24 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         println(out, "PID = $(getpid())")
     end
 
-    # redirect_stdout(out)
-    # redirect_stderr(out)
+    redirect_stdout(out)
+    redirect_stderr(out)
 
-    # # work-a-round https://github.com/JuliaLang/julia/issues/38482
-    # global_logger(ConsoleLogger(out, Logging.Info))
+    # work-a-round https://github.com/JuliaLang/julia/issues/38482
+    global_logger(ConsoleLogger(out, Logging.Info))
 
-    wait(tsk)
+    while true
+        if tsk_messages != nothing
+            try
+                wait(tsk_messages)
+                error("")
+            catch e
+                close(sock)
+                throw(e)
+            end
+        end
+        sleep(10)
+    end
     close(sock)
 end
 
