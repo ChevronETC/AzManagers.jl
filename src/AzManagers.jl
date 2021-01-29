@@ -774,7 +774,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         if tsk_messages != nothing
             try
                 wait(tsk_messages)
-                error("")
+                error("") # what happens when we want the worker to exit... may not matter since we delete the vm.
             catch e
                 close(sock)
                 throw(e)
@@ -786,19 +786,19 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 end
 
 function azure_worker(cookie, master_address, master_port, ppi)
-    local c
-    try
-        c = azure_worker_init(cookie, master_address, master_port, ppi, 0)
-    catch e
-        @error "error initializing worker, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
-        throw(e)
-    end
-
-    try
-        azure_worker_start(c, cookie)
-    catch e
-        @error "error starting worker, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
-        throw(e)
+    itry = 0
+    while true
+        itry += 1
+        try
+            c = azure_worker_init(cookie, master_address, master_port, ppi, 0)
+            azure_worker_start(c, cookie)
+        catch e
+            @error "error starting worker, attempt $itry, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
+            if itry > 10
+                throw(e)
+            end
+        end
+        sleep(60)
     end
 end
 
