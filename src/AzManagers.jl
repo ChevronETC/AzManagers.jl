@@ -747,7 +747,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     end
     tsk = @async while isopen(sock)
         client = accept(sock)
-        process_messages(client, client, true)
+        Distributed.process_messages(client, client, true)
     end
     print(out, "julia_worker:")  # print header
     print(out, "$(string(Distributed.LPROC.bind_port))#") # print port
