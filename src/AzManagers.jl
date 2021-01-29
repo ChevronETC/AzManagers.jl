@@ -130,6 +130,7 @@ mutable struct AzManager <: ClusterManager
     scalesets::Vector{ScaleSet}
     pending_up::Channel{TCPSocket}
     pending_down::Dict{ScaleSet,Vector{String}}
+    vm_failure_count::Int
     port::UInt16
     server::Sockets.TCPServer
     task_add::Task
@@ -152,6 +153,7 @@ function azmanager!(session, nretry, verbose)
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(32)
     _manager.pending_down = Dict{ScaleSet,Vector{Int}}()
+    _manager.vm_failure_count = 0
     _manager.scalesets = Vector{ScaleSet}[]
     _manager.task_add = @async add_pending_connections()
     _manager.task_process = @async process_pending_connections()
@@ -177,6 +179,7 @@ function scaleset_monitor()
             sleep(10)
             delete_empty_scalesets()
             delete_pending_down_vms()
+            heal()
         end
     catch e
         @error "scaleset monitor error:"
@@ -189,13 +192,19 @@ end
 
 scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : ScaleSet[]
 pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Vector{String}}()
+vm_failure_count(manager::AzManager) = isdefined(manager, :vm_failure_count) ? manager.vm_failure_count : 0
 
 function delete_empty_scalesets()
     manager = azmanager()
     idxs = Int[]
     for (j,scaleset) in enumerate(scalesets(manager))
-        if scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose) == 0
-            rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+        scalesets = list_scalesets(manager, scaleset.subscriptionid, scaleset.resourcegroup, manager.nretry, manager.verbose)
+        if scaleset.scalesetname ∈ scalesets
+            if scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose) == 0
+                rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+                push!(idxs, j)
+            end
+        else
             push!(idxs, j)
         end
     end
@@ -219,6 +228,38 @@ function delete_pending_down_vms()
     end
 end
 
+function heal()
+    manager = azmanager()
+    _vm_failure_count = vm_failure_count(manager)
+    if _vm_failure_count > 0
+        @info "there are vm failures, count=$_vm_failure_count"
+        active_vms = filter!(!isempty, [isa(worker, Distributed.Worker) ? worker.config.userdata : Dict() for worker in Distributed.PGRP.workers])
+        orphan_vms = Dict{ScaleSet,Vector{Dict}}()
+
+        norphans = 0
+        for scaleset in scalesets(manager)
+            vms = scaleset_listvms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+            _active_vms = filter!(vm->(vm["subscriptionid"]==scaleset.subscriptionid && vm["resourcegroup"]==scaleset.resourcegroup && vm["scalesetname"]==scaleset.scalesetname), active_vms)
+            orphan_vms[scaleset] = filter!(vm->vm["name"] ∉ [_active_vm["name"] for _active_vm in _active_vms], vms)
+            norphans += length(orphan_vms[scaleset])
+        end
+
+        @info "number of orphan vms=$norphans"
+        if norphans <= _vm_failure_count
+            @info "number of orphans is less than or equal to the number of failures, recovering..."
+            for scaleset in scalesets(manager)
+                ids = [orphan_vm["instanceid"] for orphan_vm in orphan_vms[scaleset]]
+                delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
+                add_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, length(ids), manager.nretry, manager.verbose)
+                manager.vm_failure_count -= length(ids)
+                if manager.vm_failure_count < 0
+                    @error "something went wrong"
+                end
+            end
+        end
+    end
+end
+
 function delete_scalesets()
     manager = azmanager()
     _scalesets = scalesets(manager)
@@ -235,11 +276,12 @@ function add_pending_connections()
                 push!(manager.pending_up, s)
             end
         catch
-            # @error "AzManagers, error adding pending connection"
-            # for (exc, bt) in Base.catch_stack()
-            #     showerror(stderr, exc, bt)
-            #     println()
-            # end
+            manager.vm_failures += 1
+            @error "AzManagers, error adding pending connection"
+            for (exc, bt) in Base.catch_stack()
+                showerror(stderr, exc, bt)
+                println()
+            end
         end
     end
 end
@@ -256,6 +298,7 @@ function _addprocs(manager; socket)
         Distributed.addprocs_locked(manager; socket)
         # @info "...id=$id -- finished calling addprocs."
     catch
+        manager.vm_failures += 1
         @error "AzManagers, error processing pending connection"
         for (exc, bt) in Base.catch_stack()
             showerror(stderr, exc, bt)
@@ -683,14 +726,50 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
     nbytes_written = write(c, _vm*"\n")
     nbytes_written == length(_vm)+1 || error("wrote wrong number of bytes")
     flush(c)
-    
-    redirect_stdout(c)
-    redirect_stderr(c)
-
-    # work-a-round https://github.com/JuliaLang/julia/issues/38482
-    global_logger(ConsoleLogger(c, Logging.Info))
 
     c
+end
+
+function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
+    Distributed.init_multi()
+
+    close_stdin && close(stdin) # workers will not use it
+    stderr_to_stdout && redirect_stderr(stdout)
+
+    Distributed.init_worker(cookie)
+    interface = IPv4(Distributed.LPROC.bind_addr)
+    if Distributed.LPROC.bind_port == 0
+        port_hint = 9000 + (getpid() % 1000)
+        (port, sock) = listenany(interface, UInt16(port_hint))
+        Distributed.LPROC.bind_port = port
+    else
+        sock = listen(interface, Distributed.LPROC.bind_port)
+    end
+    tsk = @async while isopen(sock)
+        client = accept(sock)
+        process_messages(client, client, true)
+    end
+    print(out, "julia_worker:")  # print header
+    print(out, "$(string(Distributed.LPROC.bind_port))#") # print port
+    print(out, Distributed.LPROC.bind_addr)
+    print(out, '\n')
+    flush(out)
+
+    Sockets.nagle(sock, false)
+    Sockets.quickack(sock, true)
+
+    if ccall(:jl_running_on_valgrind,Cint,()) != 0
+        println(out, "PID = $(getpid())")
+    end
+
+    # redirect_stdout(out)
+    # redirect_stderr(out)
+
+    # # work-a-round https://github.com/JuliaLang/julia/issues/38482
+    # global_logger(ConsoleLogger(out, Logging.Info))
+
+    wait(tsk)
+    close(sock)
 end
 
 function azure_worker(cookie, master_address, master_port, ppi)
@@ -703,7 +782,7 @@ function azure_worker(cookie, master_address, master_port, ppi)
     end
 
     try
-        start_worker(c, cookie)
+        azure_worker_start(c, cookie)
     catch e
         @error "error starting worker, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
         throw(e)
@@ -1375,7 +1454,8 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         error("cloud init custom data is too large.")
     end
 
-    _template["properties"]["doNotRunExtensionsOnOverprovisionedVMs"] = true
+    _template["properties"]["overprovision"] = false
+    # _template["properties"]["doNotRunExtensionsOnOverprovisionedVMs"] = true
     _template["properties"]["virtualMachineProfile"]["osProfile"]["customData"] = _cmd
 
     if spot
@@ -1402,7 +1482,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         @retry nretry azrequest(
             "PUT",
             verbose,
-            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2019-12-01",
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2020-06-01",
             Dict("Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"),
             json(_template,1))
     end
@@ -1448,6 +1528,23 @@ function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetn
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/delete?api-version=2020-06-01",
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
+        json(body))
+end
+
+function add_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, δ, nretry, verbose)
+    r = @retry nretry azrequest(
+        "GET",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2020-06-01",
+        ["Authorization"=>"Bearer $(token(manager.session))"])
+    body = JSON.parse(String(r.body))
+    body["sku"]["capacity"] += δ
+
+    @retry nretry azrequest(
+        "PUT",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2020-06-01",
+        ["Authorization"=>"Bearer $(token(manager.session))", "Content-Type"=>"application/json"],
         json(body))
 end
 
