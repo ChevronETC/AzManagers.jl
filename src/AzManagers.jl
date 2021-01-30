@@ -297,7 +297,6 @@ function _addprocs(manager; socket)
     try
         # @info "id=$id -- calling addprocs..."
         id = Distributed.addprocs_locked(manager; socket)
-        remote_do(AzManagers.logging, id)
         # @info "...id=$id -- finished calling addprocs."
     catch
         manager.vm_failures += 1
@@ -650,13 +649,16 @@ function rmgroup(manager::AzManager, subscriptionid, resourcegroup, groupname, n
 end
 
 function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfig, op::Symbol)
+    if op == :register
+        @info "register, id=$id"
+        remote_do(AzManagers.logging, id)
+    end
     if op == :interrupt
         # TODO
     end
     if op == :finalize
         # TODO
     end
-
     if op == :deregister || op == :interrupt
         # TODO
     end
