@@ -734,12 +734,14 @@ end
 
 function logging()
     manager = azmanager()
+    out = manager.worker_socket
 
-    redirect_stdout(manager.worker_socket)
-    redirect_stderr(manager.worker_socket)
+    redirect_stdout(out)
+    redirect_stderr(out)
 
     # work-a-round https://github.com/JuliaLang/julia/issues/38482
     global_logger(ConsoleLogger(out, Logging.Info))
+    nothing
 end
 
 function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
