@@ -297,7 +297,7 @@ function _addprocs(manager; socket)
     try
         # @info "id=$id -- calling addprocs..."
         id = Distributed.addprocs_locked(manager; socket)
-        remote_do(logging, id)
+        remote_do(AzManagers.logging, id)
         # @info "...id=$id -- finished calling addprocs."
     catch
         manager.vm_failures += 1
@@ -776,6 +776,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         println(out, "PID = $(getpid())")
     end
 
+    manager = azmanager()
     manager.worker_socket = out
 
     # redirect_stdout(out)
