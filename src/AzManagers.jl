@@ -650,7 +650,6 @@ end
 
 function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfig, op::Symbol)
     if op == :register
-        @info "register, id=$id"
         remote_do(AzManagers.logging, id)
     end
     if op == :interrupt
