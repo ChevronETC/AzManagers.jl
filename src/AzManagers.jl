@@ -287,17 +287,9 @@ function add_pending_connections()
     end
 end
 
-# let ADDPROCS_ID::Int = 1
-#     global _addprocs_nextid
-#     _addprocs_nextid() = (id = ADDPROCS_ID; ADDPROCS_ID += 1; id)
-# end
-
 function _addprocs(manager; socket)
-    # id = _addprocs_nextid()
     try
-        # @info "id=$id -- calling addprocs..."
         id = Distributed.addprocs_locked(manager; socket)
-        # @info "...id=$id -- finished calling addprocs."
     catch
         manager.vm_failures += 1
         @error "AzManagers, error processing pending connection"
@@ -307,71 +299,6 @@ function _addprocs(manager; socket)
         end
     end
 end
-
-# function Distributed.addprocs_locked(manager::AzManager; kwargs...)
-#     @info "my addprocs_locked"
-#     params = merge(Distributed.default_addprocs_params(), Dict{Symbol,Any}(kwargs))
-#     Distributed.topology(Symbol(params[:topology]))
-
-#     if Distributed.PGRP.topology !== :all_to_all
-#         params[:lazy] = false
-#     end
-
-#     if Distributed.PGRP.lazy === nothing || nprocs() == 1
-#         Distributed.PGRP.lazy = params[:lazy]
-#     elseif Distributed.isclusterlazy() != params[:lazy]
-#         throw(ArgumentError(string("Active workers with lazy=", Distributed.isclusterlazy(),
-#                                     ". Cannot set lazy=", params[:lazy])))
-#     end
-
-#     # References to launched workers, filled when each worker is fully initialized and
-#     # has connected to all nodes.
-#     launched_q = Int[]   # Asynchronously filled by the launch method
-
-#     # The `launch` method should add an object of type WorkerConfig for every
-#     # worker launched. It provides information required on how to connect
-#     # to it.
-#     launched = Distributed.WorkerConfig[]
-#     launch_ntfy = Condition()
-
-#     # call manager's `launch` is a separate task. This allows the master
-#     # process initiate the connection setup process as and when workers come
-#     # online
-#     @info "calling launch..."
-#     Distributed.launch(manager, params, launched, launch_ntfy)
-#     @info "...done calling launch"
-
-#     if !isempty(launched)
-#         wconfig = launched[1]
-
-#         @info "setting up launched worker..."
-#         # this calls create_worker...process_messages which throws an error due to a bad cookie
-#         itry = 0
-#         while true
-#             itry += 1
-#             try
-#                 Distributed.setup_launched_worker(manager, wconfig, launched_q)
-#                 break
-#             catch e
-#                 if itry > 3
-#                     throw(e)
-#                 end
-#                 sleep(1)
-#             end
-#         end
-#         @info "...done setting up launched worker, launched_q=$launched_q"
-
-#         # Since all worker-to-worker setups may not have completed by the time this
-#         # function returns to the caller, send the complete list to all workers.
-#         # Useful for nprocs(), nworkers(), etc to return valid values on the workers.
-#         all_w = workers()
-#         for pid in all_w
-#             remote_do(Distributed.set_valid_processes, pid, launched_q)
-#         end
-#     end
-
-#     nothing
-# end
 
 function process_pending_connections()
     Distributed.init_multi()
@@ -383,11 +310,11 @@ function process_pending_connections()
         try
             _socket = take!(manager.pending_up)
         catch
-            # @error "AzManagers, error retrieving pending connection"
-            # for (exc, bt) in Base.catch_stack()
-            #     showerror(stderr, exc, bt)
-            #     println()
-            # end
+            @error "AzManagers, error retrieving pending connection"
+            for (exc, bt) in Base.catch_stack()
+                showerror(stderr, exc, bt)
+                println()
+            end
         end
 
         let socket = _socket
@@ -781,12 +708,6 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
     manager = azmanager()
     manager.worker_socket = out
-
-    # redirect_stdout(out)
-    # redirect_stderr(out)
-
-    # # work-a-round https://github.com/JuliaLang/julia/issues/38482
-    # global_logger(ConsoleLogger(out, Logging.Info))
 
     while true
         if tsk_messages != nothing
