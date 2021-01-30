@@ -133,6 +133,7 @@ mutable struct AzManager <: ClusterManager
     vm_failure_count::Int
     port::UInt16
     server::Sockets.TCPServer
+    worker_socket::TCPSocket
     task_add::Task
     task_process::Task
 
@@ -295,7 +296,8 @@ function _addprocs(manager; socket)
     # id = _addprocs_nextid()
     try
         # @info "id=$id -- calling addprocs..."
-        Distributed.addprocs_locked(manager; socket)
+        id = Distributed.addprocs_locked(manager; socket)
+        remote_do(logging, id)
         # @info "...id=$id -- finished calling addprocs."
     catch
         manager.vm_failures += 1
@@ -730,6 +732,16 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
     c
 end
 
+function logging()
+    manager = azmanager()
+
+    redirect_stdout(manager.worker_socket)
+    redirect_stderr(manager.worker_socket)
+
+    # work-a-round https://github.com/JuliaLang/julia/issues/38482
+    global_logger(ConsoleLogger(out, Logging.Info))
+end
+
 function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
     Distributed.init_multi()
 
@@ -764,17 +776,27 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         println(out, "PID = $(getpid())")
     end
 
-    redirect_stdout(out)
-    redirect_stderr(out)
+    manager.worker_socket = out
 
-    # work-a-round https://github.com/JuliaLang/julia/issues/38482
-    global_logger(ConsoleLogger(out, Logging.Info))
+    # redirect_stdout(out)
+    # redirect_stderr(out)
+
+    # # work-a-round https://github.com/JuliaLang/julia/issues/38482
+    # global_logger(ConsoleLogger(out, Logging.Info))
 
     while true
         if tsk_messages != nothing
             try
                 wait(tsk_messages)
-                error("") # what happens when we want the worker to exit... may not matter since we delete the vm.
+
+                #=
+                We throw an error regardless of whether the tsk_messages task completes
+                or throws an error.  We throw when it complete due to the complex error
+                handling in the Distributed.process_messages method.  We can be a bit
+                messy about process clean-up here since when we remove a worker from the
+                cluster, we delete the corresponding Azure VM.
+                =#
+                error("")
             catch e
                 close(sock)
                 throw(e)
@@ -787,6 +809,12 @@ end
 
 function azure_worker(cookie, master_address, master_port, ppi)
     itry = 0
+
+    #=
+    The following `azure_worker_start` call, on occasion, fails within the
+    `Distributed.process_messages` method.  The following retry logic is a
+    work-a-round until the root cause can be investigated.
+    =#
     while true
         itry += 1
         try
