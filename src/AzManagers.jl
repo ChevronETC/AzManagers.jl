@@ -180,7 +180,10 @@ function scaleset_monitor()
         end
     catch e
         @error "scaleset monitor error:"
-        showerror(stderr, e)
+        for (exc, bt) in Base.catch_stack()
+            showerror(stderr, exc, bt)
+            println()
+        end
     end
 end
 
