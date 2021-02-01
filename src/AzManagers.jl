@@ -301,6 +301,7 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `customenv=false` If true, then send the current project environment to the workers where it will be instantiated.
 * `session=AzSession(;lazy=true)` The Azure session used for authentication.
 * `group="cbox"` The name of the Azure scale set.  If the scale set does not yet exist, it will be created.
+* `overprovision=true` Use Azure scle-set overprovisioning?
 * `ppi=1` The number of Julia processes to start per Azure scale set instance.
 * `julia_num_threads=Threads.nthreads()` set the number of Julia threads to run on each worker
 * `omp_num_threads=get(ENV, "OMP_NUM_THREADS", 1)` set the number of OpenMP threads to run on each worker
@@ -332,6 +333,7 @@ function Distributed.addprocs(template::Dict, n::Int;
         customenv = false,
         session = AzSession(;lazy=true),
         group = "cbox",
+        overprovision = true,
         ppi = 1,
         julia_num_threads = Threads.nthreads(),
         omp_num_threads = parse(Int, get(ENV, "OMP_NUM_THREADS", "1")),
@@ -357,7 +359,7 @@ function Distributed.addprocs(template::Dict, n::Int;
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
     ntotal = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename,
         nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, spot, maxprice,
-        verbose, customenv)
+        verbose, customenv, overprovision)
 
     j = findfirst(scaleset->scaleset==ScaleSet(subscriptionid, resourcegroup, group), manager.scalesets)
     j == nothing && push!(manager.scalesets, ScaleSet(subscriptionid, resourcegroup, group))
@@ -1191,7 +1193,8 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
 end
 
 function scaleset_create_or_update(manager::AzManager, user, subscriptionid, resourcegroup, scalesetname, sigimagename, sigimageversion,
-        imagename, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, spot, maxprice, verbose, custom_environment)
+        imagename, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, spot, maxprice, verbose,
+        custom_environment, overprovision)
     load_manifest()
     ssh_key = _manifest["ssh_public_key_file"]
 
@@ -1217,7 +1220,12 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         error("cloud init custom data is too large.")
     end
 
-    _template["properties"]["doNotRunExtensionsOnOverprovisionedVMs"] = true
+    if overprovision
+        _template["properties"]["overprovision"] = true
+        _template["properties"]["doNotRunExtensionsOnOverprovisionedVMs"] = true
+    else
+        _template["properties"]["overprovision"] = false
+    end
     _template["properties"]["virtualMachineProfile"]["osProfile"]["customData"] = _cmd
 
     if spot
