@@ -1330,6 +1330,23 @@ function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetn
         json(body))
 end
 
+function add_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, δ, nretry, verbose)
+    r = @retry nretry azrequest(
+        "GET",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2020-06-01",
+        ["Authorization"=>"Bearer $(token(manager.session))"])
+    body = JSON.parse(String(r.body))
+    body["sku"]["capacity"] += δ
+
+    @retry nretry azrequest(
+        "PUT",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2020-06-01",
+        ["Authorization"=>"Bearer $(token(manager.session))", "Content-Type"=>"application/json"],
+        json(body))
+end
+
 #
 # detached service and REST API
 #
