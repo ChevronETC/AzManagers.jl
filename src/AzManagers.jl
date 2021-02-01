@@ -241,19 +241,37 @@ function add_pending_connections()
     end
 end
 
+function Distributed.addprocs(manager::AzManager; socket)
+    try
+        Distributed.init_multi()
+        Distributed.cluster_mgmt_from_master_check()
+        Distributed.addprocs_locked(manager; socket)
+    catch
+        @error "AzManagers, error processing pending connection"
+        for (exc, bt) in Base.catch_stack()
+            showerror(stderr, exc, bt)
+            println()
+        end
+    end
+end
+
 function process_pending_connections()
     manager = azmanager()
     while true
+        local _socket
         try
-            socket = take!(manager.pending_up)
+            _socket = take!(manager.pending_up)
             @debug "adding new vm to cluster"
-            addprocs(manager; socket)
         catch
-            @error "AzManagers, error processing pending connection"
+            @error "AzManagers, error retrieving pending connection"
             for (exc, bt) in Base.catch_stack()
                 showerror(stderr, exc, bt)
                 println()
             end
+        end
+
+        let socket = _socket
+            @async addprocs(manager; socket)
         end
     end
 end
