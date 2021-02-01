@@ -508,29 +508,7 @@ end
 preempted(id) = remotecall_fetch(preempted, id)
 
 function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
-    nretry = 10
-    connection_attempt = 0
-    local c
-
-    #=
-    When creating a large cluster, the connection times out.  I'm guessing this
-    is a limitation of libuv when a large number of machines are all trying to
-    connect to the same port on the master process.
-    =#
-    while true
-        connection_attempt += 1
-        try
-            c = connect(IPv4(master_address), master_port)
-            break
-        catch e
-            if connection_attempt > nretry
-                @error "Unable to connect to master after $nretry retries."
-                throw(e)
-            end
-            @warn "Connection to master timed out.  Retrying.  Attempt number $connection_attempt of $nretry maximum attempts."
-            sleep(10+10*rand())
-        end
-    end
+    c = connect(IPv4(master_address), master_port)
 
     nbytes_written = write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
     nbytes_written == Distributed.HDR_COOKIE_LEN || error("unable to write bytes")
