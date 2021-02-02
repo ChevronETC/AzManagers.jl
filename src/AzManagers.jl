@@ -173,17 +173,27 @@ end
 
 function scaleset_monitor()
     manager = azmanager()
-    try
-        while true
+    tic = time()
+    while true
+        try
             sleep(10)
             delete_empty_scalesets()
             delete_pending_down_vms()
-        end
-    catch e
-        @error "scaleset monitor error:"
-        for (exc, bt) in Base.catch_stack()
-            showerror(stderr, exc, bt)
-            println()
+
+            #=
+            The following seems required for an over-provisioned scaleset. it
+            is not clear why this is needed.
+            =#
+            if time() - tic > 60
+                tic = time()
+                prune()
+            end
+        catch e
+            @error "scaleset monitor error:"
+            for (exc, bt) in Base.catch_stack()
+                showerror(stderr, exc, bt)
+                println()
+            end
         end
     end
 end
@@ -225,6 +235,36 @@ function delete_pending_down_vms()
     end
 end
 
+function prune()
+    manager = azmanager()
+    wrkrs = Dict{Int,Dict}()
+    for wrkr in Distributed.PGRP.workers
+        if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
+            if isdefined(wrkr.config, :userdata)
+                wrkrs[wrkr.id] = wrkr.config.userdata
+            end
+        end
+    end
+
+    sleep(10)
+    for scaleset in scalesets(manager)
+        vms = scaleset_listvms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+        vm_names = get.(vms, "name", "")
+        for (id,wrkr) in wrkrs
+            is_sub = get(wrkr, "subscriptionid", "") == scaleset.subscriptionid
+            is_rg = get(wrkr, "resourcegroup", "") == scaleset.resourcegroup
+            is_ss = get(wrkr, "scalesetname", "") == scaleset.scalesetname
+            if is_sub && is_rg && is_ss && get(wrkr, "name", "") ∈ vm_names
+                delete!(wrkrs, id)
+            end
+        end
+    end
+
+    for pid in keys(wrkrs)
+        @async Distributed.deregister_worker(pid)
+    end
+end
+
 function delete_scalesets()
     manager = azmanager()
     _scalesets = scalesets(manager)
@@ -256,10 +296,12 @@ function Distributed.addprocs(manager::AzManager; socket)
         Distributed.cluster_mgmt_from_master_check()
         Distributed.addprocs_locked(manager; socket)
     catch
-        @error "AzManagers, error processing pending connection"
-        for (exc, bt) in Base.catch_stack()
-            showerror(stderr, exc, bt)
-            println()
+        if manager.verbose > 0
+            @error "AzManagers, error processing pending connection"
+            for (exc, bt) in Base.catch_stack()
+                showerror(stderr, exc, bt)
+                println()
+            end
         end
     end
 end
@@ -272,11 +314,14 @@ function process_pending_connections()
             _socket = take!(manager.pending_up)
             @debug "adding new vm to cluster"
         catch
-            @error "AzManagers, error retrieving pending connection"
-            for (exc, bt) in Base.catch_stack()
-                showerror(stderr, exc, bt)
-                println()
+            if manager.verbose > 0
+                @error "AzManagers, error retrieving pending connection"
+                for (exc, bt) in Base.catch_stack()
+                    showerror(stderr, exc, bt)
+                    println()
+                end
             end
+            return
         end
 
         let socket = _socket
@@ -295,7 +340,7 @@ function spinner(n_target_workers)
     elapsed_time = 0.0
     tic = time()
     _nworkers = nprocs() == 1 ? 0 : nworkers()
-    while nprocs() == 1 || nworkers() < n_target_workers
+    while nprocs() == 1 || nworkers() != n_target_workers
         elapsed_time = time() - starttime
         if time() - tic > 10
             _nworkers = nprocs() == 1 ? 0 : nworkers()
@@ -415,11 +460,13 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     local _cookie
     try
         _cookie = read(params[:socket], Distributed.HDR_COOKIE_LEN)
-    catch e
-        @error "unable to read cookie from socket"
-        for (exc, bt) in Base.catch_stack()
-            showerror(stderr, exc, bt)
-            println()
+    catch
+        if manger.verbose > 0
+            @error "unable to read cookie from socket"
+            for (exc, bt) in Base.catch_stack()
+                showerror(stderr, exc, bt)
+                println()
+            end
         end
         return
     end
@@ -430,11 +477,13 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     local _connection_string
     try
         _connection_string = readline(socket)
-    catch e
-        @error "unable to read connection string from socket"
-        for (exc, bt) in Base.catch_stack()
-            showerror(stderr, exc, bt)
-            println()
+    catch
+        if manager.verbose > 0
+            @error "unable to read connection string from socket"
+            for (exc, bt) in Base.catch_stack()
+                showerror(stderr, exc, bt)
+                println()
+            end
         end
         return
     end
@@ -444,11 +493,13 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     local vm
     try
         vm = JSON.parse(connection_string)
-    catch e
-        @error "unable to parse connection string, string=$connection_string, cookie=$cookie"
-        for (exc, bt) in Base.catch_stack()
-            showerror(stderr, exc, bt)
-            println()
+    catch
+        if manager.verbose > 0
+            @error "unable to parse connection string, string=$connection_string, cookie=$cookie"
+            for (exc, bt) in Base.catch_stack()
+                showerror(stderr, exc, bt)
+                println()
+            end
         end
         return
     end
