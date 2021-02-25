@@ -1749,6 +1749,7 @@ Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` w
 * `sigimagename=""` Azure shared image gallery image to use for the VM (defaults to the template's image)
 * `sigimageversion=""` Azure shared image gallery image version to use for the VM (defaults to latest)
 * `imagename=""` Azure image name used as an alternative to `sigimagename` and `sigimageversion` (used for development work)
+* `customenv=false` If true, then send the current project environment to the workers where it will be instantiated.
 * `nretry=10` Max retries for re-tryable REST call failures
 * `verbose=0` Verbosity flag passes to HTTP.jl methods
 * `julia_num_threads=Threads.nthreads()` set `JULIA_NUM_THREADS` environment variable before starting the detached process
