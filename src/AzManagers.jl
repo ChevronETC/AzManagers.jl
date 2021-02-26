@@ -1530,7 +1530,8 @@ function detachedservice(port=8081, address=ip"0.0.0.0"; server=nothing, subscri
 end
 
 function detachedrun(request::HTTP.Request)
-    local task, id, r
+    @info "inside detachedrun"
+    local process, id, pid, r
 
     try
         r = JSON.parse(String(HTTP.payload(request)))
@@ -1538,9 +1539,6 @@ function detachedrun(request::HTTP.Request)
         if !haskey(r, "code")
             return HTTP.Response(400, Dict("Content-Type"=>"application/json"); body=json(Dict("Malformed body: JSON body must contain the key: code")))
         end
-
-        _tempname = tempname(;cleanup=false)
-        io = open(_tempname, "w")
 
         if haskey(r, "variablebundle")
             variablebundle!(deserialize(IOBuffer(base64decode(r["variablebundle"]))))
@@ -1561,65 +1559,73 @@ function detachedrun(request::HTTP.Request)
 
         code = join(codelines, "\n")
 
-        write(io, code)
-        close(io)
+        _tempname = tempname(;cleanup=false)
+        write(_tempname, code)
 
         id = detached_nextid()
         outfile = "job-$id.out"
         errfile = "job-$id.err"
-        task = @async begin
-            open(outfile, "w") do out
-                open(errfile, "w") do err
-                    redirect_stdout(out) do
-                        redirect_stderr(err) do
-                            try
-                                @eval Main include($_tempname)
-                            catch e
-                                showerror(stderr, e)
-
-                                write(stderr, "\n\n")
-
-                                title = "Code listing ($_tempname)"
-                                write(stderr, title*"\n")
-                                write(stderr, "-"^length(title)*"\n")
-                                nlines = countlines(_tempname)
-                                pad = nlines > 0 ? floor(Int,log10(nlines)) : 0
-                                for (iline,line) in enumerate(readlines(_tempname))
-                                    write(stderr, "$(lpad(iline,pad)): $line\n")
-                                end
-                                write(stderr, "\n")
-                                flush(stderr)
-                                throw(e)
+        wrapper_code = """
+        open("$outfile", "w") do out
+            open("$errfile", "w") do err
+                redirect_stdout(out) do
+                    redirect_stderr(err) do
+                        try
+                            include("$_tempname")
+                        catch e
+                            for (exc, bt) in Base.catch_stack()
+                                showerror(stderr, exc, bt)
+                                println(stderr)
                             end
+                            write(stderr, "\\n\\n")
+                            title = "Code listing ($_tempname)"
+                            write(stderr, title*"\\n")
+                            nlines = countlines("$_tempname")
+                            pad = nlines > 0 ? floor(Int,log10(nlines)) : 0
+                            for (iline,line) in enumerate(readlines("$_tempname"))
+                                write(stderr, "\$(lpad(iline,pad)): \$line\\n")
+                            end
+                            write(stderr, "\\n")
+                            flush(stderr)
+                            throw(e)
                         end
                     end
                 end
             end
         end
-        DETACHED_JOBS[string(id)] = Dict("task"=>task, "request"=>request, "stdout"=>outfile, "stderr"=>errfile, "codefile"=>_tempname, "code"=>code)
+        """
+
+        _tempname_wrapper = tempname(;cleanup=false)
+        write(_tempname_wrapper, wrapper_code)
+
+        nthreads = Threads.nthreads()
+        projectdir = dirname(Pkg.project().path)
+        process = open(`julia -t $nthreads --project=$projectdir $_tempname_wrapper`)
+        pid = getpid(process)
+        @info "executing $_tempname_wrapper with $nthreads threads, and pid $pid"
+
+        DETACHED_JOBS[string(id)] = Dict("process"=>process, "request"=>request, "stdout"=>outfile, "stderr"=>errfile, "codefile"=>_tempname, "code"=>code)
     catch e
         io = IOBuffer()
         showerror(io, e, catch_backtrace())
         return HTTP.Response(500, Dict("Content-Type"=>"application/json"); body=json(Dict("error"=>String(take!(io)))))
     end
-    @async begin
-        wait(task)
-        # free up memory by assigning the global variables to `nothing`
-        for name in names(Main; all=true)
-            try
-                @eval Main $name = nothing
-            catch
-            end
+
+    Threads.@spawn begin
+        try
+            wait(process)
+        catch
         end
         if !r["persist"]
             vm = AzManagers.DETACHED_VM[]
             rmproc(vm; session=sessionbundle(:management))
         end
     end
-    HTTP.Response(200, Dict("Content-Type"=>"application/json"); body=json(Dict("id"=>id)))
+    HTTP.Response(200, Dict("Content-Type"=>"application/json"); body=json(Dict("id"=>id, "pid"=>pid)))
 end
 
 function detachedstatus(request::HTTP.Request)
+    @info "inside detachedstatus"
     local id
     try
         id = split(request.target, '/')[5]
@@ -1633,17 +1639,14 @@ function detachedstatus(request::HTTP.Request)
 
     local status
     try
-        task = DETACHED_JOBS[id]["task"]
+        process = DETACHED_JOBS[id]["process"]
 
-        if !istaskstarted(task)
-            status = "starting"
-        elseif istaskfailed(task)
-            # todo, attach error message and backtrace from the task
-            status = "failed"
-        elseif istaskdone(task)
-            status = "done"
-        else
+        if process_exited(process)
+            status = success(process) ? "done" : "failed"
+        elseif process_running(process)
             status = "running"
+        else
+            status = "starting"
         end
     catch e
         return HTTP.Response(500, Dict("Content-Type"=>"application/json"); body=json(Dict("error"=>show(e), "trace"=>show(stacktrace()))))
@@ -1707,8 +1710,8 @@ function detachedwait(request::HTTP.Request)
     end
 
     try
-        task = DETACHED_JOBS[id]["task"]
-        wait(task)
+        process = DETACHED_JOBS[id]["process"]
+        wait(process)
     catch e
         io = IOBuffer()
         showerror(io, e)
@@ -2054,9 +2057,11 @@ end
 struct DetachedJob
     vm::Dict{String,String}
     id::String
+    pid::String
     logurl::String
 end
-DetachedJob(ip, id) = DetachedJob(Dict("ip"=>string(ip)), string(id), "")
+DetachedJob(ip, id) = DetachedJob(Dict("ip"=>string(ip)), string(id), "-1", "")
+DetachedJob(ip, id, pid) = DetachedJob(Dict("ip"=>string(ip)), string(id), string(pid), "")
 
 function loguri(job::DetachedJob)
     job.logurl
@@ -2191,7 +2196,7 @@ function detached_run(code, ip::String="";
     r = JSON.parse(String(_r.body))
 
     @info "detached job id is $(r["id"]) at $(vm["name"]),$(vm["ip"])"
-    DetachedJob(vm, string(r["id"]), "")
+    DetachedJob(vm, string(r["id"]), string(r["pid"]), "")
 end
 
 detached_run(code, vm::Dict; kwargs...) = detached_run(code, vm["ip"]; kwargs...)
