@@ -2227,7 +2227,7 @@ blocks until the detached job, `job`, is complete.
 function Base.wait(job::DetachedJob)
     HTTP.request(
         "POST",
-        "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/wait", readtimeout=60)
+        "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/wait")
 end
 
 export AzManager, DetachedJob, addproc, nworkers_provisioned, preempted, rmproc, status, variablebundle, variablebundle!, vm, @detach, @detachat
