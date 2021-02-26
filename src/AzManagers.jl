@@ -1,6 +1,6 @@
 module AzManagers
 
-using AzSessions, Base64, CodecZlib, Distributed, HTTP, JSON, LibGit2, Logging, MPI, Pkg, Printf, Random, Serialization, Sockets, TOML
+using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, JSON, LibGit2, Logging, MPI, Pkg, Printf, Random, Serialization, Sockets, TOML
 
 const _manifest = Dict("resourcegroup"=>"", "ssh_user"=>"", "ssh_private_key_file"=>"", "ssh_public_key_file"=>"", "subscriptionid"=>"")
 
@@ -1503,6 +1503,15 @@ let DETACHED_ID::Int = 1
     detached_nextid() = (id = DETACHED_ID; DETACHED_ID += 1; id)
 end
 
+function timestamp_metaformatter(level::Logging.LogLevel, _module, group, id, file, line)
+    @nospecialize
+    timestamp = Dates.format(now(), "yyyy-mm-ddTHH:MM:SS")
+    color = Logging.default_logcolor(level)
+    prefix = timestamp*" - "*(level == Logging.Warn ? "Warning" : string(level))*':'
+    suffix = ""
+    color, prefix, suffix
+end
+
 function detachedservice(port=8081, address=ip"0.0.0.0"; server=nothing, subscriptionid="", resourcegroup="", vmname="")
     HTTP.@register(DETACHED_ROUTER, "POST", "/cofii/detached/run", detachedrun)
     HTTP.@register(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/wait", detachedwait)
@@ -1515,7 +1524,7 @@ function detachedservice(port=8081, address=ip"0.0.0.0"; server=nothing, subscri
     AzManagers.DETACHED_VM[] = Dict("subscriptionid"=>string(subscriptionid), "resourcegroup"=>string(resourcegroup),
         "name"=>string(vmname), "ip"=>string(getipaddr()))
 
-    global_logger(ConsoleLogger(stdout, Logging.Info))
+    global_logger(ConsoleLogger(stdout, Logging.Info; meta_formatter=timestamp_metaformatter))
 
     HTTP.serve(DETACHED_ROUTER, address, port; server=server)
 end
