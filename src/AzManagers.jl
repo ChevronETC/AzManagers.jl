@@ -1189,7 +1189,7 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        julia -e '$(juliaenvstring)using AzManagers; AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
+        julia -e '$(juliaenvstring)using AzManagers; AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     else
@@ -1200,7 +1200,7 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
+        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.mount_datadisks(); AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     end
@@ -1225,7 +1225,7 @@ function buildstartupscript_detached(manager::AzManager, julia_num_threads::Int,
     export OMP_NUM_THREADS=$omp_num_threads
     ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N '' <<<y
     cd /home/$user
-    julia -e '$(juliaenvstring)using AzManagers; AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
+    julia -e '$(juliaenvstring)using AzManagers; AzManagers.mount_datadisks(); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
     EOF
     """
 
@@ -1489,6 +1489,51 @@ function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetn
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/delete?api-version=2020-06-01",
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
         json(body))
+end
+
+# see https://docs.microsoft.com/en-us/azure/virtual-machines/linux/add-disk
+function mount_datadisks()
+    try
+        @info "mounting data disks"
+        _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2020-06-01", Dict("Metadata"=>"true"); redirect=false)
+        r = JSON.parse(String(_r.body))
+        luns = String[]
+        for datadisks in r["compute"]["storageProfile"]["dataDisks"]
+            push!(luns, datadisks["lun"])
+        end
+
+        blks = JSON.parse(String(read(open(`lsblk -J -o NAME,HCTL`))))
+        for blk in blks["blockdevices"]
+            hctl = blk["hctl"]
+            if hctl != nothing
+                lun = split(hctl,':')[end]
+                if lun ∈ luns
+                    try
+                        name = blk["name"]
+                        @info "mounting data disk with lun $lun ($name)..."
+                        run(`sudo parted /dev/$name --script mklabel gpt mkpart xfspart xfs 0% 100%`)
+                        sleep(1) # I'm not sure why this is needed, but the following command often fails without it
+                        run(`sudo mkfs.xfs /dev/$(name)1`)
+                        run(`sudo partprobe /dev/$(name)1`)
+                        run(`sudo mkdir /scratch$lun`)
+                        run(`sudo mount /dev/$(name)1 /scratch$lun`)
+                        run(`sudo chmod 777 /scratch$lun`)
+                        @info "done mounting data disk with lun $lun ($name)"
+                    catch e
+                        @error "caught error formatting mounting data disk lun=$lun ($name)"
+                        showerror(stderr, e)
+                        run(`sudo rm -rf /scratch$lun`)
+                    end
+                end
+            end
+        end
+    catch
+        @error "caught error formatting/mounting data disks"
+        for (exc, bt) in Base.catch_stack()
+            showerror(stderr, exc, bt)
+            println()
+        end
+    end
 end
 
 #
@@ -1831,6 +1876,12 @@ function addproc(vm_template::Dict, nic_template=nothing;
 
     nic_id = JSON.parse(String(r.body))["id"]
 
+    @debug "unique names for the attached disks"
+    for attached_disk in vm_template["value"]["properties"]["storageProfile"]["dataDisks"]
+        attached_disk["name"] = vmname*"-"*attached_disk["name"]*"-"*randstring('a':'z', 6)
+    end
+    @show vm_template["value"]["properties"]["storageProfile"]["dataDisks"]
+
     vm_template["value"]["properties"]["networkProfile"]["networkInterfaces"][1]["id"] = nic_id
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(vm_template["value"]["properties"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
@@ -1960,6 +2011,17 @@ function rmproc(vm;
 
     manager = azmanager!(session, nretry, verbose)
 
+    _r = @retry nretry azrequest(
+        "GET",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?\$expand=instanceView&api-version=2020-12-01",
+        Dict("Authorization"=>"Bearer $(token(session))"))
+
+    r = JSON.parse(String(_r.body))
+
+    osdisk = r["properties"]["storageProfile"]["osDisk"]["name"]
+    datadisks = [datadisk["name"] for datadisk in r["properties"]["storageProfile"]["dataDisks"]]
+
     r = @retry nretry azrequest(
         "DELETE",
         verbose,
@@ -2008,6 +2070,20 @@ function rmproc(vm;
     end
     write(stdout, spin(5, elapsed_time)*", waiting for VM, $vmname, to delete.\r")
     write(stdout, "\n")
+
+    @retry nretry azrequest(
+        "DELETE",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/disks/$osdisk?api-version=2020-06-30",
+        Dict("Authorization" => "Bearer $(token(session))"))
+
+    for datadisk in datadisks
+        @retry nretry azrequest(
+            "DELETE",
+            verbose,
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/disks/$datadisk?api-version=2020-06-30",
+            Dict("Authorization" => "Bearer $(token(session))"))
+    end
 
     nicname = vmname*"-nic"
 

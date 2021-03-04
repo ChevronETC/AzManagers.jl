@@ -35,7 +35,20 @@ to the `~/.azmanagers` folder.
 * `resourcegroup_vnet` Azure resource group corresponding to the virtual network, defaults to `resourcegroup`
 * `resourcegroup_image` Azure resource group correcsponding to the image gallery, defaults to `resourcegroup`
 * `skutier = "Standard"` Azure SKU tier.
+* `datadisks=[]` list of data disks to create and attach [1]
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"` cloud-init commands used to mount or link to temporary disk
+
+# Notes
+[1] Each datadisk is a Dictionary. For example,
+```julia
+Dict("createOption"=>"Empty", "diskSizeGB"=>1023, "managedDisk"=>Dict("storageAccountType"=>"PremiumSSD_LRS"))
+```
+or, to accept the defaults,
+```julia
+Dict("diskSizeGB"=>1023)
+```
+The above example is populated with the default options.  So, if `datadisks=[Dict()]`, then the default options
+will be included.
 """
 function build_sstemplate(name;
         subscriptionid,
@@ -50,6 +63,7 @@ function build_sstemplate(name;
         vnet,
         subnet,
         skutier="Standard",
+        datadisks=[],
         tempdisk="sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         skuname)
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
@@ -57,6 +71,18 @@ function build_sstemplate(name;
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
     subnetid = "/subscriptions/$subscriptionid/resourceGroups/$resourcegroup_vnet/providers/Microsoft.Network/virtualNetworks/$vnet/subnets/$subnet"
     image = "/subscriptions/$subscriptionid_image/resourceGroups/$resourcegroup_image/providers/Microsoft.Compute/galleries/$imagegallery/images/$imagename"
+
+    _datadisks = Dict{String,Any}[]
+    ultrassdenabled = false
+    for (idisk,datadisk) in enumerate(datadisks)
+        datadisk_template = Dict{String,Any}("createOption"=>"Empty", "diskSizeGB"=>1023, "lun"=>1, "managedDisk"=>Dict("storageAccountType"=>"Premium_LRS"))
+        merge!(datadisk_template, datadisk)
+        merge!(datadisk_template, Dict("lun"=>idisk))
+        push!(_datadisks, datadisk_template)
+        if datadisk_template["managedDisk"]["storageAccountType"] ∈ ("UltraSSD_LRS",)
+            ultrassdenabled = true
+        end
+    end
 
     Dict(
         "tempdisk" => tempdisk,
@@ -70,6 +96,9 @@ function build_sstemplate(name;
             "properties" => Dict(
                 "overprovision" => true,
                 "singlePlacementGroup" => false,
+                "additionalCapabilities" => Dict(
+                    "ultraSSDEnabled" => ultrassdenabled
+                ),
                 "virtualMachineProfile" => Dict{String,Any}(
                     "storageProfile" => Dict(
                         "imageReference" => Dict(
@@ -81,7 +110,8 @@ function build_sstemplate(name;
                                 "storageAccountType" => "Standard_LRS"
                             ),
                             "createOption" => "FromImage"
-                        )
+                        ),
+                        "dataDisks" => _datadisks
                     ),
                     "osProfile" => Dict(
                         "computerNamePrefix" => name,
@@ -211,7 +241,16 @@ or written to AzManagers.jl configuration files.
 * `subscriptionid_image` Azure subscription containing the image gallery, defaults to `subscriptionid`
 * `resourcegroup_image` Azure resource group containing the image gallery, defaults to `subscriptionid`
 * `nicname = "cbox-nic"` Name of the NIC for this VM
+* `datadisks=[]` additional data disks to attach
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"`  cloud-init commands used to mount or link to temporary disk
+
+# Notes
+[1] Each datadisk is a Dictionary. For example,
+```julia
+Dict("createOption"=>"Empty", "diskSizeGB"=>1023, "managedDisk"=>Dict("storageAccountType"=>"PremiumSSD_LRS"))
+```
+The above example is populated with the default options.  So, if `datadisks=[Dict()]`, then the default options
+will be included.
 """
 function build_vmtemplate(name;
         subscriptionid,
@@ -226,6 +265,7 @@ function build_vmtemplate(name;
         vnet,
         subnet,
         vmsize,
+        datadisks = [],
         tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         nicname = "cbox-nic")
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
@@ -235,11 +275,27 @@ function build_vmtemplate(name;
     image = "/subscriptions/$subscriptionid_image/resourceGroups/$resourcegroup_image/providers/Microsoft.Compute/galleries/$imagegallery/images/$imagename"
     subnetid = "/subscriptions/$subscriptionid/resourceGroups/$resourcegroup_vnet/providers/Microsoft.Network/virtualNetworks/$vnet/subnets/$subnet"
 
+    
+    ultrassdenabled = false
+    _datadisks = Dict{String,Any}[]
+    for (idisk,datadisk) in enumerate(datadisks)
+        datadisk_template = Dict{String,Any}("createOption"=>"Empty", "diskSizeGB"=>1023, "lun"=>1, "managedDisk"=>Dict("storageAccountType"=>"Premium_LRS"))
+        merge!(datadisk_template, datadisk)
+        merge!(datadisk_template, Dict("lun"=>idisk, "name"=>"scratch$idisk"))
+        push!(_datadisks, datadisk_template)
+        if datadisk_template["managedDisk"]["storageAccountType"] ∈ ("UltraSSD_LRS",)
+            ultrassdenabled = true
+        end
+    end
+
     Dict(
         "tempdisk" => tempdisk,
         "value" => Dict(
             "location" => location,
             "properties" => Dict(
+                "additionalCapabilities" => Dict(
+                    "ultraSSDEnabled"=>ultrassdenabled
+                ),
                 "hardwareProfile" => Dict(
                     "vmSize" => vmsize
                 ),
@@ -253,7 +309,8 @@ function build_vmtemplate(name;
                             "storageAccountType" => "Standard_LRS"
                         ),
                         "createOption" => "FromImage"
-                    )
+                    ),
+                    "dataDisks" => _datadisks
                 ),
                 "osProfile" => Dict(
                     "computerName" => name,
