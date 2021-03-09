@@ -2303,8 +2303,9 @@ function status(job::DetachedJob)
             "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/status", readtimeout=60)
         r = JSON.parse(String(_r.body))
         _r = r["status"]
-    catch
-        _r = "failed"
+    catch e
+        _r = "failed to fetch status from server"
+        showerror(stderr, e)
     end
     _r
 end
