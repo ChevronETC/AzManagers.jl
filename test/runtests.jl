@@ -113,7 +113,7 @@ end
         pinfo = Pkg.project()
         write(stdout, "project path is $(pinfo.path)\n")
     end
-    read(testjob)
+    wait(testjob)
     @test contains(read(testjob), "myproject")
     rmproc(testvm; session=session)
 end
@@ -203,4 +203,20 @@ end
     #
     job3 = @detach vm(;vm_template=templatename, session=session, persist=false) begin
     end
+end
+
+@testset "AzManagers, detach, variablebundle" begin
+    r = randstring('a':'z',4)
+    basename = "test$r"
+    testvm = addproc(templatename; basename=basename, session=session)
+    variablebundle!(a=1.0,b=3.14)
+    testjob = @detachat testvm begin
+        if variablebundle(:a) ≈ 1.0 && variablebundle(:b) ≈ 3.14
+            write(stdout, "passed")
+        else
+            write(stdout, "failed")
+        end
+    end
+    wait(testjob)
+    @test contains(read(testjob), "passed")
 end
