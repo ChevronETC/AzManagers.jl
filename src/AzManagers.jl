@@ -1585,8 +1585,11 @@ function detachedrun(request::HTTP.Request)
             return HTTP.Response(400, Dict("Content-Type"=>"application/json"); body=json(Dict("Malformed body: JSON body must contain the key: code")))
         end
 
+        _tempname_varbundle = tempname(;cleanup=false)
         if haskey(r, "variablebundle")
-            variablebundle!(deserialize(IOBuffer(base64decode(r["variablebundle"]))))
+            write(_tempname_varbundle, """using AzManagers, Base64, Serialization; variablebundle!(deserialize(IOBuffer(base64decode("$(r["variablebundle"])"))))\n""")
+        else
+            write(_tempname_varbundle, "\n")
         end
 
         code = r["code"]
@@ -1615,6 +1618,7 @@ function detachedrun(request::HTTP.Request)
             open("$errfile", "w") do err
                 redirect_stdout(out) do
                     redirect_stderr(err) do
+                        include("$_tempname_varbundle")
                         try
                             include("$_tempname")
                         catch e
@@ -1877,10 +1881,9 @@ function addproc(vm_template::Dict, nic_template=nothing;
     nic_id = JSON.parse(String(r.body))["id"]
 
     @debug "unique names for the attached disks"
-    for attached_disk in vm_template["value"]["properties"]["storageProfile"]["dataDisks"]
+    for attached_disk in get(vm_template["value"]["properties"]["storageProfile"], "dataDisks", [])
         attached_disk["name"] = vmname*"-"*attached_disk["name"]*"-"*randstring('a':'z', 6)
     end
-    @show vm_template["value"]["properties"]["storageProfile"]["dataDisks"]
 
     vm_template["value"]["properties"]["networkProfile"]["networkInterfaces"][1]["id"] = nic_id
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
