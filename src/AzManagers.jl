@@ -1585,6 +1585,9 @@ function detachedrun(request::HTTP.Request)
             return HTTP.Response(400, Dict("Content-Type"=>"application/json"); body=json(Dict("Malformed body: JSON body must contain the key: code")))
         end
 
+        _tempname_logging = tempname(;cleanup=false)
+        write(_tempname_logging, """using Logging; global_logger(ConsoleLogger(stdout, Logging.Info))""")
+
         _tempname_varbundle = tempname(;cleanup=false)
         if haskey(r, "variablebundle")
             write(_tempname_varbundle, """using AzManagers, Base64, Serialization; variablebundle!(deserialize(IOBuffer(base64decode("$(r["variablebundle"])"))))\n""")
@@ -1618,6 +1621,7 @@ function detachedrun(request::HTTP.Request)
             open("$errfile", "w") do err
                 redirect_stdout(out) do
                     redirect_stderr(err) do
+                        include("$_tempname_logging")
                         include("$_tempname_varbundle")
                         try
                             include("$_tempname")
