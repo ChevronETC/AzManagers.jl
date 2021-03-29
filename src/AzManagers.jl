@@ -1013,7 +1013,8 @@ function is_vm_in_scaleset(manager::AzManager, config::WorkerConfig)
 end
 
 function scaleset_image(manager::AzManager, template, sigimagename, sigimageversion, imagename)
-    if sigimagename == "" && sigimageversion == "" && imagename == ""
+    local r, _image
+    if imagename == "" && sigimagename == ""
         # get sigimageversion and sigimagename from the machines' metadata
         r = nothing
         t = @async begin
@@ -1026,20 +1027,48 @@ function scaleset_image(manager::AzManager, template, sigimagename, sigimagevers
         end
 
         istaskdone(t) || @async Base.throwto(t, InterruptException)
-        if isa(r, HTTP.Messages.Response)
-            image = JSON.parse(String(r.body))["id"]
-            _image = split(image,"/")
-            k = findfirst(x->x=="galleries", _image)
-            if k != nothing
-                k = findfirst(x->x=="images", _image)
-                sigimagename = _image[k+1]
-                k = findfirst(x->x=="versions", _image)
-                if k != nothing
-                    sigimageversion = _image[k+1]
+
+        r = fetch(t)
+        image = JSON.parse(String(r.body))["id"]
+        _image = split(image,"/")
+    end
+
+    if !isa(r, HTTP.Messages.Response)
+        return sigimagename, sigimageversion, imagename
+    end
+
+    local gallery
+    if sigimagename == "" && imagename == ""
+        k_galleries = findfirst(x->x=="galleries", _image)
+        k_images = findfirst(x->x=="images", _image)
+        if k_galleries != nothing
+            gallery = _image[k_galleries+1]
+            sigimagename = _image[k_images+1]
+        else
+            imagename = _image[k_images+1]
+        end
+    end
+
+    if imagename == "" && sigimageversion == ""
+        k = findfirst(x->x=="versions", _image)
+        if k != nothing
+            sigimageversion = _image[k+1]
+        else
+            k_subscriptions = findfirst(x->x=="subscriptions", _image)
+            k_resourcegroups = findfirst(x->x=="resourceGroups", _image)
+            if k_subscriptions != nothing && k_resourcegroups != nothing
+                subscription = _image[k_subscriptions+1]
+                resourcegroup = _image[k_resourcegroups+1]
+                _r = @retry manager.nretry azrequest(
+                    "GET",
+                    manager.verbose,
+                    "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions?api-version=2019-07-01",
+                    Dict("Authorization"=>"Bearer $(token(manager.session))"))
+                r = JSON.parse(String(_r.body))
+                versions = VersionNumber.(get.(getnextlinks!(manager, get(r, "value", String[]), get(r, "nextLink", ""), manager.nretry, manager.verbose), "name", ""))
+                if length(versions) > 0
+                    sigimageversion = string(maximum(versions))
                 end
-            else
-                k = findfirst(x->x=="images", _image)
-                imagename = _image[k+1]
             end
         end
     end
