@@ -334,23 +334,34 @@ include("templates.jl")
 
 spin(spincount, elapsed_time) = ['◐','◓','◑','◒','✓'][spincount]*@sprintf(" %.2f",elapsed_time)*" seconds"
 function spinner(n_target_workers)
-    ws = repeat(" ", 5)
-    spincount = 1
-    starttime = time()
-    elapsed_time = 0.0
-    tic = time()
-    _nworkers = nprocs() == 1 ? 0 : nworkers()
+    local ws,spincount,starttime,elapsed_time,tic,_nworkers
+    try
+        ws = repeat(" ", 5)
+        spincount = 1
+        starttime = time()
+        elapsed_time = 0.0
+        tic = time()
+        _nworkers = nprocs() == 1 ? 0 : nworkers()
+    catch e
+        @warn "error during startup:"
+        showerror(stderr, e)
+    end
     while nprocs() == 1 || nworkers() != n_target_workers
-        elapsed_time = time() - starttime
-        if time() - tic > 10
-            _nworkers = nprocs() == 1 ? 0 : nworkers()
-            tic = time()
+        try
+            elapsed_time = time() - starttime
+            if time() - tic > 10
+                _nworkers = nprocs() == 1 ? 0 : nworkers()
+                tic = time()
+            end
+            write(stdout, spin(spincount, elapsed_time)*", $_nworkers/$n_target_workers up. $ws\r")
+            flush(stdout)
+            spincount = spincount == 4 ? 1 : spincount + 1
+            yield()
+            sleep(.25)
+        catch e
+            @warn "error during startup:"
+            showerror(stderr, e)
         end
-        write(stdout, spin(spincount, elapsed_time)*", $_nworkers/$n_target_workers up. $ws\r")
-        flush(stdout)
-        spincount = spincount == 4 ? 1 : spincount + 1
-        yield()
-        sleep(.25)
     end
     _nworkers = nprocs() == 1 ? 0 : nworkers()
     write(stdout, spin(5, elapsed_time)*", $_nworkers/$n_target_workers are running. $ws\r")
