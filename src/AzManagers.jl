@@ -1013,22 +1013,25 @@ function is_vm_in_scaleset(manager::AzManager, config::WorkerConfig)
 end
 
 function scaleset_image(manager::AzManager, template, sigimagename, sigimageversion, imagename)
-    local r, _image
-    if imagename == "" && sigimagename == ""
-        # get sigimageversion and sigimagename from the machines' metadata
-        r = nothing
-        t = @async begin
-            r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute/storageProfile/imageReference?api-version=2019-06-01", Dict("Metadata"=>"true"); retry=false, redirect=false)
-        end
-        tic = time()
-        while !istaskdone(t)
-            (time() - tic) > 10 && break
-            sleep(1)
-        end
-
-        istaskdone(t) || @async Base.throwto(t, InterruptException)
+    # early exit
+    if imagename != "" || (sigimagename != "" && sigimageversion != "")
+        return sigimagename, sigimageversion, imagename
     end
 
+    # get machines' metadata
+    t = @async begin
+        r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute/storageProfile/imageReference?api-version=2019-06-01", Dict("Metadata"=>"true"); retry=false, redirect=false)
+    end
+    tic = time()
+    while !istaskdone(t)
+        (time() - tic) > 10 && break
+        sleep(1)
+    end
+
+    istaskdone(t) || @async Base.throwto(t, InterruptException)
+    r = fetch(t)
+
+    local _image
     if !isa(r, HTTP.Messages.Response)
         return sigimagename, sigimageversion, imagename
     else
