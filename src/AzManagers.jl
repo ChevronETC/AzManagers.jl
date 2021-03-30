@@ -1022,19 +1022,19 @@ function scaleset_image(manager::AzManager, template, sigimagename, sigimagevers
         end
         tic = time()
         while !istaskdone(t)
-            (time() - tic) > 5 && break
+            (time() - tic) > 10 && break
             sleep(1)
         end
 
         istaskdone(t) || @async Base.throwto(t, InterruptException)
-
-        r = fetch(t)
-        image = JSON.parse(String(r.body))["id"]
-        _image = split(image,"/")
     end
 
     if !isa(r, HTTP.Messages.Response)
         return sigimagename, sigimageversion, imagename
+    else
+        r = fetch(t)
+        image = JSON.parse(String(r.body))["id"]
+        _image = split(image,"/")
     end
 
     local gallery
