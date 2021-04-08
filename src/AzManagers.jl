@@ -240,7 +240,7 @@ function prune()
     wrkrs = Dict{Int,Dict}()
     for wrkr in Distributed.PGRP.workers
         if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
-            if isdefined(wrkr.config, :userdata)
+            if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
                 wrkrs[wrkr.id] = wrkr.config.userdata
             end
         end
