@@ -24,7 +24,6 @@ azmanagers_rev=get(pkg, "repo-rev", "")
         waitfor = true,
         subscriptionid = subscriptionid,
         resourcegroup = resourcegroup,
-        sigimagename = imagename,
         ppi = ppi,
         group = group,
         session = session)

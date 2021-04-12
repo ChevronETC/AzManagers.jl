@@ -240,7 +240,7 @@ function prune()
     wrkrs = Dict{Int,Dict}()
     for wrkr in Distributed.PGRP.workers
         if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
-            if isdefined(wrkr.config, :userdata)
+            if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
                 wrkrs[wrkr.id] = wrkr.config.userdata
             end
         end
@@ -1040,21 +1040,26 @@ function scaleset_image(manager::AzManager, template, sigimagename, sigimagevers
         _image = split(image,"/")
     end
 
-    local gallery
+    k_galleries = findfirst(x->x=="galleries", _image)
+    gallery = k_galleries == nothing ? "" : _image[k_galleries+1]
+    different_image = true
+    
     if sigimagename == "" && imagename == ""
-        k_galleries = findfirst(x->x=="galleries", _image)
+        different_image = false
         k_images = findfirst(x->x=="images", _image)
         if k_galleries != nothing
-            gallery = _image[k_galleries+1]
             sigimagename = _image[k_images+1]
         else
             imagename = _image[k_images+1]
         end
     end
 
+    (sigimagename != "" && gallery == "") && error("sigimagename provided, but gallery name not found in template")
+    (sigimagename == "" && imagename == "") && error("Unable to determine 'image gallery name' or 'image name'")
+    
     if imagename == "" && sigimageversion == ""
         k = findfirst(x->x=="versions", _image)
-        if k != nothing
+        if k != nothing && !different_image
             sigimageversion = _image[k+1]
         else
             k_subscriptions = findfirst(x->x=="subscriptions", _image)
@@ -1076,7 +1081,7 @@ function scaleset_image(manager::AzManager, template, sigimagename, sigimagevers
         end
     end
 
-    @debug "after inspecting the VM  metaddata, imagename=$imagename, sigimagename=$sigimagename, sigimageversion=$sigimageversion"
+    @debug "after inspecting the VM metaddata, imagename=$imagename, sigimagename=$sigimagename, sigimageversion=$sigimageversion"
 
     if imagename != ""
         if haskey(template["properties"], "virtualMachineProfile") # scale-set
