@@ -1453,7 +1453,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
 
     _template = deepcopy(template["value"])
 
-    _template["properties"]["virtualMachineProfile"]["osProfile"]["computerNamePrefix"] = string(scalesetname, "-", randstring('a':'z', 4), "-")
+    _template["properties"]["virtualMachineProfile"]["osProfile"]["computerNamePrefix"] = string(scalesetname, "-")
 
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
@@ -1485,7 +1485,6 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     for scaleset in scalesets
         if scaleset["name"] == scalesetname
             n = scaleset_capacity(manager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
-            _template["properties"]["virtualMachineProfile"]["osProfile"]["computerNamePrefix"] = scaleset["properties"]["virtualMachineProfile"]["osProfile"]["computerNamePrefix"]
             scaleset_exists = true
             break
         end
