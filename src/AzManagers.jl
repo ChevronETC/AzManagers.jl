@@ -1094,19 +1094,33 @@ function scaleset_image(manager::AzManager, template, sigimagename, sigimagevers
     else
         if sigimagename != ""
             if haskey(template["properties"], "virtualMachineProfile") # scale-set
-                id = template["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"]["id"]
-                template["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"]["id"] = join(split(id, '/')[1:end-1], '/')*"/"*sigimagename
+                id = split(template["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"]["id"], '/')
+                j = findfirst(_id->_id=="images", id)
+                template["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"]["id"] = join(id[1:j], '/')*"/"*sigimagename
             else # vm
-                id = template["properties"]["storageProfile"]["imageReference"]["id"]
-                template["properties"]["storageProfile"]["imageReference"]["id"] = join(split(id, '/')[1:end-1], '/')*"/"*sigimagename
+                id = split(template["properties"]["storageProfile"]["imageReference"]["id"], '/')
+                j = findfirst(_id->_id=="images", id)
+                template["properties"]["storageProfile"]["imageReference"]["id"] = join(id[1:j], '/')*"/"*sigimagename
             end
         end
 
         if sigimageversion != ""
             if haskey(template["properties"], "virtualMachineProfile") # scale-set
-                template["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"]["id"] *= "/versions/$sigimageversion"
+                id = split(template["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"]["id"], '/')
+                j = findfirst(_id->_id=="versions", id)
+                if j == nothing
+                    template["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"]["id"] *= "/versions/$sigimageversion"
+                else
+                    template["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"]["id"] = join(id[1:j], '/')*sigimageversion
+                end
             else # vm
-                template["properties"]["storageProfile"]["imageReference"]["id"] *= "/versions/$sigimageversion"
+                id = split(template["properties"]["storageProfile"]["imageReference"]["id"], '/')
+                j = findfirst(_id->_id=="versions", id)
+                if j == nothing
+                    template["properties"]["storageProfile"]["imageReference"]["id"] *= "/versions/$sigimageversion"
+                else
+                    template["properties"]["storageProfile"]["imageReference"]["id"] = join(id[1:j], '/')*sigimageversion
+                end
             end
         end
     end
