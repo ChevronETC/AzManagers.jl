@@ -1137,8 +1137,11 @@ end
 function compress_environment(julia_environment_folder)
     project_text = read(joinpath(julia_environment_folder, "Project.toml"), String)
     manifest_text = read(joinpath(julia_environment_folder, "Manifest.toml"), String)
-    project_compressed = base64encode(transcode(ZlibCompressor, project_text))
-    manifest_compressed = base64encode(transcode(ZlibCompressor, manifest_text))
+    local project_compressed,manifest_compressed
+    with_logger(ConsoleLogger(stdout, Logging.Info)) do
+        project_compressed = base64encode(transcode(ZlibCompressor, project_text))
+        manifest_compressed = base64encode(transcode(ZlibCompressor, manifest_text))
+    end
 
     project_compressed, manifest_compressed
 end
