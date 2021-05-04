@@ -1201,8 +1201,12 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
             EOF
             """
         catch e
-            @warn "Unable to use a custom environment.  Please ensure that your environment is in a git repository with an accessible remote."
+            @warn "Unable to use a custom environment."
             showerror(stderr, e)
+            for (exc, bt) in Base.catch_stack()
+                showerror(stderr, exc, bt)
+                println()
+            end
         end
     end
 
