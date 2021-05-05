@@ -438,7 +438,8 @@ function Distributed.addprocs(template::Dict, n::Int;
 
     @info "Provisioning scale-set..."
     manager = azmanager!(session, nretry, verbose)
-    sigimagename,sigimageversion,imagename = scaleset_image(manager, template["value"], sigimagename, sigimageversion, imagename)
+    sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
+    scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
     ntotal = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename,
         nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, spot, maxprice,
@@ -1012,7 +1013,7 @@ function is_vm_in_scaleset(manager::AzManager, config::WorkerConfig)
     hasit
 end
 
-function scaleset_image(manager::AzManager, template, sigimagename, sigimageversion, imagename)
+function scaleset_image(manager::AzManager, sigimagename, sigimageversion, imagename)
     # early exit
     if imagename != "" || (sigimagename != "" && sigimageversion != "")
         return sigimagename, sigimageversion, imagename
@@ -1083,6 +1084,10 @@ function scaleset_image(manager::AzManager, template, sigimagename, sigimagevers
 
     @debug "after inspecting the VM metaddata, imagename=$imagename, sigimagename=$sigimagename, sigimageversion=$sigimageversion"
 
+    sigimagename, sigimageversion, imagename
+end
+
+function scaleset_image!(manager::AzManager, template, sigimagename, sigimageversion, imagename)
     if imagename != ""
         if haskey(template["properties"], "virtualMachineProfile") # scale-set
             id = template["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"]["id"]
@@ -1130,8 +1135,6 @@ function scaleset_image(manager::AzManager, template, sigimagename, sigimagevers
     else # vm
         @debug "using image=$(template["properties"]["storageProfile"]["imageReference"]["id"])"
     end
-
-    sigimagename, sigimageversion, imagename
 end
 
 function software_sanity_check(manager, imagename, custom_environment)
@@ -1937,7 +1940,8 @@ function addproc(vm_template::Dict, nic_template=nothing;
     manager = azmanager!(session, nretry, verbose)
 
     @debug "getting image info"
-    sigimagename, sigimageversion, imagename = scaleset_image(manager, vm_template["value"], sigimagename, sigimageversion, imagename)
+    sigimagename, sigimageversion, imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
+    scaleset_image!(manager, vm_template["value"], sigimagename, sigimageversion, imagename)
 
     @debug "software sanity check"
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
