@@ -1185,7 +1185,7 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
         """
     end
     if isfile(joinpath(homedir(), ".git-credentials"))
-        gitcredentials = read(joinpath(homedir(), ".git-credentials"), String)
+        gitcredentials = rstrip(read(joinpath(homedir(), ".git-credentials"), String), [' ','\n'])
         cmd *= """
         
         sudo su - $user << EOF
