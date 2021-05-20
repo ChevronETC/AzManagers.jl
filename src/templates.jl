@@ -232,8 +232,6 @@ or written to AzManagers.jl configuration files.
 * `resourcegroup` Azure resource group where the VM will reside
 * `imagegallery` Azure shared image gallery name
 * `imagename` Azure image name that is in the shared image gallery 
-* `vnet` Azure virtual network
-* `subnet` Azure subnet
 * `vmsize` Azure vm type, e.g. "Standard_D8s_v3"
 
 # Optional keyword arguments
@@ -262,8 +260,6 @@ function build_vmtemplate(name;
         resourcegroup_image = "",
         imagegallery,
         imagename,
-        vnet,
-        subnet,
         vmsize,
         datadisks = [],
         tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
@@ -273,9 +269,7 @@ function build_vmtemplate(name;
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
 
     image = "/subscriptions/$subscriptionid_image/resourceGroups/$resourcegroup_image/providers/Microsoft.Compute/galleries/$imagegallery/images/$imagename"
-    subnetid = "/subscriptions/$subscriptionid/resourceGroups/$resourcegroup_vnet/providers/Microsoft.Network/virtualNetworks/$vnet/subnets/$subnet"
 
-    
     ultrassdenabled = false
     _datadisks = Dict{String,Any}[]
     for (idisk,datadisk) in enumerate(datadisks)
