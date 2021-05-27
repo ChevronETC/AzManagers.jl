@@ -122,6 +122,7 @@ struct ScaleSet
     resourcegroup
     scalesetname
 end
+Base.Dict(scaleset::ScaleSet) = Dict("subscriptionid"=>scaleset.subscriptionid, "resourcegroup"=>scaleset.resourcegroup, "name"=>scaleset.scalesetname)
 
 mutable struct AzManager <: ClusterManager
     session::AzSessionAbstract
@@ -199,6 +200,7 @@ function scaleset_monitor()
 end
 
 scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : ScaleSet[]
+scalesets() = scalesets(azmanager())
 pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Vector{String}}()
 
 function delete_empty_scalesets()
@@ -2437,6 +2439,6 @@ function Base.kill(job::DetachedJob)
         "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/kill")
 end
 
-export AzManager, DetachedJob, addproc, nworkers_provisioned, preempted, rmproc, status, variablebundle, variablebundle!, vm, @detach, @detachat
+export AzManager, DetachedJob, addproc, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
 
 end
