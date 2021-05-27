@@ -1630,6 +1630,7 @@ end
 
 function detachedservice(port=8081, address=ip"0.0.0.0"; server=nothing, subscriptionid="", resourcegroup="", vmname="")
     HTTP.@register(DETACHED_ROUTER, "POST", "/cofii/detached/run", detachedrun)
+    HTTP.@register(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/kill", detachedkill)
     HTTP.@register(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/wait", detachedwait)
     HTTP.@register(DETACHED_ROUTER, "GET", "/cofii/detached/job/*/status", detachedstatus)
     HTTP.@register(DETACHED_ROUTER, "GET", "/cofii/detached/job/*/stdout", detachedstdout)
@@ -1746,6 +1747,31 @@ function detachedrun(request::HTTP.Request)
         end
     end
     HTTP.Response(200, Dict("Content-Type"=>"application/json"); body=json(Dict("id"=>id, "pid"=>pid)))
+end
+
+function detachedkill(request::HTTP.Request)
+    local id
+    try
+        id = split(request.target, '/')[5]
+    catch
+        return HTTP.Response(500, Dict("Content-Type"=>"application/text"); body="ERROR: Unable to find job id.")
+    end
+
+    local _process
+    try
+        _process = DETACHED_JOBS[string(id)]["process"]
+    catch
+        return HTTP.Response(500, Dict("Content-Type"=>"application/text"); body="unable to find process id in job $id")
+    end
+
+    local response
+    try
+        kill(_process)
+        response = HTTP.Response(200, Dict("Content-Type"=>"application/text"); body="process for job $id killed")
+    catch
+        response = HTTP.Response(500, Dict("Content-Type"=>"application/text"); body="error deleting process id for job $id")
+    end
+    response
 end
 
 function detachedstatus(request::HTTP.Request)
@@ -2398,6 +2424,17 @@ function Base.wait(job::DetachedJob)
     HTTP.request(
         "POST",
         "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/wait")
+end
+
+"""
+    kill(job)
+
+kill the linux process associated with `job`
+"""
+function Base.kill(job::DetachedJob)
+    HTTP.request(
+        "POST",
+        "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/kill")
 end
 
 export AzManager, DetachedJob, addproc, nworkers_provisioned, preempted, rmproc, status, variablebundle, variablebundle!, vm, @detach, @detachat
