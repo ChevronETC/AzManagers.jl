@@ -175,9 +175,10 @@ end
 function scaleset_monitor()
     manager = azmanager()
     tic = time()
+    interval = get(ENV, "JULIA_AZMANAGERS_POLL_INTERVAL", 60)
     while true
         try
-            sleep(10)
+            sleep(interval)
             delete_empty_scalesets()
             delete_pending_down_vms()
 
