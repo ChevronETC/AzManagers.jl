@@ -642,12 +642,15 @@ end
 preempted(id) = remotecall_fetch(preempted, id)
 
 function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
+    @info "azure_worker_init, making connection"
     c = connect(IPv4(master_address), master_port)
 
+    @info "azure_worker_init, writing cookie"
     nbytes_written = write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
     nbytes_written == Distributed.HDR_COOKIE_LEN || error("unable to write bytes")
     flush(c)
 
+    @info "azure_worker_init, introspecting machine"
     _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2020-06-01", Dict("Metadata"=>"true"); redirect=false)
     r = JSON.parse(String(_r.body))
     vm = Dict(
@@ -661,12 +664,15 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
             "name" => r["compute"]["name"],
             "mpi" => mpi_size > 0,
             "mpi_size" => mpi_size))
+    @info "azure_worker_init, found vm=$vm"
     _vm = base64encode(json(vm))
 
+    @info "azure_worker_init, writing vm"
     nbytes_written = write(c, _vm*"\n")
     nbytes_written == length(_vm)+1 || error("wrote wrong number of bytes")
     flush(c)
 
+    @info "azure_worker_init, returning socket"
     c
 end
 
@@ -683,11 +689,14 @@ function logging()
 end
 
 function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
+    @info "azure_worker_start, calling init_multi"
     Distributed.init_multi()
 
+    @info "azure_worker_start, redirecting stderr"
     close_stdin && close(stdin) # workers will not use it
     stderr_to_stdout && redirect_stderr(stdout)
 
+    @info "azure_worker_start, init_worker"
     Distributed.init_worker(cookie)
     interface = IPv4(Distributed.LPROC.bind_addr)
     if Distributed.LPROC.bind_port == 0
@@ -697,8 +706,10 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     else
         sock = listen(interface, Distributed.LPROC.bind_port)
     end
+    @info "azure_worker_start, Distributed.LPROC.bind_port=$(Distributed.LPROC.bind_port)"
 
     tsk_messages = nothing
+    @info "azure_worker_start, async message processing"
     @async while isopen(sock)
         client = accept(sock)
         tsk_messages = Distributed.process_messages(client, client, true)
@@ -709,6 +720,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     print(out, '\n')
     flush(out)
 
+    @info "setting nagle and quickack"
     Sockets.nagle(sock, false)
     Sockets.quickack(sock, true)
 
@@ -722,6 +734,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     while true
         if tsk_messages != nothing
             try
+                @info "waiting on message handling to be done"
                 wait(tsk_messages)
 
                 #=
@@ -753,7 +766,9 @@ function azure_worker(cookie, master_address, master_port, ppi)
     while true
         itry += 1
         try
+            @info "calling azure_worker_init"
             c = azure_worker_init(cookie, master_address, master_port, ppi, 0)
+            @info "calling azure_worker_start"
             azure_worker_start(c, cookie)
         catch e
             @error "error starting worker, attempt $itry, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
