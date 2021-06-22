@@ -400,6 +400,7 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `waitfor=false` wait for the cluster to be provisioned before returning, or return control to the caller immediately[2]
 * `mpi_ranks_per_worker=0` set the number of MPI ranks per Julia worker[3]
 * `mpi_flags="-bind-to core:\$(ENV["OMP_NUM_THREADS"]) -map-by numa"` extra flags to pass to mpirun (has effect when `mpi_ranks_per_worker>0`)
+* `bootdiagnostics=false` enable azure boot diagnostics
 
 # Notes
 [1] If `addprocs` is called from an Azure VM, then the default `imagename`,`imageversion` are the
@@ -431,7 +432,8 @@ function Distributed.addprocs(template::Dict, n::Int;
         maxprice = -1,
         waitfor = false,
         mpi_ranks_per_worker = 0,
-        mpi_flags = "-bind-to core:$(get(ENV, "OMP_NUM_THREADS", 1)) --map-by numa")
+        mpi_flags = "-bind-to core:$(get(ENV, "OMP_NUM_THREADS", 1)) --map-by numa",
+        bootdiagnostics = false)
     n_current_workers = nprocs() == 1 ? 0 : nworkers()
 
     (subscriptionid == "" || resourcegroup == "" || user == "") && load_manifest()
@@ -446,7 +448,7 @@ function Distributed.addprocs(template::Dict, n::Int;
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
     ntotal = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename,
         nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, spot, maxprice,
-        verbose, customenv, overprovision)
+        verbose, customenv, overprovision, bootdiagnostics)
 
     j = findfirst(scaleset->scaleset==ScaleSet(subscriptionid, resourcegroup, group), manager.scalesets)
     j == nothing && push!(manager.scalesets, ScaleSet(subscriptionid, resourcegroup, group))
@@ -1459,7 +1461,7 @@ end
 
 function scaleset_create_or_update(manager::AzManager, user, subscriptionid, resourcegroup, scalesetname, sigimagename, sigimageversion,
         imagename, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, spot, maxprice, verbose,
-        custom_environment, overprovision)
+        custom_environment, overprovision, bootdiagnostics)
     load_manifest()
     ssh_key = _manifest["ssh_public_key_file"]
 
@@ -1499,6 +1501,10 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         _template["properties"]["virtualMachineProfile"]["billingProfile"] = Dict("maxPrice"=>maxprice)
     end
 
+    if bootdiagnostics
+        _template["properties"]["virtualMachineProfile"]["diagnosticsProfile"] = Dict("bootDiagnostics"=>Dict("enabled"=>true))
+    end
+
     n = 0
     scalesets = get(r, "value", [])
     scaleset_exists = false
@@ -1516,7 +1522,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         @retry nretry azrequest(
             "PUT",
             verbose,
-            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2019-12-01",
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2021-03-01",
             Dict("Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"),
             json(_template,1))
     end
@@ -1548,7 +1554,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     @retry nretry azrequest(
         "PUT",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2019-12-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2021-03-01",
         Dict("Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"),
         String(json(_template)))
 
