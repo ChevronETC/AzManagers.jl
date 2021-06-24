@@ -222,8 +222,10 @@ function delete_empty_scalesets()
 end
 
 function delete_pending_down_vms()
+    @debug "deleting pending down vms"
     manager = azmanager()
     _pending_down = pending_down(manager)
+    @debug "pending down=$_pending_down"
     @sync while !isempty(_pending_down)
         scaleset,ids = pop!(_pending_down)
         @async begin
@@ -532,10 +534,12 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
 end
 
 function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
+    @debug "kill for id=$id"
     try
         remote_do(exit, id)
     catch
     end
+    @debug "kill, done remote_do"
 
     u = config.userdata
 
@@ -543,10 +547,13 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
 
     scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
     if haskey(manager.pending_down, scaleset)
+        @debug "kill, pushing worker with id=$id onto pending_down"
         push!(manager.pending_down[scaleset], u["instanceid"])
     else
+        @debug "kill, creating pending_down vector for id=$id"
         manager.pending_down[scaleset] = [u["instanceid"]]
     end
+    @debug "...kill, pushed."
     nothing
 end
 
