@@ -532,7 +532,10 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
 end
 
 function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
-    remote_do(exit, id)
+    try
+        remote_do(exit, id)
+    catch
+    end
 
     u = config.userdata
 
