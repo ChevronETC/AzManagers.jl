@@ -1196,7 +1196,7 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
         cmd *= """
         
         sudo su - $user << EOF
-        echo "$gitconfig" > ~/.gitconfig
+        echo '$gitconfig' > ~/.gitconfig
         EOF
         """
     end
