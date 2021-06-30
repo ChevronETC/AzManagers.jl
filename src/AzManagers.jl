@@ -1229,7 +1229,7 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
             
             sudo su - $user <<'EOF'
             julia -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$remote_julia_environment_name")'
-            julia -e 'using Pkg, AzManagers; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); AzManagers.robust_instantiate(); Pkg.precompile()'
+            julia -e 'using Pkg, AzManagers; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); pkg"registry up"; Pkg.activate(path); AzManagers.robust_instantiate(); Pkg.precompile()'
             touch /tmp/julia_instantiate_done
             EOF
             """
