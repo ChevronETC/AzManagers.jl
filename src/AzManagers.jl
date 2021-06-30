@@ -1292,7 +1292,15 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        julia -e '$(juliaenvstring)using AzManagers; AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
+        { # try
+            echo "mounting data disks, and starting worker"
+            julia -e '$(juliaenvstring)using AzManagers; AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)' &&
+        } || { #catch
+            echo "problem starting julia worker, running Pkg.build() and restarting the worker"
+            julia -e 'using Pkg; Pkg.build(); Pkg.precompile()'
+            echo "retry, mounting data disks, and starting worker"
+            julia -e '$(juliaenvstring)using AzManagers; AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
+        }
         EOF
         """
     else
