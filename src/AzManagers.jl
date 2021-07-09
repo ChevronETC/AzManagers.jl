@@ -1231,9 +1231,9 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
             echo "Decompressing Julia environment"
             julia -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$remote_julia_environment_name")'
             echo "Instantiating Julia environment"
-            julia -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); AzManagers.robust_instantiate()'
+            julia -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); using AzManagers; AzManagers.robust_instantiate()'
             echo "Precompiling Julia environment"
-            julia -e 'using Pkg, AzManagers; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); Pkg.precompile()'
+            julia -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); Pkg.precompile()'
             touch /tmp/julia_instantiate_done
             EOF
             """
