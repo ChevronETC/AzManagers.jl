@@ -1228,8 +1228,12 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
             cmd *= """
             
             sudo su - $user <<'EOF'
+            echo "Decompressing Julia environment"
             julia -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$remote_julia_environment_name")'
-            julia -e 'using Pkg, AzManagers; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); AzManagers.robust_instantiate(); Pkg.precompile()'
+            echo "Instantiating Julia environment"
+            julia -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); AzManagers.robust_instantiate()'
+            echo "Precompiling Julia environment"
+            julia -e 'using Pkg, AzManagers; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); Pkg.precompile()'
             touch /tmp/julia_instantiate_done
             EOF
             """
@@ -1292,7 +1296,10 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        julia -e '$(juliaenvstring)using AzManagers; AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
+        echo "mounting data disks"
+        julia -e '$(juliaenvstring)using AzManagers; AzManagers.mount_datadisks()'
+        echo "starting worker"
+        julia -e '$(juliaenvstring)using AzManagers; AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     else
