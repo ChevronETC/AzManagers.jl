@@ -617,7 +617,7 @@ end
 
 function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfig, op::Symbol)
     if op == :register
-        remote_do(AzManagers.logging, id)
+        # remote_do(AzManagers.logging, id)
     end
     if op == :interrupt
         # TODO
