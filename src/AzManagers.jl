@@ -706,7 +706,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         sock = listen(interface, Distributed.LPROC.bind_port)
     end
 
-    local client
+    client = nothing
 
     tsk_messages = nothing
     _tsk_messages = @async while isopen(sock)
@@ -715,9 +715,13 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     end
 
     tsk_heartbeat = @async while true
-        @info "now=$(now())"
-        @info "sock=$sock"
-        @info "client=$client"
+        try
+            @info "now=$(now())"
+            @info "sock=$sock"
+            @info "client=$client"
+        catch e
+            @warn "caught heartbeat error"
+            showerror(stdout, e)
         sleep(30)
     end
 
