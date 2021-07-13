@@ -710,18 +710,22 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
     client = nothing
 
-    tsk_messages = nothing
-    _tsk_messages = @async while isopen(sock)
-        client = accept(sock)
-        tsk_messages = Distributed.process_messages(client, client, true)
+    tsk_messages = @async begin
+        while true
+            sleep(30) 
+        end
     end
+    # _tsk_messages = @async while isopen(sock)
+    #     client = accept(sock)
+    #     tsk_messages = Distributed.process_messages(client, client, true)
+    # end
 
     tsk_heartbeat = @async while true
         try
             @info "now=$(now())"
-            @info "sock=$sock"
-            @info "client=$client"
-            @info "out=$out"
+            # @info "sock=$sock"
+            # @info "client=$client"
+            # @info "out=$out"
         catch e
             @warn "caught heartbeat error"
             showerror(stdout, e)
