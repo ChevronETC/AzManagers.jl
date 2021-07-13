@@ -722,6 +722,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         catch e
             @warn "caught heartbeat error"
             showerror(stdout, e)
+        end
         sleep(30)
     end
 
