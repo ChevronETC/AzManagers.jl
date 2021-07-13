@@ -698,6 +698,8 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
     Distributed.init_worker(cookie)
     interface = IPv4(Distributed.LPROC.bind_addr)
+
+    local sock
     if Distributed.LPROC.bind_port == 0
         port_hint = 9000 + (getpid() % 1000)
         (port, sock) = listenany(interface, UInt16(port_hint))
@@ -719,6 +721,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
             @info "now=$(now())"
             @info "sock=$sock"
             @info "client=$client"
+            @info "out=$out"
         catch e
             @warn "caught heartbeat error"
             showerror(stdout, e)
