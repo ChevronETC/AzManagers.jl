@@ -706,11 +706,21 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         sock = listen(interface, Distributed.LPROC.bind_port)
     end
 
+    local client
+
     tsk_messages = nothing
-    @async while isopen(sock)
+    _tsk_messages = @async while isopen(sock)
         client = accept(sock)
         tsk_messages = Distributed.process_messages(client, client, true)
     end
+
+    tsk_heartbeat = @async while true
+        @info "now=$(now())"
+        @info "sock=$sock"
+        @info "client=$client"
+        sleep(30)
+    end
+
     print(out, "julia_worker:")  # print header
     print(out, "$(string(Distributed.LPROC.bind_port))#") # print port
     print(out, Distributed.LPROC.bind_addr)
@@ -731,6 +741,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         if tsk_messages != nothing
             try
                 wait(tsk_messages)
+                @info "finished waiting for tsk_messages"
 
                 #=
                 We throw an error regardless of whether the tsk_messages task completes
