@@ -254,7 +254,7 @@ function prune()
 
     sleep(10)
     for scaleset in scalesets(manager)
-        vms = scaleset_listvms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+        vms = scaleset_listvms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose; allowed_states=("Creating", "Updating", "Succeeded"))
         vm_names = get.(vms, "name", "")
         @debug "for scaleset $(scaleset.scalesetname), vms are $vm_names"
         for (id,wrkr) in wrkrs
@@ -1473,7 +1473,7 @@ function scaleset_capacity(manager::AzManager, subscriptionid, resourcegroup, sc
     r["sku"]["capacity"]
 end
 
-function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
+function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose; allowed_states=("Succeeded", "Updating"))
     scalesetnames = list_scalesets(manager, subscriptionid, resourcegroup, nretry, verbose)
     scalesetname ∉ scalesetnames && return String[]
 
@@ -1500,7 +1500,7 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
     vms = Dict{String,String}[]
 
     for vm in _vms
-        if vm["properties"]["provisioningState"] ∈ ("Succeeded", "Updating")
+        if vm["properties"]["provisioningState"] ∈ allowed_states
             i = findfirst(id->id == vm["id"], networkinterfaces_vmids)
             if i != nothing
                 push!(vms, Dict("name"=>vm["name"], "host"=>vm["properties"]["osProfile"]["computerName"], "bindaddr"=>networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["privateIPAddress"], "instanceid"=>vm["instanceId"]))
