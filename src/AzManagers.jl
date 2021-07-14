@@ -241,6 +241,7 @@ function delete_pending_down_vms()
 end
 
 function prune()
+    @debug "pruning workers that are registered with Julia, but are not registered in the Azure scale-set"
     manager = azmanager()
     wrkrs = Dict{Int,Dict}()
     for wrkr in Distributed.PGRP.workers
@@ -255,6 +256,7 @@ function prune()
     for scaleset in scalesets(manager)
         vms = scaleset_listvms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
         vm_names = get.(vms, "name", "")
+        @info "vm_names=$vm_names"
         for (id,wrkr) in wrkrs
             is_sub = get(wrkr, "subscriptionid", "") == scaleset.subscriptionid
             is_rg = get(wrkr, "resourcegroup", "") == scaleset.resourcegroup
