@@ -266,6 +266,7 @@ function prune()
     end
 
     for pid in keys(wrkrs)
+        @debug "pruning worker with pid=$pid"
         @async Distributed.deregister_worker(pid)
     end
 end
