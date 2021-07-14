@@ -256,7 +256,7 @@ function prune()
     for scaleset in scalesets(manager)
         vms = scaleset_listvms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
         vm_names = get.(vms, "name", "")
-        @info "vm_names=$vm_names"
+        @debug "for scaleset $(scaleset.scalesetname), vms are $vm_names"
         for (id,wrkr) in wrkrs
             is_sub = get(wrkr, "subscriptionid", "") == scaleset.subscriptionid
             is_rg = get(wrkr, "resourcegroup", "") == scaleset.resourcegroup
@@ -1505,6 +1505,8 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
             if i != nothing
                 push!(vms, Dict("name"=>vm["name"], "host"=>vm["properties"]["osProfile"]["computerName"], "bindaddr"=>networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["privateIPAddress"], "instanceid"=>vm["instanceId"]))
             end
+        else
+            @debug "vm $(vm["name"]) in scaleset $scalesetname is in state $(vm["properties"]["provisioningState"])"
         end
     end
     @debug "done collating vms and nics"
