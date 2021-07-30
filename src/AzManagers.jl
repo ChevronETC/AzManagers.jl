@@ -1447,6 +1447,15 @@ function scaleset_capacity(manager::AzManager, subscriptionid, resourcegroup, sc
     r["sku"]["capacity"]
 end
 
+function scaleset_capacity!(manager::AzManager, subscriptionid, resourcegroup, scalesetname, capacity, nretry, verbose)
+    @retry nretry azrequest(
+        "PATCH",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2021-03-01",
+        ["Authorization"=>"Bearer $(token(manager.session))", "Content-Type"=>"application/json"],
+        json(Dict("sku"=>Dict("capacity"=>capacity))))
+end
+
 function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose; allowed_states=("Succeeded", "Updating"))
     scalesetnames = list_scalesets(manager, subscriptionid, resourcegroup, nretry, verbose)
     scalesetname ∉ scalesetnames && return String[]
