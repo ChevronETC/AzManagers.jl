@@ -542,8 +542,7 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     @debug "kill, done remote_do"
 
     u = config.userdata
-
-    u == nothing && (return nothing) # rely on additional workers (on an instance) not having their config.userdata populated
+    get(u, "localid", 1) > 1 && (return nothing) # an "additional" worker on an instance will have localid>1
 
     scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
     if haskey(manager.pending_down, scaleset)
@@ -666,6 +665,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
             "resourcegroup" => r["compute"]["resourceGroupName"],
             "scalesetname" => r["compute"]["vmScaleSetName"],
             "instanceid" => split(r["compute"]["resourceId"], '/')[end],
+            "localid" => 1,
             "name" => r["compute"]["name"],
             "mpi" => mpi_size > 0,
             "mpi_size" => mpi_size))
@@ -770,6 +770,43 @@ function azure_worker(cookie, master_address, master_port, ppi)
             end
         end
         sleep(60)
+    end
+end
+
+# We create our own method here so that we can add `localid` and `cnt` to `wconfig`.  This can
+# be useful when we need to understand the layout of processes that are sharing the same hardware.
+function Distributed.launch_n_additional_processes(manager::AzManager, frompid, fromconfig, cnt, launched_q)
+    @sync begin
+        exename = Distributed.notnothing(fromconfig.exename)
+        exeflags = something(fromconfig.exeflags, ``)
+        cmd = `$exename $exeflags`
+
+        new_addresses = remotecall_fetch(Distributed.launch_additional, frompid, cnt, cmd)
+        for (localid,address) in enumerate(new_addresses)
+            (bind_addr, port) = address
+
+            wconfig = Distributed.WorkerConfig()
+            for x in [:host, :tunnel, :multiplex, :sshflags, :exeflags, :exename, :enable_threaded_blas]
+                Base.setproperty!(wconfig, x, Base.getproperty(fromconfig, x))
+            end
+            wconfig.bind_addr = bind_addr
+            wconfig.port = port
+            wconfig.count = fromconfig.count
+            wconfig.userdata = Dict(
+                "localid" => localid+1,
+                "name" => fromconfig.userdata["name"],
+                "subscriptionid" => fromconfig.userdata["subscriptionid"],
+                "resourcegroup" => fromconfig.userdata["resourcegroup"],
+                "scalesetname" => fromconfig.userdata["scalesetname"])
+
+            let wconfig=wconfig
+                @async begin
+                    pid = Distributed.create_worker(manager, wconfig)
+                    remote_do(Distributed.redirect_output_from_additional_worker, frompid, pid, port)
+                    push!(launched_q, pid)
+                end
+            end
+        end
     end
 end
 
