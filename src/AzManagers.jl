@@ -402,6 +402,8 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `waitfor=false` wait for the cluster to be provisioned before returning, or return control to the caller immediately[2]
 * `mpi_ranks_per_worker=0` set the number of MPI ranks per Julia worker[3]
 * `mpi_flags="-bind-to core:\$(ENV["OMP_NUM_THREADS"]) -map-by numa"` extra flags to pass to mpirun (has effect when `mpi_ranks_per_worker>0`)
+* `nvidia_enable_ecc=true` on NVIDIA machines, ensure that ECC is set to `true` or `false` for all GPUs[4]
+* `nvidia_enable_mig=false` on NVIDIA machines, ensure that MIG is set to `true` or `false` for all GPUs[4]
 
 # Notes
 [1] If `addprocs` is called from an Azure VM, then the default `imagename`,`imageversion` are the
@@ -411,6 +413,7 @@ to monitor the size of the cluster.
 [3] This is inteneded for use with Devito.  In particular, it allows Devito to gain performance by using
 MPI to do domain decomposition using MPI within a single VM.  If `mpi_ranks_per_worker=0`, then MPI is not
 used on the Julia workers.
+[4] This may result in a re-boot of the VMs
 """
 function Distributed.addprocs(template::Dict, n::Int;
         subscriptionid = "",
@@ -433,7 +436,9 @@ function Distributed.addprocs(template::Dict, n::Int;
         maxprice = -1,
         waitfor = false,
         mpi_ranks_per_worker = 0,
-        mpi_flags = "-bind-to core:$(get(ENV, "OMP_NUM_THREADS", 1)) --map-by numa")
+        mpi_flags = "-bind-to core:$(get(ENV, "OMP_NUM_THREADS", 1)) --map-by numa",
+        nvidia_enable_ecc = true,
+        nvidia_enable_mig = false)
     n_current_workers = nprocs() == 1 ? 0 : nworkers()
 
     (subscriptionid == "" || resourcegroup == "" || user == "") && load_manifest()
@@ -447,8 +452,8 @@ function Distributed.addprocs(template::Dict, n::Int;
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
     ntotal = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename,
-        nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, spot, maxprice,
-        verbose, customenv, overprovision)
+        nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads,
+        env, spot, maxprice, verbose, customenv, overprovision)
 
     j = findfirst(scaleset->scaleset==ScaleSet(subscriptionid, resourcegroup, group), manager.scalesets)
     j == nothing && push!(manager.scalesets, ScaleSet(subscriptionid, resourcegroup, group))
@@ -1222,10 +1227,63 @@ function decompress_environment(project_compressed, manifest_compressed, remote_
     write(joinpath(Pkg.envdir(), remote_julia_environment_name, "Manifest.toml"), text)
 end
 
+function nvidia_has_nvidia_smi()
+    p = open(`nvidia-smi`)
+    wait(p)
+    success(p)
+end
+
+function nvidia_gpumode(feature)
+    p = open(`nvidia-smi --query-gpu=$feature.mode.current --format=csv`)
+    wait(p)
+    isenabled = Bool[]
+    if success(p)
+        for line in readlines(p)
+            _line = lowercase(line)
+            _line == "$feature.mode.current" || push!(isenabled, lowercase(line) == "enabled")
+        end
+    else
+        @warn "unable to retrieve status for feature='$feature'"
+    end
+    @info "NVIDIA $feature is $isenabled"
+    isenabled
+end
+
+function nvidia_gpumode!(feature, switch)
+    _switch = switch ? 1 : 0
+    p = open(`sudo nvidia-smi $feature $_switch`)
+    wait(p)
+    success(p) || @error "unable to toggle NVIDIA GPU feature='$feature' to '$_switch'."
+    @info "NVIDIA $feature is toggled to $_switch"
+end
+
+function nvidia_gpucheck(enable_ecc=true, enable_mig=false)
+    if !nvidia_has_nvidia_smi()
+        @info "no NVIDIA devices detected."
+        return
+    end
+
+    # turn on/off ECC?
+    ecc_isenabled = nvidia_gpumode("ecc")
+    switch_ecc = (!all(ecc_isenabled) && enable_ecc) || (any(ecc_isenabled) && !enable_ecc)
+    switch_ecc && nvidia_gpumode!("-e", enable_ecc)
+
+    # turn on/off MIG
+    mig_isenabled = nvidia_gpumode("mig")
+    switch_mig = (!all(mig_isenabled) && enable_mig) || (any(mig_isenabled) && !enable_mig)
+    switch_mig && nvidia_gpumode!("-mig", enable_mig)
+
+    if switch_mig || switch_ecc
+        @info "rebooting so that change to nvidia settings take effect."
+        run(`sudo reboot`)
+    end
+end
+
 function buildstartupscript(manager::AzManager, user::String, disk::AbstractString, custom_environment::Bool)
     cmd = """
     #!/bin/sh
     $disk
+    sed -i 's/ scripts-user/ [scripts-user, always]/g' /etc/cloud/cloud.cfg
     """
     
     if isfile(joinpath(homedir(), ".gitconfig"))
@@ -1267,7 +1325,6 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
             sudo su - $user <<'EOF'
             julia -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$remote_julia_environment_name")'
             julia -e 'using Pkg, AzManagers; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); pkg"registry up"; Pkg.activate(path); AzManagers.robust_instantiate(); Pkg.precompile()'
-            touch /tmp/julia_instantiate_done
             EOF
             """
         catch e
@@ -1309,7 +1366,7 @@ function build_envstring(env::Dict)
     envstring
 end
 
-function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, julia_num_threads::Int, omp_num_threads::Int, env::Dict, user::String,
+function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads::Int, omp_num_threads::Int, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool)
     cmd, remote_julia_environment_name = buildstartupscript(manager, user, disk, custom_environment)
 
@@ -1329,7 +1386,7 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        julia -e '$(juliaenvstring)using AzManagers; AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
+        julia -e '$(juliaenvstring)using AzManagers; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     else
@@ -1340,7 +1397,7 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.mount_datadisks(); AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
+        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     end
@@ -1532,7 +1589,7 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
 end
 
 function scaleset_create_or_update(manager::AzManager, user, subscriptionid, resourcegroup, scalesetname, sigimagename, sigimageversion,
-        imagename, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, spot, maxprice, verbose,
+        imagename, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, env, spot, maxprice, verbose,
         custom_environment, overprovision)
     load_manifest()
     ssh_key = _manifest["ssh_public_key_file"]
@@ -1552,7 +1609,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
     
-    cmd = buildstartupscript_cluster(manager, ppi, mpi_ranks_per_worker, mpi_flags, julia_num_threads, omp_num_threads, env, user, template["tempdisk"], custom_environment)
+    cmd = buildstartupscript_cluster(manager, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, env, user, template["tempdisk"], custom_environment)
     _cmd = base64encode(cmd)
 
     if length(_cmd) > 64_000
