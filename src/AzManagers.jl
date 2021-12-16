@@ -1230,6 +1230,9 @@ function decompress_environment(project_compressed, manifest_compressed, remote_
 end
 
 function nvidia_has_nvidia_smi()
+    if Sys.which("nvidia-smi") === nothing
+        return false
+    end
     p = open(`nvidia-smi`)
     wait(p)
     success(p)
