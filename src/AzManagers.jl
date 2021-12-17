@@ -386,6 +386,7 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `sigimagename=""` The name of the SIG image[1].
 * `sigimageversion=""` The version of the `sigimagename`[1].
 * `imagename=""` The name of the image (alternative to `sigimagename` and `sigimageversion` used for development work).
+* `osdisksize=60` The size of the OS disk in GB.
 * `customenv=false` If true, then send the current project environment to the workers where it will be instantiated.
 * `session=AzSession(;lazy=true)` The Azure session used for authentication.
 * `group="cbox"` The name of the Azure scale set.  If the scale set does not yet exist, it will be created.
@@ -421,6 +422,7 @@ function Distributed.addprocs(template::Dict, n::Int;
         sigimagename = "",
         sigimageversion = "",
         imagename = "",
+        osdisksize = 60,
         customenv = false,
         session = AzSession(;lazy=true),
         group = "cbox",
@@ -451,7 +453,7 @@ function Distributed.addprocs(template::Dict, n::Int;
     sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
-    ntotal = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename,
+    ntotal = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename, osdisksize,
         nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads,
         env, spot, maxprice, verbose, customenv, overprovision)
 
@@ -1195,7 +1197,9 @@ end
 function software_sanity_check(manager, imagename, custom_environment)
     projectinfo = Pkg.project()
     envpath = normpath(joinpath(projectinfo.path, ".."))
-    packages = TOML.parse(read(joinpath(envpath, "Manifest.toml"), String))
+    _packages = TOML.parse(read(joinpath(envpath, "Manifest.toml"), String))
+
+    packages = VERSION < v"1.7" ? _packages : _packages["deps"]
 
     if custom_environment
         for (packagename, packageinfo) in packages
@@ -1228,6 +1232,9 @@ function decompress_environment(project_compressed, manifest_compressed, remote_
 end
 
 function nvidia_has_nvidia_smi()
+    if Sys.which("nvidia-smi") === nothing
+        return false
+    end
     p = open(`nvidia-smi`)
     wait(p)
     success(p)
@@ -1589,8 +1596,8 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
 end
 
 function scaleset_create_or_update(manager::AzManager, user, subscriptionid, resourcegroup, scalesetname, sigimagename, sigimageversion,
-        imagename, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, env, spot, maxprice, verbose,
-        custom_environment, overprovision)
+        imagename, osdisksize, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads,
+        omp_num_threads, env, spot, maxprice, verbose, custom_environment, overprovision)
     load_manifest()
     ssh_key = _manifest["ssh_public_key_file"]
 
@@ -1605,6 +1612,8 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     _template = deepcopy(template["value"])
 
     _template["properties"]["virtualMachineProfile"]["osProfile"]["computerNamePrefix"] = string(scalesetname, "-")
+
+    _template["properties"]["virtualMachineProfile"]["storageProfile"]["osDisk"]["diskSizeGB"] = osdisksize
 
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
@@ -2045,6 +2054,7 @@ Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` w
 * `sigimagename=""` Azure shared image gallery image to use for the VM (defaults to the template's image)
 * `sigimageversion=""` Azure shared image gallery image version to use for the VM (defaults to latest)
 * `imagename=""` Azure image name used as an alternative to `sigimagename` and `sigimageversion` (used for development work)
+* `osdisksize=60` Disk size of the OS disk in GB
 * `customenv=false` If true, then send the current project environment to the workers where it will be instantiated.
 * `nretry=10` Max retries for re-tryable REST call failures
 * `verbose=0` Verbosity flag passes to HTTP.jl methods
@@ -2064,6 +2074,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         sigimagename = "",
         sigimageversion = "",
         imagename = "",
+        osdisksize = 60,
         nretry = 10,
         verbose = 0,
         julia_num_threads = Threads.nthreads(),
@@ -2092,6 +2103,8 @@ function addproc(vm_template::Dict, nic_template=nothing;
         haskey(nic_templates, nic_template) || error("if nic_template is a string, then the file $(templates_filename_nic()) must contain the key: $nic_template.  See AzManagers.save_template_nic.")
         nic_template = nic_templates[nic_template]
     end
+
+    vm_template["value"]["properties"]["storageProfile"]["osDisk"]["diskSizeGB"] = osdisksize
 
     vm_template["value"]["properties"]["osProfile"]["computerName"] = vmname
 

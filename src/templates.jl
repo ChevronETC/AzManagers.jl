@@ -34,6 +34,7 @@ to the `~/.azmanagers` folder.
 * `subscriptionid_image` Azure subscription corresponding to the image gallery, defaults to `subscriptionid`
 * `resourcegroup_vnet` Azure resource group corresponding to the virtual network, defaults to `resourcegroup`
 * `resourcegroup_image` Azure resource group correcsponding to the image gallery, defaults to `resourcegroup`
+* `osdisksize=60` Disk size in GB for the operating system disk
 * `skutier = "Standard"` Azure SKU tier.
 * `datadisks=[]` list of data disks to create and attach [1]
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"` cloud-init commands used to mount or link to temporary disk
@@ -63,6 +64,7 @@ function build_sstemplate(name;
         vnet,
         subnet,
         skutier="Standard",
+        osdisksize=60,
         datadisks=[],
         tempdisk="sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         skuname)
@@ -109,7 +111,8 @@ function build_sstemplate(name;
                             "managedDisk" => Dict(
                                 "storageAccountType" => "Standard_LRS"
                             ),
-                            "createOption" => "FromImage"
+                            "createOption" => "FromImage",
+                            "diskSizeGB" => osdisksize
                         ),
                         "dataDisks" => _datadisks
                     ),
@@ -239,6 +242,7 @@ or written to AzManagers.jl configuration files.
 * `subscriptionid_image` Azure subscription containing the image gallery, defaults to `subscriptionid`
 * `resourcegroup_image` Azure resource group containing the image gallery, defaults to `subscriptionid`
 * `nicname = "cbox-nic"` Name of the NIC for this VM
+* `osdisksize = 60` size in GB of the OS disk
 * `datadisks=[]` additional data disks to attach
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"`  cloud-init commands used to mount or link to temporary disk
 
@@ -261,6 +265,7 @@ function build_vmtemplate(name;
         imagegallery,
         imagename,
         vmsize,
+        osdisksize = 60,
         datadisks = [],
         tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         nicname = "cbox-nic")
@@ -302,7 +307,8 @@ function build_vmtemplate(name;
                         "managedDisk" => Dict(
                             "storageAccountType" => "Standard_LRS"
                         ),
-                        "createOption" => "FromImage"
+                        "createOption" => "FromImage",
+                        "diskSizeGB" => osdisksize
                     ),
                     "dataDisks" => _datadisks
                 ),
