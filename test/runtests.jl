@@ -6,7 +6,7 @@ session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_s
 
 azmanagers_pinfo = Pkg.project()
 pkgs=TOML.parse(read(joinpath(dirname(azmanagers_pinfo.path),"Manifest.toml"), String))
-pkg=pkgs["AzManagers"][1]
+pkg = VERSION < v"1.7.0" ? pkgs["AzManagers"][1] : pkgs["deps"]["AzManagers"][1]
 azmanagers_rev=get(pkg, "repo-rev", "")
 
 @testset "AzManagers, addprocs, ppi=$ppi" for ppi in (1,)

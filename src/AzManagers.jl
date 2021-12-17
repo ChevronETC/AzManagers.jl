@@ -1197,7 +1197,9 @@ end
 function software_sanity_check(manager, imagename, custom_environment)
     projectinfo = Pkg.project()
     envpath = normpath(joinpath(projectinfo.path, ".."))
-    packages = TOML.parse(read(joinpath(envpath, "Manifest.toml"), String))
+    _packages = TOML.parse(read(joinpath(envpath, "Manifest.toml"), String))
+
+    packages = VERSION < v"1.7" ? _packages : _packages["deps"]
 
     if custom_environment
         for (packagename, packageinfo) in packages
