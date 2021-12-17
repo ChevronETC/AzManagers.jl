@@ -50,10 +50,7 @@
       [
         "sudo apt-get -y update",
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" upgrade",
-        "sudo apt-get -y install build-essential mpich git",
-        "sudo sed -i '1 i *     soft    nofile  1000000' /etc/security/limits.conf",
-        "sudo sed -i '1 i *     hard    nofile  1000000' /etc/security/limits.conf",
-        "sudo sed -i '1 i fs.inotify.max_user_watches=65536' /etc/sysctl.conf",
+        "sudo apt-get -y install mpich git",
         "sudo mkdir -p /opt/julia",
         "cd /tmp"
       ]
