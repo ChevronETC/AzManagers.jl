@@ -1429,7 +1429,7 @@ function buildstartupscript_detached(manager::AzManager, julia_num_threads::Int,
     export OMP_NUM_THREADS=$omp_num_threads
     ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N '' <<<y
     cd /home/$user
-    julia -e '$(juliaenvstring)using AzManagers; AzManagers.mount_datadisks(); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
+    julia -e '$(juliaenvstring)using AzManagers; AzManagers.mount_datadisks(); AzManagers.detached_port!($(AzManagers.detached_port())); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
     EOF
     """
 
@@ -1762,6 +1762,13 @@ let DETACHED_ID::Int = 1
     detached_nextid() = (id = DETACHED_ID; DETACHED_ID += 1; id)
 end
 
+let DETACHED_PORT::Int = 8081
+    global detached_port
+    detached_port() = DETACHED_PORT
+    global detached_port!
+    detached_port!(port) = DETACHED_PORT = port
+end
+
 function timestamp_metaformatter(level::Logging.LogLevel, _module, group, id, file, line)
     @nospecialize
     timestamp = Dates.format(now(), "yyyy-mm-ddTHH:MM:SS")
@@ -1771,7 +1778,7 @@ function timestamp_metaformatter(level::Logging.LogLevel, _module, group, id, fi
     color, prefix, suffix
 end
 
-function detachedservice(port=8081, address=ip"0.0.0.0"; server=nothing, subscriptionid="", resourcegroup="", vmname="")
+function detachedservice(address=ip"0.0.0.0"; server=nothing, subscriptionid="", resourcegroup="", vmname="")
     HTTP.@register(DETACHED_ROUTER, "POST", "/cofii/detached/run", detachedrun)
     HTTP.@register(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/kill", detachedkill)
     HTTP.@register(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/wait", detachedwait)
@@ -1781,8 +1788,10 @@ function detachedservice(port=8081, address=ip"0.0.0.0"; server=nothing, subscri
     HTTP.@register(DETACHED_ROUTER, "GET", "/cofii/detached/ping", detachedping)
     HTTP.@register(DETACHED_ROUTER, "GET", "/cofii/detached/vm", detachedvminfo)
 
+    port = detached_port()
+
     AzManagers.DETACHED_VM[] = Dict("subscriptionid"=>string(subscriptionid), "resourcegroup"=>string(resourcegroup),
-        "name"=>string(vmname), "ip"=>string(getipaddr()))
+        "name"=>string(vmname), "ip"=>string(getipaddr()), "port"=>string(port))
 
     global_logger(ConsoleLogger(stdout, Logging.Info; meta_formatter=timestamp_metaformatter))
 
@@ -2222,7 +2231,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     r = JSON.parse(String(_r.body))
 
     vm = Dict("name"=>vmname, "ip"=>string(r["properties"]["ipConfigurations"][1]["properties"]["privateIPAddress"]),
-        "subscriptionid"=>string(subscriptionid), "resourcegroup"=>string(resourcegroup))
+        "subscriptionid"=>string(subscriptionid), "resourcegroup"=>string(resourcegroup), "port"=>string(detached_port()))
 
     if detachedservice
         detached_service_wait(vm, customenv)
@@ -2388,8 +2397,8 @@ struct DetachedJob
     pid::String
     logurl::String
 end
-DetachedJob(ip, id) = DetachedJob(Dict("ip"=>string(ip)), string(id), "-1", "")
-DetachedJob(ip, id, pid) = DetachedJob(Dict("ip"=>string(ip)), string(id), string(pid), "")
+DetachedJob(ip, id; port=detached_port()) = DetachedJob(Dict("ip"=>string(ip), "port"=>string(port)), string(id), "-1", "")
+DetachedJob(ip, id, pid; port=detached_port()) = DetachedJob(Dict("ip"=>string(ip), "port"=>string(port)), string(id), string(pid), "")
 
 function loguri(job::DetachedJob)
     job.logurl
@@ -2405,7 +2414,7 @@ function detached_service_wait(vm, custom_environment)
     while true
         if time() - tic > 5
             try
-                r = HTTP.request("GET", "http://$(vm["ip"]):8081/cofii/detached/ping")
+                r = HTTP.request("GET", "http://$(vm["ip"]):$(vm["port"])/cofii/detached/ping")
                 break
             catch
                 tic = time()
@@ -2418,13 +2427,13 @@ function detached_service_wait(vm, custom_environment)
             error("reached timeout ($timeout seconds) while waiting for $waitfor to start.")
         end
         
-        write(stdout, spin(spincount, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]), to start.\r")
+        write(stdout, spin(spincount, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
         flush(stdout)
         spincount = spincount == 4 ? 1 : spincount + 1
         
         sleep(0.5)
     end
-    write(stdout, spin(5, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]), to start.\r")
+    write(stdout, spin(5, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
     write(stdout, "\n")
 end
 
@@ -2469,7 +2478,7 @@ for more information.
 """
 variablebundle(key) = AzManagers.VARIABLE_BUNDLE[Symbol(key)]
 
-function detached_run(code, ip::String="";
+function detached_run(code, ip::String="", port=detached_port();
         persist=true,
         vm_template = "",
         customenv = false,
@@ -2503,7 +2512,7 @@ function detached_run(code, ip::String="";
     else
         r = HTTP.request(
             "GET",
-            "http://$ip:8081/cofii/detached/vm")
+            "http://$ip:$port/cofii/detached/vm")
         vm = JSON.parse(String(r.body))
     end
 
@@ -2518,16 +2527,16 @@ function detached_run(code, ip::String="";
 
     _r = HTTP.request(
         "POST",
-        "http://$(vm["ip"]):8081/cofii/detached/run",
+        "http://$(vm["ip"]):$(vm["port"])/cofii/detached/run",
         Dict("Content-Type"=>"application/json"),
         json(body))
     r = JSON.parse(String(_r.body))
 
-    @info "detached job id is $(r["id"]) at $(vm["name"]),$(vm["ip"])"
+    @info "detached job id is $(r["id"]) at $(vm["name"]),$(vm["ip"]):$(vm["port"])"
     DetachedJob(vm, string(r["id"]), string(r["pid"]), "")
 end
 
-detached_run(code, vm::Dict; kwargs...) = detached_run(code, vm["ip"]; kwargs...)
+detached_run(code, vm::Dict; kwargs...) = detached_run(code, vm["ip"], vm["port"]; kwargs...)
 
 """
     read(job[;stdio=stdout])
@@ -2537,7 +2546,7 @@ returns the stdout from a detached job.
 function Base.read(job::DetachedJob; stdio=stdout)
     r = HTTP.request(
         "GET",
-        "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/$(stdio==stdout ? "stdout" : "stderr")", readtimeout=60)
+        "http://$(job.vm["ip"]):$(job.vm["port"])/cofii/detached/job/$(job.id)/$(stdio==stdout ? "stdout" : "stderr")", readtimeout=60)
     String(r.body)
 end
 
@@ -2552,7 +2561,7 @@ function status(job::DetachedJob)
         # the timeout is needed in the event that the vm is deleted
         _r = HTTP.request(
             "GET",
-            "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/status", readtimeout=60)
+            "http://$(job.vm["ip"]):$(job.vm["port"])/cofii/detached/job/$(job.id)/status", readtimeout=60)
         r = JSON.parse(String(_r.body))
         _r = r["status"]
     catch e
@@ -2570,7 +2579,7 @@ blocks until the detached job, `job`, is complete.
 function Base.wait(job::DetachedJob)
     HTTP.request(
         "POST",
-        "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/wait")
+        "http://$(job.vm["ip"]):$(job.vm["port"])/cofii/detached/job/$(job.id)/wait")
 end
 
 """
@@ -2581,7 +2590,7 @@ kill the linux process associated with `job`
 function Base.kill(job::DetachedJob)
     HTTP.request(
         "POST",
-        "http://$(job.vm["ip"]):8081/cofii/detached/job/$(job.id)/kill")
+        "http://$(job.vm["ip"]):$(job.vm["port"])/cofii/detached/job/$(job.id)/kill")
 end
 
 export AzManager, DetachedJob, addproc, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
