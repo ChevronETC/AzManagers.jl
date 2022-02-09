@@ -1015,9 +1015,11 @@ function start_worker_mpi_rank0(out::IO, cookie::AbstractString=readline(stdin);
     else
         sock = listen(interface, Distributed.LPROC.bind_port)
     end
+
+    tsk_messages = nothing
     @async while isopen(sock)
         client = accept(sock)
-        process_messages_mpi_rank0(client, client, true)
+        tsk_messages = process_messages_mpi_rank0(client, client, true)
     end
     print(out, "julia_worker:")  # print header
     print(out, "$(string(Distributed.LPROC.bind_port))#") # print port
@@ -1032,17 +1034,30 @@ function start_worker_mpi_rank0(out::IO, cookie::AbstractString=readline(stdin);
         println(out, "PID = $(getpid())")
     end
 
-    try
-        # To prevent hanging processes on remote machines, newly launched workers exit if the
-        # master process does not connect in time.
-        Distributed.check_master_connect()
-        while true; wait(); end
-    catch err
-        print(stderr, "unhandled exception on $(myid()): $(err)\nexiting.\n")
-    end
+    manager = azmanager()
+    manager.worker_socket = out
 
+    while true
+        if tsk_messages != nothing
+            try
+                wait(tsk_messages)
+
+                #=
+                We throw an error regardless of whether the tsk_messages task completes
+                or throws an error.  We throw when it complete due to the complex error
+                handling in the Distributed.process_messages method.  We can be a bit
+                messy about process clean-up here since when we remove a worker from the
+                cluster, we delete the corresponding Azure VM.
+                =#
+                error("")
+            catch e
+                close(sock)
+                throw(e)
+            end
+        end
+        sleep(10)
+    end
     close(sock)
-    exit(0)
 end
 
 #
@@ -1404,7 +1419,8 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
         export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
+        julia -e '$(juliaenvstring)using AzManagers; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
+        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     end
