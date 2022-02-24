@@ -2,6 +2,18 @@ module AzManagers
 
 using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, JSON, LibGit2, Logging, MPI, Pkg, Printf, Random, Serialization, Sockets, TOML
 
+function logerror(e, loglevel=Logging.Info)
+    io = IOBuffer()
+    showerror(io, e)
+    write(io, "\n\terror type: $(typeof(e))\n")
+    for (exc, bt) in Base.catch_stack()
+        showerror(io, exc, bt)
+        println(io)
+    end
+    @logmsg loglevel String(take!(io))
+    close(io)
+end
+
 const _manifest = Dict("resourcegroup"=>"", "ssh_user"=>"", "ssh_private_key_file"=>"", "ssh_public_key_file"=>"", "subscriptionid"=>"")
 
 manifestpath() = joinpath(homedir(), ".azmanagers")
@@ -67,8 +79,10 @@ status(e) = 999
 function retrywarn(i, retries, s, e)
     if isa(e, HTTP.ExceptionRequest.StatusError)
         @debug "$(e.status): $(String(e.response.body)), retry $i of $retries, retrying in $s seconds"
+        logerror(e, Logging.Debug)
     else
         @warn "warn: $(typeof(e)) -- retry $i, retrying in $s seconds"
+        logerror(e, Logging.Warn)
     end
 end
 
@@ -192,10 +206,7 @@ function scaleset_monitor()
             end
         catch e
             @error "scaleset monitor error:"
-            for (exc, bt) in Base.catch_stack()
-                showerror(stderr, exc, bt)
-                println()
-            end
+            logerror(e, Logging.Error)
         end
     end
 end
@@ -233,8 +244,7 @@ function delete_pending_down_vms()
                 delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
             catch e
                 @error "error deleting scaleset vms, manual clean-up may be required."
-                showerror(stdout, e)
-                stacktrace(catch_backtrace())
+                logerror(e, Logging.Error)
             end
         end
     end
@@ -287,10 +297,7 @@ function add_pending_connections()
             end
         catch
             @error "AzManagers, error adding pending connection"
-            for (exc, bt) in Base.catch_stack()
-                showerror(stderr, exc, bt)
-                println()
-            end
+            logerror(e, Logging.Error)
         end
     end
 end
@@ -303,10 +310,7 @@ function Distributed.addprocs(manager::AzManager; socket)
     catch
         if manager.verbose > 0
             @error "AzManagers, error processing pending connection"
-            for (exc, bt) in Base.catch_stack()
-                showerror(stderr, exc, bt)
-                println()
-            end
+            logerror(e, Logging.Error)
         end
     end
 end
@@ -321,10 +325,7 @@ function process_pending_connections()
         catch
             if manager.verbose > 0
                 @error "AzManagers, error retrieving pending connection"
-                for (exc, bt) in Base.catch_stack()
-                    showerror(stderr, exc, bt)
-                    println()
-                end
+                logerror(e, Logging.Error)
             end
             return
         end
@@ -349,7 +350,7 @@ function spinner(n_target_workers)
         _nworkers = nprocs() == 1 ? 0 : nworkers()
     catch e
         @warn "error during startup:"
-        showerror(stderr, e)
+        logerror(e, Logging.Warn)
     end
     while nprocs() == 1 || nworkers() != n_target_workers
         try
@@ -365,7 +366,7 @@ function spinner(n_target_workers)
             sleep(.25)
         catch e
             @warn "error during startup:"
-            showerror(stderr, e)
+            logerror(e, Logging.Warn)
         end
     end
     _nworkers = nprocs() == 1 ? 0 : nworkers()
@@ -487,10 +488,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     catch
         if manger.verbose > 0
             @error "unable to read cookie from socket"
-            for (exc, bt) in Base.catch_stack()
-                showerror(stderr, exc, bt)
-                println()
-            end
+            logerror(e, Logging.Error)
         end
         return
     end
@@ -504,10 +502,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     catch
         if manager.verbose > 0
             @error "unable to read connection string from socket"
-            for (exc, bt) in Base.catch_stack()
-                showerror(stderr, exc, bt)
-                println()
-            end
+            logerror(e, Logging.Error)
         end
         return
     end
@@ -520,10 +515,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     catch
         if manager.verbose > 0
             @error "unable to parse connection string, string=$connection_string, cookie=$cookie"
-            for (exc, bt) in Base.catch_stack()
-                showerror(stderr, exc, bt)
-                println()
-            end
+            logerror(e, Logging.Error)
         end
         return
     end
@@ -772,6 +764,7 @@ function azure_worker(cookie, master_address, master_port, ppi)
             azure_worker_start(c, cookie)
         catch e
             @error "error starting worker, attempt $itry, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
+            logerror(e, Logging.Error)
             if itry > 10
                 throw(e)
             end
@@ -992,10 +985,9 @@ function message_handler_loop_mpi_rankN()
             wait(tsk)
             MPI.Barrier(comm)
         catch e
-            io = IOBuffer()
-            showerror(io, e)
-            @warn "MPI - message_handler_loop_mpi -- caught error: $(String(take!(io)))"
-        end    
+            @warn "MPI - message_handler_loop_mpi"
+            logerror(e, Logging.Warn)
+        end
     end
 end
 
@@ -1351,11 +1343,7 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
             """
         catch e
             @warn "Unable to use a custom environment."
-            showerror(stderr, e)
-            for (exc, bt) in Base.catch_stack()
-                showerror(stderr, exc, bt)
-                println()
-            end
+            logerror(e, Logging.Warn)
         end
     end
 
@@ -1751,7 +1739,7 @@ function mount_datadisks()
                         @info "done mounting data disk with lun $lun ($name)"
                     catch e
                         @error "caught error formatting mounting data disk lun=$lun ($name)"
-                        showerror(stderr, e)
+                        logerror(e, Logging.Error)
                         run(`sudo rm -rf /scratch$lun`)
                     end
                 end
@@ -1759,10 +1747,7 @@ function mount_datadisks()
         end
     catch
         @error "caught error formatting/mounting data disks"
-        for (exc, bt) in Base.catch_stack()
-            showerror(stderr, exc, bt)
-            println()
-        end
+        logerror(e, Logging.Error)
     end
 end
 
@@ -1900,7 +1885,7 @@ function detachedrun(request::HTTP.Request)
         DETACHED_JOBS[string(id)] = Dict("process"=>process, "request"=>request, "stdout"=>outfile, "stderr"=>errfile, "codefile"=>_tempname, "code"=>code)
     catch e
         io = IOBuffer()
-        showerror(io, e, catch_backtrace())
+        logerror(e, Logging.Warn)
         return HTTP.Response(500, Dict("Content-Type"=>"application/json"); body=json(Dict("error"=>String(take!(io)))))
     end
 
@@ -2031,8 +2016,7 @@ function detachedwait(request::HTTP.Request)
         process = DETACHED_JOBS[id]["process"]
         wait(process)
     catch e
-        io = IOBuffer()
-        showerror(io, e)
+        logerror(e, Logging.Error)
 
         write(io, "\n\n")
 
