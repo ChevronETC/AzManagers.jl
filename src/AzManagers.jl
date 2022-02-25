@@ -189,7 +189,7 @@ end
 function scaleset_monitor()
     manager = azmanager()
     tic = time()
-    interval = get(ENV, "JULIA_AZMANAGERS_POLL_INTERVAL", 60)
+    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_POLL_INTERVAL", "60"))
     while true
         try
             sleep(interval)
