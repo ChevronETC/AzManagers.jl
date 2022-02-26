@@ -267,7 +267,8 @@ function prune()
     end
 
     sleep(10)
-    for scaleset in keys(scalesets(manager))
+    _scalesets = scalesets(manager)
+    for scaleset in keys(_scalesets)
         vms = scaleset_listvms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose; allowed_states=("Creating", "Updating", "Succeeded"))
         vm_names = get.(vms, "name", "")
         for (id,wrkr) in wrkrs
@@ -276,6 +277,7 @@ function prune()
             is_ss = get(wrkr, "scalesetname", "") == scaleset.scalesetname
             if is_sub && is_rg && is_ss && get(wrkr, "name", "") ∈ vm_names
                 delete!(wrkrs, id)
+                _scalesets[scaleset] -= 1
             end
         end
     end
@@ -564,17 +566,25 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
 end
 
 """
-    nworkers_provisioned()
+    nworkers_provisioned([service=false])
 
 Count of the number of scale-set machines that are provisioned
-regardless if their status within the Julia cluster.
+regardless if their status within the Julia cluster.  If `service=true`,
+then we use the Azure scale-set service to make the count, otherwise
+we use client side book-keeeping.  The later is useful to avoid making
+too many requests to the Azure scale-set service, causing it to throttle
+future responses.
 """
-function nworkers_provisioned()
+function nworkers_provisioned(service=false)
     manager = azmanager()
+    _scalesets = scalesets(manager)
+
     n = 0
-    if isdefined(manager, :scalesets)
-        for scaleset in keys(manager.scalesets)
+    for (scaleset, N) in _scalesets
+        if service
             n += scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+        else
+            n += N
         end
     end
     n
