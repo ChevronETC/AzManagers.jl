@@ -142,7 +142,7 @@ mutable struct AzManager <: ClusterManager
     session::AzSessionAbstract
     nretry::Int
     verbose::Int
-    scalesets::Vector{ScaleSet}
+    scalesets::Dict{ScaleSet,Int}
     pending_up::Channel{TCPSocket}
     pending_down::Dict{ScaleSet,Vector{String}}
     port::UInt16
@@ -168,11 +168,12 @@ function azmanager!(session, nretry, verbose)
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(32)
     _manager.pending_down = Dict{ScaleSet,Vector{Int}}()
-    _manager.scalesets = Vector{ScaleSet}[]
+    _manager.scalesets = Dict{ScaleSet,Int}()
     _manager.task_add = @async add_pending_connections()
     _manager.task_process = @async process_pending_connections()
 
-    @async scaleset_monitor()
+    @async scaleset_pruning()
+    @async scaleset_cleaning()
 
     _manager
 end
@@ -182,72 +183,76 @@ azmanager() = _manager
 function __init__()
     if myid() == 1
         atexit(AzManagers.delete_scalesets)
-        atexit(AzManagers.delete_pending_down_vms)
     end
 end
 
-function scaleset_monitor()
-    manager = azmanager()
-    tic = time()
-    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_POLL_INTERVAL", "60"))
+function scaleset_pruning()
+    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
+
     while true
         try
-            sleep(interval)
-            delete_empty_scalesets()
-            delete_pending_down_vms()
-
             #=
             The following seems required for an over-provisioned scaleset. it
             is not clear why this is needed.
             =#
-            if time() - tic > 60
-                tic = time()
-                prune()
-            end
+            prune()
+            sleep(interval)
         catch e
-            @error "scaleset monitor error:"
+            @error "scaleset pruning error"
             logerror(e, Logging.Error)
         end
     end
 end
 
-scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : ScaleSet[]
+function scaleset_cleaning()
+    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_CLEAN_POLL_INTERVAL", "60"))
+
+    while true
+        try
+            sleep(interval)
+            delete_pending_down_vms()
+            delete_empty_scalesets()
+        catch e
+            @error "scaleset cleaning error"
+            logerror(e, Logging.Error)
+        end
+    end
+end
+
+scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : Dict{ScaleSet,Int}()
 scalesets() = scalesets(azmanager())
 pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Vector{String}}()
 
 function delete_empty_scalesets()
     manager = azmanager()
-    idxs = Int[]
-    for (j,scaleset) in enumerate(scalesets(manager))
-        scalesets = list_scalesets(manager, scaleset.subscriptionid, scaleset.resourcegroup, manager.nretry, manager.verbose)
-        if scaleset.scalesetname ∈ scalesets
-            if scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose) == 0
+    for (scaleset, capacity) in scalesets(manager)
+        if capacity == 0
+            @debug "deleting empty scaleset, $scaleset"
+            try
                 rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
-                push!(idxs, j)
+            catch e
+                @warn "unable to remove scaleset $(scaleset.resourcegroup), $(scaleset.scalesetname)"
             end
-        else
-            push!(idxs, j)
+            delete!(scalesets(manager), scaleset)
         end
     end
-    deleteat!(scalesets(manager), idxs)
 end
 
 function delete_pending_down_vms()
-    @debug "deleting pending down vms"
     manager = azmanager()
-    _pending_down = pending_down(manager)
-    @debug "pending down=$_pending_down"
-    @sync while !isempty(_pending_down)
-        scaleset,ids = pop!(_pending_down)
-        @async begin
-            try
-                delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
-            catch e
-                @error "error deleting scaleset vms, manual clean-up may be required."
-                logerror(e, Logging.Error)
-            end
+
+    for (scaleset, ids) in pending_down(manager)
+        @debug "deleting pending down vms $ids in $scaleset"
+        try
+            delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
+            scalesets(manager)[scaleset] -= length(ids)
+        catch e
+            @error "error deleting scaleset vms, manual clean-up may be required."
+            logerror(e, Logging.Error)
         end
     end
+    empty!(pending_down(manager))
+    nothing
 end
 
 function prune()
@@ -262,7 +267,7 @@ function prune()
     end
 
     sleep(10)
-    for scaleset in scalesets(manager)
+    for scaleset in keys(scalesets(manager))
         vms = scaleset_listvms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose; allowed_states=("Creating", "Updating", "Succeeded"))
         vm_names = get.(vms, "name", "")
         for (id,wrkr) in wrkrs
@@ -282,8 +287,7 @@ end
 
 function delete_scalesets()
     manager = azmanager()
-    _scalesets = scalesets(manager)
-    @sync for scaleset in _scalesets
+    @sync for scaleset in keys(scalesets(manager))
         @async rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
     end
 end
@@ -458,8 +462,12 @@ function Distributed.addprocs(template::Dict, n::Int;
         nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads,
         env, spot, maxprice, verbose, customenv, overprovision)
 
-    j = findfirst(scaleset->scaleset==ScaleSet(subscriptionid, resourcegroup, group), manager.scalesets)
-    j == nothing && push!(manager.scalesets, ScaleSet(subscriptionid, resourcegroup, group))
+    scaleset = ScaleSet(subscriptionid, resourcegroup, group)
+    if haskey(manager.scalesets, scaleset)
+        manager.scalesets[scaleset] += n
+    else
+        manager.scalesets[scaleset] = n
+    end
 
     if waitfor
         @info "Initiating cluster..."
@@ -559,13 +567,13 @@ end
     nworkers_provisioned()
 
 Count of the number of scale-set machines that are provisioned
-regardless if their status withing the Julia cluster.
+regardless if their status within the Julia cluster.
 """
 function nworkers_provisioned()
     manager = azmanager()
     n = 0
     if isdefined(manager, :scalesets)
-        for scaleset in manager.scalesets
+        for scaleset in keys(manager.scalesets)
             n += scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
         end
     end
