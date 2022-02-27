@@ -117,6 +117,15 @@ macro retry(retries, ex::Expr)
 end
 
 function azrequest(rtype, verbose, url, headers, body=nothing)
+    if contains(url, "virtualMachineScaleSets")
+        manager = azmanager()
+        if isdefined(manager, :scaleset_request_counter)
+            manager.scaleset_request_counter += 1
+        else
+            manager.scaleset_request_counter = 1
+        end
+    end
+
     options = (retry=false, status_exception=false)
     if body == nothing
         r = HTTP.request(rtype, url, headers; verbose=verbose, options...)
@@ -129,6 +138,15 @@ function azrequest(rtype, verbose, url, headers, body=nothing)
     end
     
     r
+end
+
+function scaleset_request_counter()
+    manager = azmanager()
+    if isdefined(manager, :scaleset_request_counter)
+        return manager.scaleset_request_counter
+    else
+        return 1
+    end
 end
 
 struct ScaleSet
@@ -150,6 +168,8 @@ mutable struct AzManager <: ClusterManager
     worker_socket::TCPSocket
     task_add::Task
     task_process::Task
+    lock::ReentrantLock
+    scaleset_request_counter::Int
 
     AzManager() = new()
 end
@@ -171,6 +191,8 @@ function azmanager!(session, nretry, verbose)
     _manager.scalesets = Dict{ScaleSet,Int}()
     _manager.task_add = @async add_pending_connections()
     _manager.task_process = @async process_pending_connections()
+    _manager.lock = ReentrantLock()
+    _manager.scaleset_request_counter = 0
 
     @async scaleset_pruning()
     @async scaleset_cleaning()
@@ -212,6 +234,7 @@ function scaleset_cleaning()
             sleep(interval)
             delete_pending_down_vms()
             delete_empty_scalesets()
+            scaleset_sync()
         catch e
             @error "scaleset cleaning error"
             logerror(e, Logging.Error)
@@ -225,6 +248,7 @@ pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.p
 
 function delete_empty_scalesets()
     manager = azmanager()
+    lock(manager.lock)
     for (scaleset, capacity) in scalesets(manager)
         if capacity == 0
             @debug "deleting empty scaleset, $scaleset"
@@ -236,23 +260,47 @@ function delete_empty_scalesets()
             delete!(scalesets(manager), scaleset)
         end
     end
+    unlock(manager.lock)
 end
 
 function delete_pending_down_vms()
     manager = azmanager()
+    lock(manager.lock)
 
     for (scaleset, ids) in pending_down(manager)
         @debug "deleting pending down vms $ids in $scaleset"
         try
             delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
-            scalesets(manager)[scaleset] -= length(ids)
+            delete!(pending_down(manager), scaleset)
+            scalesets(manager)[scaleset] = max(0, scalesets(manager)[scaleset] - length(ids))
         catch e
             @error "error deleting scaleset vms, manual clean-up may be required."
             logerror(e, Logging.Error)
         end
     end
-    empty!(pending_down(manager))
+    unlock(manager.lock)
     nothing
+end
+
+# sync server and client side views of the resources
+function scaleset_sync()
+    manager = azmanager()
+    lock(manager.lock)
+    try
+        _pending_down = pending_down(manager)
+        pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
+        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
+            @debug "client/server scaleset book-keeping mismatch, synching client to server."
+            _scalesets = scalesets(manager)
+            for scaleset in keys(_scalesets)
+                _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+            end
+        end
+    catch e
+        @error "scaleset syncing error"
+        logerror(e)
+    end
+    unlock(manager.lock)
 end
 
 function prune()
@@ -277,12 +325,12 @@ function prune()
             is_ss = get(wrkr, "scalesetname", "") == scaleset.scalesetname
             if is_sub && is_rg && is_ss && get(wrkr, "name", "") ∈ vm_names
                 delete!(wrkrs, id)
-                _scalesets[scaleset] -= 1
             end
         end
     end
 
     for pid in keys(wrkrs)
+        @info "pruning worker $pid"
         @async Distributed.deregister_worker(pid)
     end
 end
@@ -455,21 +503,20 @@ function Distributed.addprocs(template::Dict, n::Int;
     resourcegroup == "" && (resourcegroup = _manifest["resourcegroup"])
     user == "" && (user = _manifest["ssh_user"])
 
-    @info "Provisioning scale-set..."
     manager = azmanager!(session, nretry, verbose)
     sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
-    ntotal = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename, osdisksize,
+
+    @async delete_pending_down_vms()
+
+    _scalesets = scalesets(manager)
+    scaleset = ScaleSet(subscriptionid, resourcegroup, group)
+
+    @info "Provisioning $n virtual machines in scale-set $group..."
+    _scalesets[scaleset] = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename, osdisksize,
         nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads,
         env, spot, maxprice, verbose, customenv, overprovision)
-
-    scaleset = ScaleSet(subscriptionid, resourcegroup, group)
-    if haskey(manager.scalesets, scaleset)
-        manager.scalesets[scaleset] += n
-    else
-        manager.scalesets[scaleset] = n
-    end
 
     if waitfor
         @info "Initiating cluster..."
