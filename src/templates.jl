@@ -38,6 +38,7 @@ to the `~/.azmanagers` folder.
 * `skutier = "Standard"` Azure SKU tier.
 * `datadisks=[]` list of data disks to create and attach [1]
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"` cloud-init commands used to mount or link to temporary disk
+* `accelerated_networking = false`
 
 # Notes
 [1] Each datadisk is a Dictionary. For example,
@@ -63,6 +64,7 @@ function build_sstemplate(name;
         imagename,
         vnet,
         subnet,
+        accelerated_networking = false,
         skutier="Standard",
         osdisksize=60,
         datadisks=[],
@@ -132,6 +134,7 @@ function build_sstemplate(name;
                                 "name" => name,
                                 "properties" => Dict(
                                     "primary" => true,
+                                    "enableAcceleratedNetworking" => accelerated_networking,
                                     "ipConfigurations" => [
                                         Dict(
                                             "name" => name,
