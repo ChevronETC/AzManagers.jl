@@ -94,7 +94,7 @@ macro retry(retries, ex::Expr)
                 r = $(esc(ex))
                 break
             catch e
-                (i <= $(esc(retries)) && isretryable(e)) || rethrow(e)
+                isretryable(e) || throw(e)
                 maximum_backoff = 256
                 local s
                 if status(e) == 429
@@ -109,6 +109,7 @@ macro retry(retries, ex::Expr)
                     s = min(2.0^(i-1), maximum_backoff) + rand()
                 end
                 retrywarn(i, $(esc(retries)), s, e)
+                i == $(esc(retries)) && throw(e)
                 sleep(s)
             end
         end
