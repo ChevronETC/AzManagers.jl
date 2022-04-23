@@ -117,7 +117,7 @@ function build_sstemplate(name;
                         "dataDisks" => _datadisks
                     ),
                     "osProfile" => Dict(
-                        "computerNamePrefix" => name,
+                        "computerNamePrefix" => replace(name, "+"=>"plus"),
                         "adminUsername" => admin_username,
                         "linuxConfiguration" => Dict(
                             "ssh" => Dict(
@@ -129,12 +129,12 @@ function build_sstemplate(name;
                     "networkProfile" => Dict(
                         "networkInterfaceConfigurations" => [
                             Dict(
-                                "name" => name,
+                                "name" => replace(name, "+"=>"plus"),
                                 "properties" => Dict(
                                     "primary" => true,
                                     "ipConfigurations" => [
                                         Dict(
-                                            "name" => name,
+                                            "name" => replace(name, "+"=>"plus"),
                                             "properties" => Dict(
                                                 "subnet" => Dict(
                                                     "id" => subnetid
