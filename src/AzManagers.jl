@@ -1765,7 +1765,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
 end
 
 function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, ids, nretry, verbose)
-    body = Dict("instanceIds"=>ids)
+    body = Dict("instanceIds"=>unique(ids))
     @retry nretry azrequest(
         "POST",
         verbose,
