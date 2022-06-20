@@ -25,7 +25,7 @@ UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 [compat]
 AzSessions = "1"
 CodecZlib = "0.7"
-HTTP = "0.8, 0.9"
+HTTP = "0.8, 0.9, 1"
 JSON = "0.21"
 MPI = "0.14, 0.15, 0.16, 0.17, 0.18, 0.19"
 TOML = "1"
