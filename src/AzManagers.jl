@@ -68,7 +68,10 @@ function isretryable(e::HTTP.StatusError)
     false
 end
 isretryable(e::Base.IOError) = true
-isretryable(e::HTTP.IOExtras.IOError) = isretryable(e.e)
+isretryable(e::HTTP.Exceptions.ConnectError) = true
+isretryable(e::HTTP.Exceptions.HTTPError) = true
+isretryable(e::HTTP.Exceptions.RequestError) = true
+isretryable(e::HTTP.Exceptions.TimeoutError) = true
 isretryable(e::Base.EOFError) = true
 isretryable(e::Sockets.DNSError) = true
 isretryable(e) = false
@@ -134,7 +137,7 @@ function azrequest(rtype, verbose, url, headers, body=nothing)
     end
     
     if r.status >= 300
-        throw(HTTP.ExceptionRequest.StatusError(r.status, r))
+        throw(HTTP.Exceptions.StatusError(r.status, r.request.method, r.request.target, r))
     end
     
     r
@@ -671,7 +674,7 @@ function rmgroup(manager::AzManager, subscriptionid, resourcegroup, groupname, n
                 "DELETE",
                 verbose,
                 "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$groupname?api-version=2019-12-01",
-                Dict("Authorization"=>"Bearer $(token(manager.session))"))
+                ["Authorization" => "Bearer $(token(manager.session))"])
         catch
         end
     end
@@ -700,7 +703,7 @@ Check to see if the machine `id::Int` has received an Azure spot preempt message
 true if a preempt message is received and false otherwise.
 """
 function preempted()
-    _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2019-08-01", Dict("Metadata"=>"true"))
+    _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2019-08-01", ["Metadata"=>"true"])
     r = JSON.parse(String(_r.body))
     for event in r["Events"]
         if get(event, "EventType", "") == "Preempt"
@@ -719,7 +722,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
     nbytes_written == Distributed.HDR_COOKIE_LEN || error("unable to write bytes")
     flush(c)
 
-    _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2020-06-01", Dict("Metadata"=>"true"); redirect=false)
+    _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2020-06-01", ["Metadata"=>"true"]; redirect=false)
     r = JSON.parse(String(_r.body))
     vm = Dict(
         "bind_addr" => string(getipaddr(IPv4)),
@@ -1130,7 +1133,7 @@ function is_vm_in_scaleset(manager::AzManager, config::WorkerConfig)
         "GET",
         manager.verbose,
         "https://management.azure.com/subscriptions/$(u["subscriptionid"])/resourceGroups/$(u["resourcegroup"])/providers/Microsoft.Compute/virtualMachineScaleSets/$(u["scalesetname"])/virtualMachines?api-version=2019-12-01",
-        Dict("Authorization"=>"Bearer $(token(manager.session))"))
+        ["Authorization"=>"Bearer $(token(manager.session))"])
 
     hasit = false
     r = JSON.parse(String(_r.body))
@@ -1150,7 +1153,7 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
 
     # get machines' metadata
     t = @async begin
-        r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute/storageProfile/imageReference?api-version=2019-06-01", Dict("Metadata"=>"true"); retry=false, redirect=false)
+        r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute/storageProfile/imageReference?api-version=2019-06-01", ["Metadata"=>"true"]; retry=false, redirect=false)
     end
     tic = time()
     while !istaskdone(t)
@@ -1201,7 +1204,7 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
                     "GET",
                     manager.verbose,
                     "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions?api-version=2019-07-01",
-                    Dict("Authorization"=>"Bearer $(token(manager.session))"))
+                    ["Authorization"=>"Bearer $(token(manager.session))"])
                 r = JSON.parse(String(_r.body))
                 versions = VersionNumber.(get.(getnextlinks!(manager, get(r, "value", String[]), get(r, "nextLink", ""), manager.nretry, manager.verbose), "name", ""))
                 if length(versions) > 0
@@ -1517,7 +1520,7 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
         "GET",
         verbose,
         target,
-        Dict("Authorization"=>"Bearer $(token(manager.session))"))
+        ["Authorization"=>"Bearer $(token(manager.session))"])
 
     resources = JSON.parse(String(_r.body))["value"]
 
@@ -1555,7 +1558,7 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
         "GET",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Compute/locations/$location)/usages?api-version=2019-07-01",
-        Dict("Authorization"=>"Bearer $(token(manager.session))"))
+        ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
 
     usages = r["value"]
@@ -1588,7 +1591,7 @@ function getnextlinks!(manager::AzManager, value, nextlink, nretry, verbose)
             "GET",
             verbose,
             nextlink,
-            Dict("Authorization"=>"Bearer $(token(manager.session))"))
+            ["Authorization"=>"Bearer $(token(manager.session))"])
         r = JSON.parse(String(_r.body))
         value = [value;get(r,"value",[])]
         nextlink = get(r, "nextLink", "")
@@ -1601,7 +1604,7 @@ function list_scalesets(manager::AzManager, subscriptionid, resourcegroup, nretr
         "GET",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2020-06-01",
-        Dict("Authorization"=>"Bearer $(token(manager.session))"))
+        ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
     scalesets = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
     [get(scaleset, "name", "") for scaleset in scalesets]
@@ -1635,7 +1638,7 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
         "GET",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/microsoft.Compute/virtualMachineScaleSets/$scalesetname/networkInterfaces?api-version=2017-03-30",
-        Dict("Authorization"=>"Bearer $(token(manager.session))"))
+        ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
     networkinterfaces = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
     @debug "done getting network interfaces from scaleset"
@@ -1644,7 +1647,7 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
         "GET",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/virtualMachines?api-version=2018-06-01",
-        Dict("Authorization"=>"Bearer $(token(manager.session))"))
+        ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
     _vms = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
     @debug "done getting vms"
@@ -1675,7 +1678,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         "GET",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2019-12-01",
-        Dict("Authorization"=>"Bearer $(token(manager.session))"))
+        ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
 
     _template = deepcopy(template["value"])
@@ -1726,7 +1729,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
             "PUT",
             verbose,
             "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2019-12-01",
-            Dict("Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"),
+            ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
             json(_template,1))
     end
 
@@ -1758,7 +1761,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         "PUT",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2019-12-01",
-        Dict("Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"),
+        ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
         String(json(_template)))
 
     n
@@ -1778,7 +1781,7 @@ end
 function mount_datadisks()
     try
         @info "mounting data disks"
-        _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2020-06-01", Dict("Metadata"=>"true"); redirect=false)
+        _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2020-06-01", ["Metadata"=>"true"]; redirect=false)
         r = JSON.parse(String(_r.body))
         luns = String[]
         for datadisks in r["compute"]["storageProfile"]["dataDisks"]
@@ -1845,14 +1848,14 @@ function timestamp_metaformatter(level::Logging.LogLevel, _module, group, id, fi
 end
 
 function detachedservice(address=ip"0.0.0.0"; server=nothing, subscriptionid="", resourcegroup="", vmname="")
-    HTTP.@register(DETACHED_ROUTER, "POST", "/cofii/detached/run", detachedrun)
-    HTTP.@register(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/kill", detachedkill)
-    HTTP.@register(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/wait", detachedwait)
-    HTTP.@register(DETACHED_ROUTER, "GET", "/cofii/detached/job/*/status", detachedstatus)
-    HTTP.@register(DETACHED_ROUTER, "GET", "/cofii/detached/job/*/stdout", detachedstdout)
-    HTTP.@register(DETACHED_ROUTER, "GET", "/cofii/detached/job/*/stderr", detachedstderr)
-    HTTP.@register(DETACHED_ROUTER, "GET", "/cofii/detached/ping", detachedping)
-    HTTP.@register(DETACHED_ROUTER, "GET", "/cofii/detached/vm", detachedvminfo)
+    HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/run", detachedrun)
+    HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/kill", detachedkill)
+    HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/wait", detachedwait)
+    HTTP.register!(DETACHED_ROUTER, "GET", "/cofii/detached/job/*/status", detachedstatus)
+    HTTP.register!(DETACHED_ROUTER, "GET", "/cofii/detached/job/*/stdout", detachedstdout)
+    HTTP.register!(DETACHED_ROUTER, "GET", "/cofii/detached/job/*/stderr", detachedstderr)
+    HTTP.register!(DETACHED_ROUTER, "GET", "/cofii/detached/ping", detachedping)
+    HTTP.register!(DETACHED_ROUTER, "GET", "/cofii/detached/vm", detachedvminfo)
 
     port = detached_port()
 
@@ -1872,7 +1875,7 @@ function detachedrun(request::HTTP.Request)
         r = JSON.parse(String(HTTP.payload(request)))
 
         if !haskey(r, "code")
-            return HTTP.Response(400, Dict("Content-Type"=>"application/json"); body=json(Dict("Malformed body: JSON body must contain the key: code")))
+            return HTTP.Response(400, ["Content-Type"=>"application/json"], json(Dict("error"=>"Malformed body: JSON body must contain the key: code")); request)
         end
 
         _tempname_logging = tempname(;cleanup=false)
@@ -1895,7 +1898,7 @@ function detachedrun(request::HTTP.Request)
             end
         end
         if length(codelines) == 0
-            return HTTP.Response(400, Dict("Content-Type"=>"application/json"); body=json(Dict("error"=>"No code to execute, missing end?", "code"=>code)))
+            return HTTP.Response(400, ["Content-Type"=>"application/json"], json(Dict("error"=>"No code to execute, missing end?", "code"=>code)); request)
         end
 
         code = join(codelines, "\n")
@@ -1951,7 +1954,7 @@ function detachedrun(request::HTTP.Request)
     catch e
         io = IOBuffer()
         logerror(e, Logging.Warn)
-        return HTTP.Response(500, Dict("Content-Type"=>"application/json"); body=json(Dict("error"=>String(take!(io)))))
+        return HTTP.Response(500, ["Content-Type"=>"application/json"], json(Dict("error"=>String(take!(io)))); request)
     end
 
     Threads.@spawn begin
@@ -1964,7 +1967,7 @@ function detachedrun(request::HTTP.Request)
             rmproc(vm; session=sessionbundle(:management))
         end
     end
-    HTTP.Response(200, Dict("Content-Type"=>"application/json"); body=json(Dict("id"=>id, "pid"=>pid)))
+    HTTP.Response(200, ["Content-Type"=>"application/json"], json(Dict("id"=>id, "pid"=>pid)); request)
 end
 
 function detachedkill(request::HTTP.Request)
@@ -1972,22 +1975,22 @@ function detachedkill(request::HTTP.Request)
     try
         id = split(request.target, '/')[5]
     catch
-        return HTTP.Response(500, Dict("Content-Type"=>"application/text"); body="ERROR: Unable to find job id.")
+        return HTTP.Response(500, ["Content-Type"=>"application/text"], "ERROR: Unable to find job id."; request)
     end
 
     local _process
     try
         _process = DETACHED_JOBS[string(id)]["process"]
     catch
-        return HTTP.Response(500, Dict("Content-Type"=>"application/text"); body="unable to find process id in job $id")
+        return HTTP.Response(500, ["Content-Type"=>"application/text"], "unable to find process id in job $id"; request)
     end
 
     local response
     try
         kill(_process)
-        response = HTTP.Response(200, Dict("Content-Type"=>"application/text"); body="process for job $id killed")
+        response = HTTP.Response(200, ["Content-Type"=>"application/text"], "process for job $id killed"; request)
     catch
-        response = HTTP.Response(500, Dict("Content-Type"=>"application/text"); body="error deleting process id for job $id")
+        response = HTTP.Response(500, ["Content-Type"=>"application/text"], "error deleting process id for job $id"; request)
     end
     response
 end
@@ -1998,11 +2001,11 @@ function detachedstatus(request::HTTP.Request)
     try
         id = split(request.target, '/')[5]
     catch
-        return HTTP.Response(500, Dict("Content-Type"=>"application/text"); body="ERROR: Unable to find job id.")
+        return HTTP.Response(500, ["Content-Type"=>"application/text"], "ERROR: Unable to find job id."; request)
     end
 
     if !haskey(DETACHED_JOBS, id)
-        return HTTP.Response(500, Dict("Content-Type"=>"application/text"); body="ERROR: Job with id=$id does not exist.")
+        return HTTP.Response(500, ["Content-Type"=>"application/text"], "ERROR: Job with id=$id does not exist."; request)
     end
 
     local status
@@ -2017,9 +2020,9 @@ function detachedstatus(request::HTTP.Request)
             status = "starting"
         end
     catch e
-        return HTTP.Response(500, Dict("Content-Type"=>"application/json"); body=json(Dict("error"=>show(e), "trace"=>show(stacktrace()))))
+        return HTTP.Response(500, ["Content-Type"=>"application/json"], json(Dict("error"=>show(e), "trace"=>show(stacktrace()))); request)
     end
-    HTTP.Response(200, Dict("Content-Type"=>"application/json"); body=json(Dict("id"=>id, "status"=>status)))
+    HTTP.Response(200, ["Content-Type"=>"application/json"], json(Dict("id"=>id, "status"=>status)); request)
 end
 
 function detachedstdout(request::HTTP.Request)
@@ -2027,11 +2030,11 @@ function detachedstdout(request::HTTP.Request)
     try
         id = split(request.target, '/')[5]
     catch
-        return HTTP.Response(500, Dict("Content-Type"=>"application/text"); body="ERROR: Unable to find job id.")
+        return HTTP.Response(500, ["Content-Type"=>"application/text"], "ERROR: Unable to find job id."; request)
     end
 
     if !haskey(DETACHED_JOBS, id)
-        return HTTP.Response(500, Dict("Content-Type"=>"application/text"); body="ERROR: Job with id=$id does not exist.")
+        return HTTP.Response(500, ["Content-Type"=>"application/text"], "ERROR: Job with id=$id does not exist."; request)
     end
 
     local stdout
@@ -2040,7 +2043,7 @@ function detachedstdout(request::HTTP.Request)
     else
         stdout = ""
     end
-    HTTP.Response(200, Dict("Content-Type"=>"application/text"); body=stdout)
+    HTTP.Response(200, ["Content-Type"=>"application/text"], stdout; request)
 end
 
 function detachedstderr(request::HTTP.Request)
@@ -2048,11 +2051,11 @@ function detachedstderr(request::HTTP.Request)
     try
         id = split(request.target, '/')[5]
     catch
-        return HTTP.Response(500, Dict("Content-Type"=>"application/text"); body="ERROR: Unable to find job id.")
+        return HTTP.Response(500, ["Content-Type"=>"application/text"], "ERROR: Unable to find job id."; request)
     end
 
     if !haskey(DETACHED_JOBS, id)
-        return HTTP.Response(500, Dict("Content-Type"=>"application/text"); body="ERROR: Job with id=$id does not exist.")
+        return HTTP.Response(500, ["Content-Type"=>"application/text"], "ERROR: Job with id=$id does not exist."; request)
     end
 
     local stderr
@@ -2062,7 +2065,7 @@ function detachedstderr(request::HTTP.Request)
         stderr = ""
     end
 
-    HTTP.Response(200, Dict("Content-Type"=>"application/text"); body=stderr)
+    HTTP.Response(200, ["Content-Type"=>"application/text"], stderr; request)
 end
 
 function detachedwait(request::HTTP.Request)
@@ -2070,11 +2073,11 @@ function detachedwait(request::HTTP.Request)
     try
         id = split(request.target, '/')[5]
     catch
-        return HTTP.Response(400, Dict("Content-Type"=>"application/text"); body="ERROR: Unable to find job id.")
+        return HTTP.Response(400, ["Content-Type"=>"application/text"], "ERROR: Unable to find job id."; request)
     end
 
     if !haskey(DETACHED_JOBS, id)
-        return HTTP.Response(400, Dict("Content-Type"=>"application/string"); body="ERROR: Job with id=$id does not exist.")
+        return HTTP.Response(400, ["Content-Type"=>"application/string"], "ERROR: Job with id=$id does not exist."; request)
     end
 
     try
@@ -2096,18 +2099,17 @@ function detachedwait(request::HTTP.Request)
         end
         write(io, "\n")
 
-        return HTTP.Response(400, Dict("Content-Type"=>"application/json"); body=json(Dict("error"=>String(take!(io)))))
+        return HTTP.Response(400, ["Content-Type"=>"application/json"], json(Dict("error"=>String(take!(io)))); request)
     end
-    HTTP.Response(200, Dict("Content-Type"=>"application/text"); body="OK, job $id is finished")
+    HTTP.Response(200, ["Content-Type"=>"application/text"], "OK, job $id is finished"; request)
 end
 
 function detachedping(request::HTTP.Request)
-    HTTP.Response(200, Dict("Content-Type"=>"applicaton/text"); body="OK")
+    HTTP.Response(200, ["Content-Type"=>"applicaton/text"], "OK"; request)
 end
 
 function detachedvminfo(request::HTTP.Request)
-    @info "in detachedvminfo"
-    HTTP.Response(200, Dict("Content-Type"=>"application/json"); body=json(AzManagers.DETACHED_VM[]))
+    HTTP.Response(200, ["Content-Type"=>"application/json"], json(AzManagers.DETACHED_VM[]); request)
 end
 
 #
@@ -2198,7 +2200,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         "PUT",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2019-11-01",
-        Dict("Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"),
+        ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"],
         String(json(nic_template)))
 
     nic_id = JSON.parse(String(r.body))["id"]
@@ -2250,7 +2252,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         "PUT",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2019-07-01",
-        Dict("Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"),
+        ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"],
         String(json(vm_template["value"])))
 
     spincount = 1
@@ -2262,7 +2264,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
                 "GET",
                 verbose,
                 "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2019-07-01",
-                Dict("Authorization"=>"Bearer $(token(session))"))
+                ["Authorization"=>"Bearer $(token(session))"])
             r = JSON.parse(String(_r.body))
 
             r["properties"]["provisioningState"] == "Succeeded" && break
@@ -2291,7 +2293,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         "GET",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2020-03-01",
-        Dict("Authorization"=>"Bearer $(token(session))"))
+        ["Authorization"=>"Bearer $(token(session))"])
 
     r = JSON.parse(String(_r.body))
 
@@ -2341,7 +2343,7 @@ function rmproc(vm;
         "GET",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?\$expand=instanceView&api-version=2020-12-01",
-        Dict("Authorization"=>"Bearer $(token(session))"))
+        ["Authorization"=>"Bearer $(token(session))"])
 
     r = JSON.parse(String(_r.body))
 
@@ -2352,7 +2354,7 @@ function rmproc(vm;
         "DELETE",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2019-07-01",
-        Dict("Authorization"=>"Bearer $(token(session))"))
+        ["Authorization"=>"Bearer $(token(session))"])
 
     if r.status >= 300
         @warn "Problem removing VM, $vmname, status=$(r.status)"
@@ -2369,7 +2371,7 @@ function rmproc(vm;
                 "GET",
                 verbose,
                 "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines?api-version=2019-07-01",
-                Dict("Authorization" => "Bearer $(token(session))"))
+                ["Authorization" => "Bearer $(token(session))"])
 
             r = JSON.parse(String(_r.body))
             vms = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
@@ -2401,14 +2403,14 @@ function rmproc(vm;
         "DELETE",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/disks/$osdisk?api-version=2020-06-30",
-        Dict("Authorization" => "Bearer $(token(session))"))
+        ["Authorization" => "Bearer $(token(session))"])
 
     for datadisk in datadisks
         @retry nretry azrequest(
             "DELETE",
             verbose,
             "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/disks/$datadisk?api-version=2020-06-30",
-            Dict("Authorization" => "Bearer $(token(session))"))
+            ["Authorization" => "Bearer $(token(session))"])
     end
 
     nicname = vmname*"-nic"
@@ -2417,7 +2419,7 @@ function rmproc(vm;
         "DELETE",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2020-03-01",
-        Dict("Authorization"=>"Bearer $(token(session))"))
+        ["Authorization"=>"Bearer $(token(session))"])
     nothing
 end
 
@@ -2593,7 +2595,7 @@ function detached_run(code, ip::String="", port=detached_port();
     _r = HTTP.request(
         "POST",
         "http://$(vm["ip"]):$(vm["port"])/cofii/detached/run",
-        Dict("Content-Type"=>"application/json"),
+        ["Content-Type"=>"application/json"],
         json(body))
     r = JSON.parse(String(_r.body))
 
