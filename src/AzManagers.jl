@@ -516,6 +516,8 @@ function Distributed.addprocs(template::Dict, n::Int;
     _scalesets = scalesets(manager)
     scaleset = ScaleSet(subscriptionid, resourcegroup, group)
 
+    osdisksize = max(osdisksize, image_osdisksize(manager, template["value"], sigimagename, sigimageversion, imagename))
+
     @info "Provisioning $n virtual machines in scale-set $group..."
     _scalesets[scaleset] = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename, osdisksize,
         nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads,
@@ -1217,6 +1219,52 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
     @debug "after inspecting the VM metaddata, imagename=$imagename, sigimagename=$sigimagename, sigimageversion=$sigimageversion"
 
     sigimagename, sigimageversion, imagename
+end
+
+function image_osdisksize(manager::AzManager, template, sigimagename, sigimageversion, imagename)
+    @debug "determining os disk size..."
+    local imagerefs
+    if haskey(template["properties"], "virtualMachineProfile") # scale-set template
+        imagerefs = split(template["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"]["id"], '/')
+    else # vm template
+        imagerefs = split(template["properties"]["storageProfile"]["imageReference"]["id"], '/')
+    end
+
+    k = findfirst(imageref->imageref=="subscriptions", imagerefs)
+    subscription = k === nothing ? "" : imagerefs[k+1]
+
+    k = findfirst(imageref->imageref=="resourceGroups", imagerefs)
+    resourcegroup = k === nothing ? "" : imagerefs[k+1]
+
+    k = findfirst(imageref->imageref=="galleries", imagerefs)
+    gallery = k === nothing ? "" : imagerefs[k+1]
+
+    osdisksize = 0
+    if imagename != "" && sigimagename == "" && sigimageversion == ""
+        r = @retry manager.nretry azrequest(
+            "GET",
+            manager.verbose,
+            "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/images/$imagename?api-version=2022-03-01",
+            ["Authorization"=>"Bearer $(token(manager.session))"]
+        )
+        b = JSON.parse(String(r.body))
+        osdisksize = b["properties"]["storageProfile"]["osDisk"]["diskSizeGB"]
+    elseif imagename == "" && sigimagename != "" && sigimageversion != ""
+        r = @retry manager.nretry azrequest(
+            "GET",
+            manager.verbose,
+            "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions/$sigimageversion?api-version=2022-01-03",
+            ["Authorization"=>"Bearer $(token(manager.session))"]
+        )
+        b = JSON.parse(String(r.body))
+        osdisksize = b["properties"]["storageProfile"]["osDiskImage"]["sizeInGB"]
+    else
+        error("unable to determine os disk size")
+    end
+
+    @debug "found os disk size: $osdisksize GB"
+
+    osdisksize
 end
 
 function scaleset_image!(manager::AzManager, template, sigimagename, sigimageversion, imagename)
@@ -2180,17 +2228,17 @@ function addproc(vm_template::Dict, nic_template=nothing;
         nic_template = nic_templates[nic_template]
     end
 
-    vm_template["value"]["properties"]["storageProfile"]["osDisk"]["diskSizeGB"] = osdisksize
+    manager = azmanager!(session, nretry, verbose)
 
     vm_template["value"]["properties"]["osProfile"]["computerName"] = vmname
 
     subnetid = vm_template["value"]["properties"]["networkProfile"]["networkInterfaces"][1]["id"]
 
-    manager = azmanager!(session, nretry, verbose)
-
     @debug "getting image info"
     sigimagename, sigimageversion, imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
     scaleset_image!(manager, vm_template["value"], sigimagename, sigimageversion, imagename)
+
+    vm_template["value"]["properties"]["storageProfile"]["osDisk"]["diskSizeGB"] = max(osdisksize, image_osdisksize(manager, vm_template["value"], sigimagename, sigimageversion, imagename))
 
     @debug "software sanity check"
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
