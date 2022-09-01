@@ -1836,10 +1836,12 @@ function mount_datadisks()
             push!(luns, datadisks["lun"])
         end
 
-        blks = JSON.parse(String(read(open(`lsblk -J -o NAME,HCTL`))))
+        blks = JSON.parse(String(read(open(`lsblk -J -o NAME,HCTL,MOUNTPOINTS,TYPE`))))
         for blk in blks["blockdevices"]
             hctl = blk["hctl"]
-            if hctl != nothing
+            mountpoints = blk["mountpoints"]
+            type = blk["type"]
+            if hctl != nothing && type == "disk" && !haskey(blk, "children") && !isempty(mountpoints) && mountpoints[1] === nothing
                 lun = split(hctl,':')[end]
                 if lun ∈ luns
                     try
