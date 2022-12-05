@@ -38,6 +38,7 @@ to the `~/.azmanagers` folder.
 * `skutier = "Standard"` Azure SKU tier.
 * `datadisks=[]` list of data disks to create and attach [1]
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"` cloud-init commands used to mount or link to temporary disk
+# `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
 
 # Notes
 [1] Each datadisk is a Dictionary. For example,
@@ -67,7 +68,8 @@ function build_sstemplate(name;
         osdisksize=60,
         datadisks=[],
         tempdisk="sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
-        skuname)
+        skuname,
+        tags=Dict())
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
@@ -86,7 +88,7 @@ function build_sstemplate(name;
         end
     end
 
-    Dict(
+    template = Dict(
         "tempdisk" => tempdisk,
         "value" => Dict(
             "sku" => Dict(
@@ -153,6 +155,10 @@ function build_sstemplate(name;
             ) # properties
         )
     )
+    if !isempty(tags)
+        template["value"]["tags"] = tags
+    end
+    template
 end
 
 templates_filename_scaleset() = joinpath(templates_folder(), "templates_scaleset.json")
@@ -245,6 +251,7 @@ or written to AzManagers.jl configuration files.
 * `osdisksize = 60` size in GB of the OS disk
 * `datadisks=[]` additional data disks to attach
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"`  cloud-init commands used to mount or link to temporary disk
+# `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
 
 # Notes
 [1] Each datadisk is a Dictionary. For example,
@@ -268,7 +275,8 @@ function build_vmtemplate(name;
         osdisksize = 60,
         datadisks = [],
         tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
-        nicname = "cbox-nic")
+        nicname = "cbox-nic",
+        tags = Dict())
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
@@ -287,7 +295,7 @@ function build_vmtemplate(name;
         end
     end
 
-    Dict(
+    template = Dict(
         "tempdisk" => tempdisk,
         "value" => Dict(
             "location" => location,
@@ -335,6 +343,10 @@ function build_vmtemplate(name;
             )
         )
     )
+    if !isempty(tags)
+        template["value"]["tags"] = tags
+    end
+    template
 end
 
 templates_filename_vm() = joinpath(templates_folder(), "templates_vm.json")
