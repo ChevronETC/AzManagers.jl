@@ -69,7 +69,7 @@ function build_sstemplate(name;
         datadisks=[],
         tempdisk="sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         skuname,
-        tags="")
+        tags=Dict())
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
@@ -155,7 +155,7 @@ function build_sstemplate(name;
             ) # properties
         )
     )
-    if tags != ""
+    if !isempty(tags)
         template["value"]["tags"] = tags
     end
     template
@@ -276,7 +276,7 @@ function build_vmtemplate(name;
         datadisks = [],
         tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         nicname = "cbox-nic",
-        tags = "")
+        tags = Dict())
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
@@ -343,7 +343,7 @@ function build_vmtemplate(name;
             )
         )
     )
-    if tags != ""
+    if !isempty(tags)
         template["value"]["tags"] = tags
     end
     template
