@@ -749,13 +749,17 @@ end
 
 function logging()
     manager = azmanager()
-    out = manager.worker_socket
 
-    redirect_stdout(out)
-    redirect_stderr(out)
+    # if the workers are MPI enabled, then manager is only fully defined on MPI rank 0
+    if isdefined(manager, :worker_socket)
+        out = manager.worker_socket
 
-    # work-a-round https://github.com/JuliaLang/julia/issues/38482
-    global_logger(ConsoleLogger(out, Logging.Info))
+        redirect_stdout(out)
+        redirect_stderr(out)
+
+        # work-a-round https://github.com/JuliaLang/julia/issues/38482
+        global_logger(ConsoleLogger(out, Logging.Info))
+    end
     nothing
 end
 
