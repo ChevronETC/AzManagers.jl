@@ -69,6 +69,17 @@ build {
 
   provisioner "shell" {
     inline = [
+      "sed -i '1 i export SUBSCRIPTION_ID=\"${var.subscription_id}\"' .bashrc",
+      "sed -i '1 i export RESOURCE_GROUP=\"${var.resource_group}\"' .bashrc",
+      "sed -i '1 i export VNET_NAME=\"${var.virtual_network_name}\"' .bashrc",
+      "sed -i '1 i export GALLERY_NAME=\"${var.gallery_name}\"' .bashrc",
+      "sed -i '1 i export CLIENT_ID=\"${var.client_id}\"' .bashrc",
+      "sed -i '1 i export CLIENT_SECRET=\"${var.client_secret}\"' .bashrc",
+    ]
+  }
+
+  provisioner "shell" {
+    inline = [
       "echo \"Host *\" > ~/.ssh/config",
       "echo \"    StrictHostKeyChecking    no\" >> ~/.ssh/config",
       "echo \"    LogLevel                 ERROR\" >> ~/.ssh/config",

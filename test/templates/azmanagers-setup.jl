@@ -8,7 +8,7 @@ sstemplate = AzManagers.build_sstemplate(
         resourcegroup        = ENV["RESOURCE_GROUP"],
         resourcegroup_vnet   = ENV["RESOURCE_GROUP"],
         vnet                 = ENV["VNET_NAME"],
-        subnet               = ENV["SUBNET_NAME"],
+        subnet               = "default",
         imagegallery         = ENV["GALLERY_NAME"],
         imagename            = ENV["IMAGE_NAME"],
         skuname              = "Standard_D2s_v3")
@@ -31,11 +31,11 @@ nictemplate = AzManagers.build_nictemplate(
         location             = "southcentralus",
         resourcegroup_vnet   = ENV["RESOURCE_GROUP"],
         vnet                 = ENV["VNET_NAME"],
-        subnet               = ENV["SUBNET_NAME"])
+        subnet               = "default")
         
 AzManagers.save_template_scaleset(templatename, sstemplate)
 AzManagers.save_template_vm(templatename, vmtemplate)
 AzManagers.save_template_nic(templatename, nictemplate)
 
-AzSessions.write_manifest(;client_id=client_id, client_secret=client_secret, tenant=tenant_id)
-AzManagers.write_manifest(;resourcegroup=resourcegroup, subscriptionid=subscriptionid, ssh_user="cvx")
+AzSessions.write_manifest(;client_id=ENV["CLIENT_ID"], client_secret=ENV["CLIENT_SECRET"], tenant=ENV["TENANT_ID"])
+AzManagers.write_manifest(;resourcegroup=ENV["RESOURCE_GROUP"], subscriptionid=ENV["SUBSCRIPTION_ID"], ssh_user="cvx")
