@@ -20,7 +20,7 @@ sstemplate = AzManagers.build_sstemplate(
         subnet               = "{{ env['SUBNET_NAME'] }}",
         imagegallery         = "{{ env['GALLERY_NAME'] }}",
         imagename            = imagename,
-        skuname              = "Standard_D2s_v3")
+        skuname              = "Standard_D2s_v5")
 
 vmtemplate = AzManagers.build_vmtemplate(
         templatename,
@@ -31,7 +31,7 @@ vmtemplate = AzManagers.build_vmtemplate(
         resourcegroup_vnet   = resourcegroup,
         imagegallery         = "{{ env['GALLERY_NAME'] }}",
         imagename            = imagename,
-        vmsize              = "Standard_D3_v2")
+        vmsize              = "Standard_D2s_v5")
 
 nictemplate = AzManagers.build_nictemplate(
         templatename,

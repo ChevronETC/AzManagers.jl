@@ -6,7 +6,7 @@ jobs:
     env: 
       TENANT_ID: "${{ secrets.TENANT_ID }}" 
       SUBSCRIPTION_ID: "${{ secrets.SUBSCRIPTION_ID }}"
-      RESOURCE_GROUP: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
+      RESOURCE_GROUP: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
       CLIENT_ID: "${{ secrets.CLIENT_ID }}"
       CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
       GALLERY_NAME: "${{ github.run_id }}${{ matrix.julia-version }}gallery"
@@ -50,7 +50,7 @@ jobs:
           az group create                -g "$RESOURCE_GROUP" -l southcentralus --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com"
           az group wait                  -g "$RESOURCE_GROUP" --created 
           az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
-          az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-focal" -s "20_04-lts" --os-type linux
+          az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-jammy" -s "22_04-lts-gen2" --os-type linux --hyper-v-generation V2
           az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME"
           az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22
           az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
