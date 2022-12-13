@@ -59,7 +59,6 @@ jobs:
           PKR_VAR_client_id: "${{ secrets.CLIENT_ID }}"
           PKR_VAR_client_secret: "${{ secrets.CLIENT_SECRET }}"
           PKR_VAR_image_name: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image"
-          PKR_VAR_resource_group: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
           PKR_VAR_gallery_name: "${{ github.run_id }}${{ matrix.julia-version }}gallery"
           PKR_VAR_tenant_id: "${{ secrets.TENANT_ID }}"
           PKR_VAR_virtual_network_name: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet"
