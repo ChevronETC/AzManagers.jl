@@ -55,8 +55,7 @@ jobs:
           echo "resource group=${RESOURCE_GROUP}"
           packer build -color=false -timestamp-ui -var 'tenant_id=${TENANT_ID}' -var 'subscription_id=${SUBSCRIPTION_ID}' -var 'client_id=${CLIENT_ID}' -var 'client_secret=${CLIENT_SECRET}' -var 'image_name=${IMAGE_NAME}' -var 'julia_version=${JULIA_VERSION}' -var 'commit_sha=${COMMIT_SHA}' -var 'virtual_network_name=${VNET_NAME}' -var 'gallery_name=${GALLERY_NAME}' ${GITHUB_WORKSPACE}/test/templates/image.pkr.hcl
         env:
-          PKG_VAR_resource_group=${RESOURCE_GROUP}
-
+          PKG_VAR_resource_group: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
 
       - name: Create Master VM
         run: |
