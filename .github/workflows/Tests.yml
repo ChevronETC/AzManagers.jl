@@ -51,7 +51,7 @@ jobs:
           sudo apt-get update && sudo apt-get install packer
 
       - name: Build Packer Image
-        run: packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/image.pkr.hcl -var 'tenant_id=${TENANT_ID}' -var 'subscription_id=${SUBSCRIPTION_ID}' -var 'client_id=${CLIENT_ID}' -var 'client_secret=${CLIENT_SECRET}' -var 'resource_group=${RESOURCE_GROUP}' -var 'image_name=${IMAGE_NAME}' -var 'julia_version=${JULIA_VERSION}' -var 'commit_sha=${COMMIT_SHA}'
+        run: packer build -color=false -timestamp-ui -var 'tenant_id=${TENANT_ID}' -var 'subscription_id=${SUBSCRIPTION_ID}' -var 'client_id=${CLIENT_ID}' -var 'client_secret=${CLIENT_SECRET}' -var 'resource_group=${RESOURCE_GROUP}' -var 'image_name=${IMAGE_NAME}' -var 'julia_version=${JULIA_VERSION}' -var 'commit_sha=${COMMIT_SHA}' ${GITHUB_WORKSPACE}/test/templates/image.pkr.hcl 
 
       - name: Create Master VM
         run: |
