@@ -16,8 +16,14 @@ variable "resource_group" {
 variable "gallery_name" {
   default = "gallery_name"
 }
+variable "virtual_network_name" {
+  default = "virtual_network_name"
+}
 variable "image_name" {
   default = "image_name"
+}
+variable "image_version" {
+  default = "1.0.0"
 }
 variable "julia_version" {
   default = "1.8"
@@ -40,7 +46,7 @@ source "azure-arm" "cofii" {
   os_type                                = "Linux"
   private_virtual_network_with_public_ip = true
   shared_image_gallery_destination {
-    gallery_name        = var.gallery
+    gallery_name        = var.gallery_name
     image_name          = var.image_name
     image_version       = var.image_version
     replication_regions = ["South Central US"]
@@ -50,8 +56,8 @@ source "azure-arm" "cofii" {
   ssh_username                        = "cvx"
   subscription_id                     = var.tenant_id
   tenant_id                           = "fd799da1-bfc1-4234-a91c-72b3a1cb9e26"
-  virtual_network_name                = var.virtual_network
-  virtual_network_resource_group_name = var.virtual_network_resource_group
+  virtual_network_name                = var.virtual_network_name
+  virtual_network_resource_group_name = var.resource_group
   virtual_network_subnet_name         = "default"
   vm_size                             = "Standard_D8s_v5"
 }
