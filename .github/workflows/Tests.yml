@@ -51,9 +51,7 @@ jobs:
           sudo apt-get update && sudo apt-get install packer
 
       - name: Build Packer Image
-        run: |
-          echo "resource group=${RESOURCE_GROUP}"
-          packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/image.pkr.hcl
+        run: packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/image.pkr.hcl
         env:
           PKR_VAR_resource_group: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
           PKR_VAR_client_id: "${{ secrets.CLIENT_ID }}"
