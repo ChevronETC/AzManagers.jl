@@ -48,7 +48,7 @@ source "azure-arm" "cofii" {
   shared_image_gallery_destination {
     gallery_name        = var.gallery_name
     image_name          = var.image_name
-    image_version       = var.image_version
+    image_version       = "1.0.0"
     replication_regions = ["South Central US"]
     resource_group      = var.resource_group
   }

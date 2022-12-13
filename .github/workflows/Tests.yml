@@ -53,9 +53,19 @@ jobs:
       - name: Build Packer Image
         run: |
           echo "resource group=${RESOURCE_GROUP}"
-          packer build -color=false -timestamp-ui -var 'tenant_id=${TENANT_ID}' -var 'subscription_id=${SUBSCRIPTION_ID}' -var 'client_id=${CLIENT_ID}' -var 'client_secret=${CLIENT_SECRET}' -var 'image_name=${IMAGE_NAME}' -var 'julia_version=${JULIA_VERSION}' -var 'commit_sha=${COMMIT_SHA}' -var 'virtual_network_name=${VNET_NAME}' -var 'gallery_name=${GALLERY_NAME}' ${GITHUB_WORKSPACE}/test/templates/image.pkr.hcl
+          packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/image.pkr.hcl
         env:
-          PKG_VAR_resource_group: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
+          PKR_VAR_resource_group: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
+          PKR_VAR_client_id: "${{ secrets.CLIENT_ID }}"
+          PKR_VAR_client_secret: "${{ secrets.CLIENT_SECRET }}"
+          PKR_VAR_image_name: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image"
+          PKR_VAR_resource_group: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
+          PKR_VAR_gallery_name: "${{ github.run_id }}${{ matrix.julia-version }}gallery"
+          PKR_VAR_tenant_id: "${{ secrets.TENANT_ID }}"
+          PKR_VAR_virtual_network_name: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet"
+          PKR_VAR_subscription_id: "${{ secrets.SUBSCRIPTION_ID }}"
+          PKR_VAR_julia_version: "${{ matrix.julia-version }}"
+          PKG_VAR_commit_sha: "${{ github.sha }}"
 
       - name: Create Master VM
         run: |
