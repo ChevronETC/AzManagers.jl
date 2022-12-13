@@ -32,18 +32,6 @@ jobs:
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
 
-      - name: Template the Packer Image file
-        uses: cuchi/jinja2-action@v1.2.0
-        with:
-          template: test/templates/cofii-base.json.j2
-          output_file: test/templates/cofii-base.json
-
-      - name: Template the AzManagers Setup script
-        uses: cuchi/jinja2-action@v1.2.0
-        with:
-          template: test/templates/azmanagers-setup.jl.j2
-          output_file: test/templates/azmanagers-setup.jl
-
       - name: Create Prereq. Azure Resources
         run: |
           az login --service-principal   -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
@@ -63,7 +51,15 @@ jobs:
           sudo apt-get update && sudo apt-get install packer
 
       - name: Build Packer Image
-        run: packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.json
+        run: packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.json \
+             -var "tenant_id=${TENANT_ID}" \
+             -var "subscription_id=${SUBSCRIPTION_ID}" \
+             -var "client_id=${CLIENT_ID}" \
+             -var "client_secret=${CLIENT_SECRET}" \
+             -var "resource_group=${RESOURCE_GROUP}" \
+             -var "image_name=${IMAGE_NAME}" \
+             -var "julia_version=${JULIA_VERSION}" \
+             -var "commit_sha=${COMMIT_SHA}"
 
       - name: Create Master VM
         run: |
