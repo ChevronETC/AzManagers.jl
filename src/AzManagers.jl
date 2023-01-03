@@ -1054,9 +1054,9 @@ function message_handler_loop_mpi_rankN()
                 end
 
                 tsk = Distributed.handle_msg(msg, header, devnull, devnull, version)
+                wait(tsk)
             end
 
-            wait(tsk)
             MPI.Barrier(comm)
         catch e
             @warn "MPI - message_handler_loop_mpi"
