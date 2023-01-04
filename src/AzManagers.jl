@@ -899,12 +899,12 @@ function azure_worker_mpi(cookie, master_address, master_port, ppi)
     if mpi_rank == 0
         c = azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
         t = @async start_worker_mpi_rank0(c, cookie)
-    else
-        t = @async message_handler_loop_mpi_rankN()
+    # else
+    #     t = @async message_handler_loop_mpi_rankN()
     end
-
+    
     MPI.Barrier(comm)
-    fetch(t)
+    (mpi_rank == 0 ? fetch(t) : nothing)
     MPI.Barrier(comm)
 end
 
@@ -982,18 +982,18 @@ function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bo
             end
             readbytes!(r_stream, boundary, length(Distributed.MSG_BOUNDARY))
 
-            if comm !== nothing
-                header = MPI.bcast(header, 0, comm)
-                msg = MPI.bcast(msg, 0, comm)
-                version = MPI.bcast(version, 0, comm)
-            end
+            # if comm !== nothing
+            #     header = MPI.bcast(header, 0, comm)
+            #     msg = MPI.bcast(msg, 0, comm)
+            #     version = MPI.bcast(version, 0, comm)
+            # end
 
             tsk = Distributed.handle_msg(msg, header, r_stream, w_stream, version)
 
-            if comm !== nothing
-                wait(tsk) # TODO - this seems needed to not cause a race in the MPI logic, but I'm not sure what the side-effects are.
-                MPI.Barrier(comm)
-            end
+            # if comm !== nothing
+            wait(tsk) # TODO - this seems needed to not cause a race in the MPI logic, but I'm not sure what the side-effects are.
+                # MPI.Barrier(comm)
+            # end
         end
     catch e
         # Check again as it may have been set in a message handler but not propagated to the calling block above
@@ -1042,7 +1042,7 @@ function message_handler_loop_mpi_rankN()
     header,msg,version = nothing,nothing,nothing
     while true
         try
-            header = MPI.bcast(header, 0, comm)
+            header = MPI.bcast(header, 0, comm) # BROADCASTS TURNED OFF IN RANK0 METHOD BEWARE!
             msg = MPI.bcast(msg, 0, comm)
             version = MPI.bcast(version, 0, comm)
 
