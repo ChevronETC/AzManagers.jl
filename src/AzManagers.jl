@@ -983,6 +983,7 @@ function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bo
             readbytes!(r_stream, boundary, length(Distributed.MSG_BOUNDARY))
 
             if comm !== nothing
+                @info "message type is $(typeof(msg))"
                 header = MPI.bcast(header, 0, comm)
                 msg = MPI.bcast(msg, 0, comm)
                 version = MPI.bcast(version, 0, comm)
@@ -1049,9 +1050,11 @@ function message_handler_loop_mpi_rankN()
             # ignore the message unless it is of type CallMsg{:call}, CallMsg{:call_fetch}, CallWaitMsg, RemoteDoMsg
             if typeof(msg) ∈ (Distributed.CallMsg{:call}, Distributed.CallMsg{:call_fetch}, Distributed.CallWaitMsg, Distributed.RemoteDoMsg)
                 # Cast the call_fetch message to a call method since we only want the fetch from MPI rank 0.
-                if typeof(msg) ∈ (Distributed.CallMsg{:call_fetch}, Distributed.CallWaitMsg)
+                
+                # temporarily turn this off
+                # if typeof(msg) ∈ (Distributed.CallMsg{:call_fetch}, Distributed.CallWaitMsg)
                     msg = Distributed.CallMsg{:call}(msg.f, msg.args, msg.kwargs)
-                end
+                # end
 
                 tsk = Distributed.handle_msg(msg, header, devnull, devnull, version)
                 wait(tsk)
