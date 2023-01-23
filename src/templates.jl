@@ -89,6 +89,8 @@ function build_sstemplate(name;
     end
 
     template = Dict(
+        "subscriptionid" => subscriptionid,
+        "resourcegroup" => resourcegroup,
         "tempdisk" => tempdisk,
         "value" => Dict(
             "sku" => Dict(
@@ -119,7 +121,7 @@ function build_sstemplate(name;
                         "dataDisks" => _datadisks
                     ),
                     "osProfile" => Dict(
-                        "computerNamePrefix" => replace(name, "+"=>"plus"),
+                        "computerNamePrefix" => replace(split(name,'/')[end], "+"=>"plus", "/"=>"-"),
                         "adminUsername" => admin_username,
                         "linuxConfiguration" => Dict(
                             "ssh" => Dict(
@@ -131,12 +133,12 @@ function build_sstemplate(name;
                     "networkProfile" => Dict(
                         "networkInterfaceConfigurations" => [
                             Dict(
-                                "name" => replace(name, "+"=>"plus"),
+                                "name" => replace(split(name,'/')[end], "+"=>"plus", "/"=>"-"),
                                 "properties" => Dict(
                                     "primary" => true,
                                     "ipConfigurations" => [
                                         Dict(
-                                            "name" => replace(name, "+"=>"plus"),
+                                            "name" => replace(split(name,'/')[end], "+"=>"plus", "/"=>"-"),
                                             "properties" => Dict(
                                                 "subnet" => Dict(
                                                     "id" => subnetid
@@ -296,6 +298,8 @@ function build_vmtemplate(name;
     end
 
     template = Dict(
+        "subscriptionid" => subscriptionid,
+        "resourcegroup" => resourcegroup,
         "tempdisk" => tempdisk,
         "value" => Dict(
             "location" => location,

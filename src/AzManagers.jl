@@ -439,8 +439,8 @@ Add Azure scale set instances where template is either a dictionary produced via
 method or a string corresponding to a template stored in `~/.azmanagers/templates_scaleset.json.`
 
 # key word arguments:
-* `subscriptionid=AzManagers._manifest["subscriptionid"]`
-* `resourcegroup=AzManagers._manifest["resourcegroup"]`
+* `subscriptionid=template["subscriptionid"]` if exists, or `AzManagers._manifest["subscriptionid"]` otherwise.
+* `resourcegroup=template["resourcegroup"]` if exists, or `AzManagers._manifest["resourcegroup"]` otherwise.
 * `sigimagename=""` The name of the SIG image[1].
 * `sigimageversion=""` The version of the `sigimagename`[1].
 * `imagename=""` The name of the image (alternative to `sigimagename` and `sigimageversion` used for development work).
@@ -502,8 +502,8 @@ function Distributed.addprocs(template::Dict, n::Int;
     n_current_workers = nprocs() == 1 ? 0 : nworkers()
 
     (subscriptionid == "" || resourcegroup == "" || user == "") && load_manifest()
-    subscriptionid == "" && (subscriptionid = _manifest["subscriptionid"])
-    resourcegroup == "" && (resourcegroup = _manifest["resourcegroup"])
+    subscriptionid == "" && (subscriptionid = get(template, "subscriptionid", _manifest["subscriptionid"]))
+    resourcegroup == "" && (resourcegroup = get(template, "resourcegroup", _manifest["resourcegroup"]))
     user == "" && (user = _manifest["ssh_user"])
 
     manager = azmanager!(session, nretry, verbose)
@@ -643,7 +643,7 @@ function nworkers_provisioned(service=false)
 end
 
 """
-    rmgroup(groupname;, kwargs...])
+    rmgroup(groupname[; kwargs...])
 
 Remove an azure scale-set and all of its virtual machines.
 
@@ -2178,8 +2178,8 @@ Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` w
 # Parameters
 * `name=""` name for the VM.  If it is not an empty string, then the next paramter (`basename`) is ignored
 * `basename="cbox"` base name for the VM, we append a random suffix to ensure uniqueness
-* `subscriptionid=AzManagers._manifest["subscriptionid"]` Existing Azure subscription
-* `resourcegorup=AzManagers._manifest["resourcegroup"]` Existing Azure resource group inside the subscription in which the VM is put
+* `subscriptionid=template["subscriptionid"]` if exists, or `AzManagers._manifest["subscriptionid"]` otherwise.
+* `resourcegroup=template["resourcegroup"]` if exists, or `AzManagers._manifest["resourcegroup"]` otherwise.
 * `session=AzSession(;lazy=true)` Session used for OAuth2 authentication
 * `sigimagename=""` Azure shared image gallery image to use for the VM (defaults to the template's image)
 * `sigimageversion=""` Azure shared image gallery image version to use for the VM (defaults to latest)
@@ -2212,10 +2212,12 @@ function addproc(vm_template::Dict, nic_template=nothing;
         env = Dict(),
         detachedservice = true)
     load_manifest()
-    subscriptionid == "" && (subscriptionid = AzManagers._manifest["subscriptionid"])
-    resourcegroup == "" && (resourcegroup = AzManagers._manifest["resourcegroup"])
+    subscriptionid == "" && (subscriptionid = get(vm_template, "subscriptionid", _manifest["subscriptionid"]))
+    resourcegroup == "" && (resourcegroup = get(vm_template, "resourcegroup", _manifest["resourcegroup"]))
+    user == "" && (user = _manifest["ssh_user"])
     ssh_key =  AzManagers._manifest["ssh_public_key_file"]
     user == "" && (user = AzManagers._manifest["ssh_user"])
+
     timeout = Distributed.worker_timeout()
 
     vmname = name == "" ? basename*"-"*randstring('a':'z', 6) : name
