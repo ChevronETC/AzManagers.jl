@@ -2277,7 +2277,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         cmd = buildstartupscript_detached(manager, julia_num_threads, omp_num_threads, env, user,
             disk, customenv, subscriptionid, resourcegroup, vmname)
     else
-        cmd = buildstartupscript(manager, user, disk, customenv)
+        cmd,_ = buildstartupscript(manager, user, disk, customenv)
     end
     
     _cmd = base64encode(cmd)
