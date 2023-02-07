@@ -31,7 +31,9 @@ azmanagers_rev=get(pkg, "repo-rev", "")
     # Verify that the scale set is present
     _r = HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
     @test _r.status == 200
-
+    # Test 1.2
+    r = JSON.parse(String(_r.body))
+    @test "UserEmail" in keys(r["tags"])
     #
     # Unit Test 2 - Verify that (Total # of Julia processes specified) == (Total # of Julia processes actual)
     #

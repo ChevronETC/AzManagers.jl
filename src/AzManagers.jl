@@ -1,6 +1,6 @@
 module AzManagers
 
-using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, JSON, LibGit2, Logging, MPI, Pkg, Printf, Random, Serialization, Sockets, TOML
+using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, JSON, LibGit2, Logging, MPI, Pkg, Printf, Random, Serialization, Sockets, TOML, JSONWebTokens
 
 function logerror(e, loglevel=Logging.Info)
     io = IOBuffer()
@@ -1738,6 +1738,12 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     _template["properties"]["virtualMachineProfile"]["osProfile"]["computerNamePrefix"] = string(scalesetname, "-")
 
     _template["properties"]["virtualMachineProfile"]["storageProfile"]["osDisk"]["diskSizeGB"] = osdisksize
+
+    _t = token(manager.session)
+    _e = JSONWebTokens.None()
+    _decoded = JSONWebTokens.decode(_e, _t)
+    _user = _decoded["unique_name"]
+    _template["tags"] = Dict("UserEmail"=>_user)
 
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
