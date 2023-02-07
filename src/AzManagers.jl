@@ -1,6 +1,6 @@
 module AzManagers
 
-using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, JSON, LibGit2, Logging, MPI, Pkg, Printf, Random, Serialization, Sockets, TOML, JSONWebTokens
+using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, JSON, JSONWebTokens, LibGit2, Logging, MPI, Pkg, Printf, Random, Serialization, Sockets, TOML
 
 function logerror(e, loglevel=Logging.Info)
     io = IOBuffer()
