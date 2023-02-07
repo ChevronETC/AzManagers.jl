@@ -1742,8 +1742,10 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     _t = token(manager.session)
     _e = JSONWebTokens.None()
     _decoded = JSONWebTokens.decode(_e, _t)
-    _user = _decoded["unique_name"]
-    _template["tags"] = Dict("UserUniqueName"=>_user)
+    if haskey(_decoded, "unique_name")
+        _user = _decoded["unique_name"]
+        _template["tags"] = Dict("UserUniqueName"=>_user)
+    end
 
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
