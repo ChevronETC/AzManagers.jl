@@ -1,4 +1,4 @@
-_r using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
+using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
 
 include(joinpath(homedir(), "azmanagers-setup.jl"))
 
