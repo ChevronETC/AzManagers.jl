@@ -1743,7 +1743,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     _e = JSONWebTokens.None()
     _decoded = JSONWebTokens.decode(_e, _t)
     _user = _decoded["unique_name"]
-    _template["tags"] = Dict("UserEmail"=>_user)
+    _template["tags"] = Dict("UserUniqueName"=>_user)
 
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
@@ -2228,6 +2228,14 @@ function addproc(vm_template::Dict, nic_template=nothing;
 
     vmname = name == "" ? basename*"-"*randstring('a':'z', 6) : name
     nicname = vmname*"-nic"
+
+    _t = token(session)
+    _e = JSONWebTokens.None()
+    _decoded = JSONWebTokens.decode(_e, _t)
+    if haskey(_decoded, "unique_name")
+        _user = _decoded["unique_name"]
+        vm_template["value"]["tags"] = Dict("UserUniqueName"=>_user)
+    end    
 
     if nic_template == nothing
         isfile(templates_filename_nic()) || error("if nic_template==nothing, then the file $(templates_filename_nic()) must exist.  See AzManagers.save_template_nic.")
