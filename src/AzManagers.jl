@@ -1342,8 +1342,8 @@ function compress_environment(julia_environment_folder)
     manifest_text = read(joinpath(julia_environment_folder, "Manifest.toml"), String)
     local project_compressed,manifest_compressed
     with_logger(ConsoleLogger(stdout, Logging.Info)) do
-        project_compressed = base64encode(transcode(ZlibCompressor, project_text))
-        manifest_compressed = base64encode(transcode(ZlibCompressor, manifest_text))
+        project_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(project_text)))
+        manifest_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(manifest_text)))
     end
 
     project_compressed, manifest_compressed
@@ -1352,9 +1352,9 @@ end
 function decompress_environment(project_compressed, manifest_compressed, remote_julia_environment_name)
     mkpath(joinpath(Pkg.envdir(), remote_julia_environment_name))
 
-    text = String(transcode(ZlibDecompressor, base64decode(project_compressed)))
+    text = String(CodecZlib.transcode(ZlibDecompressor, Vector{UInt8}(base64decode(project_compressed))))
     write(joinpath(Pkg.envdir(), remote_julia_environment_name, "Project.toml"), text)
-    text = String(transcode(ZlibDecompressor, base64decode(manifest_compressed)))
+    text = String(CodecZlib.transcode(ZlibDecompressor, Vector{UInt8}(base64decode(manifest_compressed))))
     write(joinpath(Pkg.envdir(), remote_julia_environment_name, "Manifest.toml"), text)
 end
 
