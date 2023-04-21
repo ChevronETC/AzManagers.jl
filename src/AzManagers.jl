@@ -687,7 +687,7 @@ function rmgroup(manager::AzManager, subscriptionid, resourcegroup, groupname, n
             @retry nretry azrequest(
                 "DELETE",
                 verbose,
-                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$groupname?api-version=2019-12-01",
+                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$groupname?api-version=2022-11-01",
                 ["Authorization" => "Bearer $(token(manager.session))"])
         catch
         end
@@ -1150,7 +1150,7 @@ function is_vm_in_scaleset(manager::AzManager, config::WorkerConfig)
     _r = @retry manager.nretry azrequest(
         "GET",
         manager.verbose,
-        "https://management.azure.com/subscriptions/$(u["subscriptionid"])/resourceGroups/$(u["resourcegroup"])/providers/Microsoft.Compute/virtualMachineScaleSets/$(u["scalesetname"])/virtualMachines?api-version=2019-12-01",
+        "https://management.azure.com/subscriptions/$(u["subscriptionid"])/resourceGroups/$(u["resourcegroup"])/providers/Microsoft.Compute/virtualMachineScaleSets/$(u["scalesetname"])/virtualMachines?api-version=$API_VERSION_COMPUTE",
         ["Authorization"=>"Bearer $(token(manager.session))"])
 
     hasit = false
@@ -1221,7 +1221,7 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
                 _r = @retry manager.nretry azrequest(
                     "GET",
                     manager.verbose,
-                    "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions?api-version=2019-07-01",
+                    "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions?api-version=2022-08-03",
                     ["Authorization"=>"Bearer $(token(manager.session))"])
                 r = JSON.parse(String(_r.body))
                 versions = VersionNumber.(get.(getnextlinks!(manager, get(r, "value", String[]), get(r, "nextLink", ""), manager.nretry, manager.verbose), "name", ""))
@@ -1260,7 +1260,7 @@ function image_osdisksize(manager::AzManager, template, sigimagename, sigimageve
         r = @retry manager.nretry azrequest(
             "GET",
             manager.verbose,
-            "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/images/$imagename?api-version=2022-03-01",
+            "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/images/$imagename?api-version=2023-03-01",
             ["Authorization"=>"Bearer $(token(manager.session))"]
         )
         b = JSON.parse(String(r.body))
@@ -1269,7 +1269,7 @@ function image_osdisksize(manager::AzManager, template, sigimagename, sigimageve
         r = @retry manager.nretry azrequest(
             "GET",
             manager.verbose,
-            "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions/$sigimageversion?api-version=2022-01-03",
+            "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions/$sigimageversion?api-version=2022-08-03",
             ["Authorization"=>"Bearer $(token(manager.session))"]
         )
         b = JSON.parse(String(r.body))
@@ -1579,7 +1579,7 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     f = HTTP.escapeuri("location eq '$location'")
 
     # resources in southcentralus
-    target = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Compute/skus?api-version=2019-04-01&\$filter=$f"
+    target = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Compute/skus?api-version=2021-07-01&\$filter=$f"
     _r = @retry nretry azrequest(
         "GET",
         verbose,
@@ -1667,7 +1667,7 @@ function list_scalesets(manager::AzManager, subscriptionid, resourcegroup, nretr
     _r = @retry nretry azrequest(
         "GET",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2020-06-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2022-11-01",
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
     scalesets = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
@@ -1678,7 +1678,7 @@ function scaleset_capacity(manager::AzManager, subscriptionid, resourcegroup, sc
     _r = @retry nretry azrequest(
         "GET",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2020-06-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2022-11-01",
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
     r["sku"]["capacity"]
@@ -1688,7 +1688,7 @@ function scaleset_capacity!(manager::AzManager, subscriptionid, resourcegroup, s
     @retry nretry azrequest(
         "PATCH",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2021-03-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2022-11-01",
         ["Authorization"=>"Bearer $(token(manager.session))", "Content-Type"=>"application/json"],
         json(Dict("sku"=>Dict("capacity"=>capacity))))
 end
@@ -1701,7 +1701,7 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
     _r = @retry nretry azrequest(
         "GET",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/microsoft.Compute/virtualMachineScaleSets/$scalesetname/networkInterfaces?api-version=2017-03-30",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/microsoft.Compute/virtualMachineScaleSets/$scalesetname/networkInterfaces?api-version=2022-11-01",
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
     networkinterfaces = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
@@ -1710,7 +1710,7 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
     _r = @retry nretry azrequest(
         "GET",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/virtualMachines?api-version=2018-06-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/virtualMachines?api-version=2022-11-01",
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
     _vms = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
@@ -1741,7 +1741,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     _r = @retry nretry azrequest(
         "GET",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2019-12-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2022-11-01",
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
 
@@ -1833,7 +1833,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     @retry nretry azrequest(
         "PUT",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2019-12-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2022-11-01",
         ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
         String(json(_template)))
 
@@ -1845,7 +1845,7 @@ function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetn
     @retry nretry azrequest(
         "POST",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/delete?api-version=2020-06-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/delete?api-version=2022-11-01",
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
         json(body))
 end
@@ -2276,7 +2276,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     r = @retry nretry azrequest(
         "PUT",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2019-11-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2022-09-01",
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"],
         String(json(nic_template)))
 
@@ -2340,7 +2340,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
             _r = @retry nretry azrequest(
                 "GET",
                 verbose,
-                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2019-07-01",
+                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2022-11-01",
                 ["Authorization"=>"Bearer $(token(session))"])
             r = JSON.parse(String(_r.body))
 
@@ -2369,7 +2369,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     _r = @retry nretry azrequest(
         "GET",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2020-03-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2022-09-01",
         ["Authorization"=>"Bearer $(token(session))"])
 
     r = JSON.parse(String(_r.body))
@@ -2419,7 +2419,7 @@ function rmproc(vm;
     _r = @retry nretry azrequest(
         "GET",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?\$expand=instanceView&api-version=2020-12-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?\$expand=instanceView&api-version=2022-11-01",
         ["Authorization"=>"Bearer $(token(session))"])
 
     r = JSON.parse(String(_r.body))
@@ -2430,7 +2430,7 @@ function rmproc(vm;
     r = @retry nretry azrequest(
         "DELETE",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2019-07-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2022-11-01",
         ["Authorization"=>"Bearer $(token(session))"])
 
     if r.status >= 300
@@ -2447,7 +2447,7 @@ function rmproc(vm;
             _r = @retry nretry azrequest(
                 "GET",
                 verbose,
-                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines?api-version=2019-07-01",
+                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines?api-version=2022-11-01",
                 ["Authorization" => "Bearer $(token(session))"])
 
             r = JSON.parse(String(_r.body))
@@ -2479,14 +2479,14 @@ function rmproc(vm;
     @retry nretry azrequest(
         "DELETE",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/disks/$osdisk?api-version=2020-06-30",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/disks/$osdisk?api-version=2021-12-01",
         ["Authorization" => "Bearer $(token(session))"])
 
     for datadisk in datadisks
         @retry nretry azrequest(
             "DELETE",
             verbose,
-            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/disks/$datadisk?api-version=2020-06-30",
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/disks/$datadisk?api-version=2021-12-01",
             ["Authorization" => "Bearer $(token(session))"])
     end
 
@@ -2495,7 +2495,7 @@ function rmproc(vm;
     @retry nretry azrequest(
         "DELETE",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2020-03-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2022-09-01",
         ["Authorization"=>"Bearer $(token(session))"])
     nothing
 end
