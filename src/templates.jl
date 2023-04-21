@@ -10,6 +10,19 @@ function save_template(templates_filename::AbstractString, name::AbstractString,
     nothing
 end
 
+function _replace(x::AbstractString, r::Pair...)
+    local y
+    if VERSION >= v"1.7"
+        y = replace(x, r...)
+    else
+        y = x
+        for _r in r
+            y = replace(y, _r)
+        end
+    end
+    y
+end
+
 #
 # scale-set templates
 #
@@ -121,7 +134,7 @@ function build_sstemplate(name;
                         "dataDisks" => _datadisks
                     ),
                     "osProfile" => Dict(
-                        "computerNamePrefix" => replace(split(name,'/')[end], "+"=>"plus", "/"=>"-"),
+                        "computerNamePrefix" => _replace(split(name,'/')[end], "+"=>"plus", "/"=>"-"),
                         "adminUsername" => admin_username,
                         "linuxConfiguration" => Dict(
                             "ssh" => Dict(
@@ -133,12 +146,12 @@ function build_sstemplate(name;
                     "networkProfile" => Dict(
                         "networkInterfaceConfigurations" => [
                             Dict(
-                                "name" => replace(split(name,'/')[end], "+"=>"plus", "/"=>"-"),
+                                "name" => _replace(split(name,'/')[end], "+"=>"plus", "/"=>"-"),
                                 "properties" => Dict(
                                     "primary" => true,
                                     "ipConfigurations" => [
                                         Dict(
-                                            "name" => replace(split(name,'/')[end], "+"=>"plus", "/"=>"-"),
+                                            "name" => _replace(split(name,'/')[end], "+"=>"plus", "/"=>"-"),
                                             "properties" => Dict(
                                                 "subnet" => Dict(
                                                     "id" => subnetid
