@@ -249,18 +249,22 @@ scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalese
 scalesets() = scalesets(azmanager())
 pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Vector{String}}()
 
+function delete_scaleset(manager, scaleset)
+    @debug "deleting scaleset, $scaleset"
+    try
+        rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+    catch e
+        @warn "unable to remove scaleset $(scaleset.resourcegroup), $(scaleset.scalesetname)"
+    end
+    delete!(scalesets(manager), scaleset)
+end
+
 function delete_empty_scalesets()
     manager = azmanager()
     lock(manager.lock)
     for (scaleset, capacity) in scalesets(manager)
         if capacity == 0
-            @debug "deleting empty scaleset, $scaleset"
-            try
-                rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
-            catch e
-                @warn "unable to remove scaleset $(scaleset.resourcegroup), $(scaleset.scalesetname)"
-            end
-            delete!(scalesets(manager), scaleset)
+            delete_scaleset(manager, scaleset)
         end
     end
     unlock(manager.lock)
@@ -273,9 +277,15 @@ function delete_pending_down_vms()
     for (scaleset, ids) in pending_down(manager)
         @debug "deleting pending down vms $ids in $scaleset"
         try
-            delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
+            new_capacity = max(0, scalesets(manager)[scaleset] - length(ids))
+            if new_capacity == 0
+                # this should save some requests, because one request will delete the scaleset, rather than deleting the vm's first
+                delete_scaleset(manager, scaleset)
+            else
+                delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
+                scalesets(manager)[scaleset] = new_capacity
+            end
             delete!(pending_down(manager), scaleset)
-            scalesets(manager)[scaleset] = max(0, scalesets(manager)[scaleset] - length(ids))
         catch e
             @error "error deleting scaleset vms, manual clean-up may be required."
             logerror(e, Logging.Error)
@@ -1782,16 +1792,6 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         end
     end
     n += δn
-
-    if !scaleset_exists
-        _template["sku"]["capacity"] = 0
-        @retry nretry azrequest(
-            "PUT",
-            verbose,
-            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2019-12-01",
-            ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
-            json(_template,1))
-    end
 
     @debug "about to check quota"
 
