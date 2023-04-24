@@ -138,6 +138,43 @@ end
     @test contains(pinfo.path, "myproject")
 end
 
+@testset "tags, addprocs" begin
+    mkpath("myproject")
+    cd("myproject")
+    Pkg.activate(".")
+    Pkg.add("AzSessions")
+    Pkg.add("Distributed")
+    Pkg.add("JSON")
+    Pkg.add("HTTP")
+
+    Pkg.add(PackageSpec(name="AzManagers", rev=azmanagers_rev))
+
+    group = "test$(randstring('a':'z',4))"
+
+    templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))
+    template = templates_scaleset[templatename]
+
+    _template = template["value"]
+    if haskey(_template, "tags")
+        _template["tags"]["foo"] = "bar"
+    else
+        _template["tags"] = Dict("foo"=>"bar")
+    end
+
+    addprocs(template, 1; waitfor=true, group=group, session=session)
+
+    _r = HTTP.request(
+        "GET",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$group?api-version=2019-12-01",
+        ["Authorization"=>"Bearer $(token(session))"]
+    )
+
+    r = JSON.parse(String(_r.body))
+    @test r["tags"]["foo"] == "bar"
+
+    rmprocs(workers())
+end
+
 @testset "AzManagers, addproc" begin
     r = randstring('a':'z',4)
     basename = "test$r"
