@@ -473,6 +473,7 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `mpi_flags="-bind-to core:\$(ENV["OMP_NUM_THREADS"]) -map-by numa"` extra flags to pass to mpirun (has effect when `mpi_ranks_per_worker>0`)
 * `nvidia_enable_ecc=true` on NVIDIA machines, ensure that ECC is set to `true` or `false` for all GPUs[4]
 * `nvidia_enable_mig=false` on NVIDIA machines, ensure that MIG is set to `true` or `false` for all GPUs[4]
+* `hyperthreading=nothing` Turn on/off hyperthreading on supported machine sizes.  The default uses the setting in the template.  To override the template setting, use `true` (on) or `false` (off).
 
 # Notes
 [1] If `addprocs` is called from an Azure VM, then the default `imagename`,`imageversion` are the
@@ -508,7 +509,8 @@ function Distributed.addprocs(template::Dict, n::Int;
         mpi_ranks_per_worker = 0,
         mpi_flags = "-bind-to core:$(get(ENV, "OMP_NUM_THREADS", 1)) --map-by numa",
         nvidia_enable_ecc = true,
-        nvidia_enable_mig = false)
+        nvidia_enable_mig = false,
+        hyperthreading = nothing)
     n_current_workers = nprocs() == 1 ? 0 : nworkers()
 
     (subscriptionid == "" || resourcegroup == "" || user == "") && load_manifest()
@@ -530,7 +532,7 @@ function Distributed.addprocs(template::Dict, n::Int;
 
     @info "Provisioning $n virtual machines in scale-set $group..."
     _scalesets[scaleset] = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename, osdisksize,
-        nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads,
+        nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, hyperthreading, julia_num_threads, omp_num_threads,
         env, spot, maxprice, verbose, customenv, overprovision)
 
     if waitfor
@@ -1730,7 +1732,7 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
 end
 
 function scaleset_create_or_update(manager::AzManager, user, subscriptionid, resourcegroup, scalesetname, sigimagename, sigimageversion,
-        imagename, osdisksize, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads,
+        imagename, osdisksize, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, hyperthreading, julia_num_threads,
         omp_num_threads, env, spot, maxprice, verbose, custom_environment, overprovision)
     load_manifest()
     ssh_key = _manifest["ssh_public_key_file"]
@@ -1783,6 +1785,13 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         _template["properties"]["virtualMachineProfile"]["priority"] = "Spot"
         _template["properties"]["virtualMachineProfile"]["evictionPolicy"] = "Delete"
         _template["properties"]["virtualMachineProfile"]["billingProfile"] = Dict("maxPrice"=>maxprice)
+    end
+
+    if hyperthreading !== nothing
+        if !haskey(_template, "tags")
+            _template["tags"] = Dict{Any,Any}()
+        end
+        _template["tags"]["platformsettings.host_environment.disablehyperthreading"] = hyperthreading ? "False" : "True"
     end
 
     n = 0
