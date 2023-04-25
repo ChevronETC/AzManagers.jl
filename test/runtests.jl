@@ -256,3 +256,13 @@ end
     wait(testjob)
     @test contains(read(testjob), "passed")
 end
+
+@testset "AzManagers, retrywarn" begin
+    r = HTTP.Response(
+        429,
+        ["retry-after"=>60, "x-ms-ratelimit-remaining-resource"=>"foo"],
+        "")
+
+    e = HTTP.StatusError(429, "foo", "foo", r)
+    AzManagers.retrywarn(1, 2, 60, e, r)
+end

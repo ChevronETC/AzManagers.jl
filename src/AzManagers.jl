@@ -79,10 +79,21 @@ isretryable(e) = false
 status(e::HTTP.StatusError) = e.status
 status(e) = 999
 
-function retrywarn(i, retries, s, e)
+function retrywarn(i, retries, s, e, r)
     if isa(e, HTTP.ExceptionRequest.StatusError)
         @debug "$(e.status): $(String(e.response.body)), retry $i of $retries, retrying in $s seconds"
-        logerror(e, Logging.Debug)
+        if e.status == 429
+            remaining_resource = nothing
+            for header in r.headers
+                if header[1] == "x-ms-ratelimit-remaining-resource"
+                    remaining_resource = header
+                    break
+                end
+            end
+            @warn "The Azure service is throttling the request, asking to retry after $s seconds.  Quota information:" remaining_resource[2]
+        else
+            logerror(e, Logging.Debug)
+        end
     else
         @warn "warn: $(typeof(e)) -- retry $i, retrying in $s seconds"
         logerror(e, Logging.Warn)
@@ -91,13 +102,13 @@ end
 
 macro retry(retries, ex::Expr)
     quote
-        local r
+        r = nothing
         for i = 0:$(esc(retries))
             try
                 r = $(esc(ex))
                 break
             catch e
-                (i <= $(esc(retries)) && isretryable(e)) || rethrow(e)
+                (i < $(esc(retries)) && isretryable(e)) || rethrow(e)
                 maximum_backoff = 256
                 local s
                 if status(e) == 429
@@ -111,7 +122,7 @@ macro retry(retries, ex::Expr)
                 else
                     s = min(2.0^(i-1), maximum_backoff) + rand()
                 end
-                retrywarn(i, $(esc(retries)), s, e)
+                retrywarn(i, $(esc(retries)), s, e, r)
                 sleep(s)
             end
         end
