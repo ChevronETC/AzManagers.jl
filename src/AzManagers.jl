@@ -339,8 +339,15 @@ function prune_cluster()
     # remove from list workers that have a corresponding scale-set vm instance
     _scalesets = scalesets(manager)
     for scaleset in keys(_scalesets)
-        vms = scaleset_listvms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose; allowed_states=("Creating", "Updating", "Succeeded"))
+        _r = @retry manager.nretry azrequest(
+            "GET",
+            manager.verbose,
+            "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)/virtualMachines?api-version=2022-11-01",
+            ["Authorization"=>"Bearer $(token(manager.session))"])
+        r = JSON.parse(String(_r.body))
+        vms = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), manager.nretry, manager.verbose)
         vm_names = get.(vms, "name", "")
+
         for (id,wrkr) in wrkrs
             is_sub = get(wrkr, "subscriptionid", "") == scaleset.subscriptionid
             is_rg = get(wrkr, "resourcegroup", "") == scaleset.resourcegroup
