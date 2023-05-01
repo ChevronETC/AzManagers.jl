@@ -231,7 +231,12 @@ function scaleset_pruning()
             The following seems required for an over-provisioned scaleset. it
             is not clear why this is needed.
             =#
-            prune()
+            prune_cluster()
+            #=
+            The following handles vms that are provisioined, but that fail to
+            join the cluster.
+            =#
+            prune_scalesets()
             sleep(interval)
         catch e
             @error "scaleset pruning error"
@@ -327,8 +332,10 @@ function scaleset_sync()
     unlock(manager.lock)
 end
 
-function prune()
+function prune_cluster()
     manager = azmanager()
+
+    # list of workers registered with Distributed.jl
     wrkrs = Dict{Int,Dict}()
     for wrkr in Distributed.PGRP.workers
         if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
@@ -339,10 +346,26 @@ function prune()
     end
 
     sleep(10)
+
+    # remove from list workers that have a corresponding scale-set vm instance.  What remains can be deleted from the cluster.
     _scalesets = scalesets(manager)
     for scaleset in keys(_scalesets)
-        vms = scaleset_listvms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose; allowed_states=("Creating", "Updating", "Succeeded"))
-        vm_names = get.(vms, "name", "")
+        _r = @retry manager.nretry azrequest(
+            "GET",
+            manager.verbose,
+            "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)/virtualMachines?api-version=2022-11-01",
+            ["Authorization"=>"Bearer $(token(manager.session))"])
+        r = JSON.parse(String(_r.body))
+        vms = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), manager.nretry, manager.verbose)
+
+        vm_names = String[]
+        for vm in vms
+            status = get(get(vm, "properties", Dict()), "provisioningState", "none")
+            if lowercase(status) ∈ ("creating", "updating", "succeeded")
+                push!(vm_names, vm["name"])
+            end
+        end
+
         for (id,wrkr) in wrkrs
             is_sub = get(wrkr, "subscriptionid", "") == scaleset.subscriptionid
             is_rg = get(wrkr, "resourcegroup", "") == scaleset.resourcegroup
@@ -353,9 +376,63 @@ function prune()
         end
     end
 
+    # deregister workers that do not have a corresponding scale-set vm instance
     for pid in keys(wrkrs)
         @info "pruning worker $pid"
         @async Distributed.deregister_worker(pid)
+    end
+end
+
+function prune_scalesets()
+    worker_timeout = Second(parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "720")))
+    manager = azmanager()
+
+    _scalesets = scalesets(manager)
+
+    # list of workers registered with Distributed.jl, organized by scale-set
+    instanceids = Dict{ScaleSet,Array{String}}()
+    for scaleset in keys(_scalesets)
+        instanceids[scaleset] = String[]
+    end
+
+    for wrkr in Distributed.PGRP.workers
+        if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
+            if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
+                userdata = wrkr.config.userdata
+                if haskey(userdata, "instanceid") && haskey(userdata, "scalesetname") && haskey(userdata, "resourcegroup") && haskey(userdata, "subscriptionid")
+                    push!(instanceids[ScaleSet(userdata["subscriptionid"], userdata["resourcegroup"], userdata["scalesetname"])], userdata["instanceid"])
+                end
+            end
+        end
+    end
+
+    for scaleset in keys(_scalesets)
+        # update scale-set instances
+        _r = @retry manager.nretry azrequest(
+            "GET",
+            manager.verbose,
+            "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)/virtualMachines?api-version=2022-11-01",
+            ["Authorization"=>"Bearer $(token(manager.session))"])
+        r = JSON.parse(String(_r.body))
+        _vms = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), manager.nretry, manager.verbose)
+
+        for _vm in _vms
+            instanceid = split(_vm["id"],'/')[end]
+
+            # if the instanceid corresponds to a registered worker, do nothing
+            if instanceid ∈ instanceids[scaleset]
+                continue
+            end
+
+            # otherwise, decide if we should remove the instance from the scale-set
+            time_created = DateTime(_vm["properties"]["timeCreated"][1:23], DateFormat("yyyy-mm-ddTHH:MM:SS.s"))
+            time_elapsed = now(Dates.UTC) - time_created
+            vm_state = lowercase(get(get(_vm, "properties", Dict()), "provisioningState", "none"))
+            if time_elapsed > worker_timeout || vm_state == "failed"
+                @debug "scaleset pruning, adding $instanceid to deletion queue, vm_state=$vm_state, time_elapsed=$time_elapsed"
+                add_instance_to_pending_down_list(manager, scaleset, instanceid)
+            end
+        end
     end
 end
 
@@ -617,6 +694,17 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     notify(c)
 end
 
+function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSet, instanceid)
+    if haskey(manager.pending_down, scaleset)
+        @debug "pushing worker with id=$id onto pending_down"
+        push!(manager.pending_down[scaleset], instanceid)
+    else
+        @debug "creating pending_down vector for id=$id"
+        manager.pending_down[scaleset] = [instanceid]
+    end
+    nothing
+end
+
 function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     @debug "kill for id=$id"
     try
@@ -629,13 +717,9 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     get(u, "localid", 1) > 1 && (return nothing) # an "additional" worker on an instance will have localid>1
 
     scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
-    if haskey(manager.pending_down, scaleset)
-        @debug "kill, pushing worker with id=$id onto pending_down"
-        push!(manager.pending_down[scaleset], u["instanceid"])
-    else
-        @debug "kill, creating pending_down vector for id=$id"
-        manager.pending_down[scaleset] = [u["instanceid"]]
-    end
+
+    add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
+
     @debug "...kill, pushed."
     nothing
 end
