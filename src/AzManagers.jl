@@ -174,6 +174,7 @@ mutable struct AzManager <: ClusterManager
     session::AzSessionAbstract
     nretry::Int
     verbose::Int
+    show_quota::Bool
     scalesets::Dict{ScaleSet,Int}
     pending_up::Channel{TCPSocket}
     pending_down::Dict{ScaleSet,Vector{String}}
@@ -190,10 +191,11 @@ end
 
 const _manager = AzManager()
 
-function azmanager!(session, nretry, verbose)
+function azmanager!(session, nretry, verbose, show_quota)
     _manager.session = session
     _manager.nretry = nretry
     _manager.verbose = verbose
+    _manager.show_quota = show_quota
 
     if isdefined(_manager, :pending_up)
         return _manager
@@ -268,7 +270,7 @@ pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.p
 function delete_scaleset(manager, scaleset)
     @debug "deleting scaleset, $scaleset"
     try
-        rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+        rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose, manager.show_quota)
     catch e
         @warn "unable to remove scaleset $(scaleset.resourcegroup), $(scaleset.scalesetname)"
     end
@@ -356,7 +358,7 @@ function prune_cluster()
             "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)/virtualMachines?api-version=2022-11-01",
             ["Authorization"=>"Bearer $(token(manager.session))"])
         r = JSON.parse(String(_r.body))
-        vms = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), manager.nretry, manager.verbose)
+        vms,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), manager.nretry, manager.verbose)
 
         vm_names = String[]
         for vm in vms
@@ -364,6 +366,10 @@ function prune_cluster()
             if lowercase(status) ∈ ("creating", "updating", "succeeded")
                 push!(vm_names, vm["name"])
             end
+        end
+
+        if manager.show_quota
+            @info "Quota after getting instances for cluster pruning" remaining_resource(_r)
         end
 
         for (id,wrkr) in wrkrs
@@ -414,7 +420,11 @@ function prune_scalesets()
             "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)/virtualMachines?api-version=2022-11-01",
             ["Authorization"=>"Bearer $(token(manager.session))"])
         r = JSON.parse(String(_r.body))
-        _vms = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), manager.nretry, manager.verbose)
+        _vms,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), manager.nretry, manager.verbose)
+
+        if manager.show_quota
+            @info "Quota after getting instances for scaleset pruning" remaining_resource(_r)
+        end
 
         for _vm in _vms
             instanceid = split(_vm["id"],'/')[end]
@@ -439,7 +449,7 @@ end
 function delete_scalesets()
     manager = azmanager()
     @sync for scaleset in keys(scalesets(manager))
-        @async rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+        @async rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose, manager.show_quota)
     end
 end
 
@@ -553,6 +563,7 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `env=Dict()` each dictionary entry is an environment variable set on the worker before Julia starts. e.g. `env=Dict("OMP_PROC_BIND"=>"close")`
 * `nretry=20` Number of retries for HTTP REST calls to Azure services.
 * `verbose=0` verbose flag used in HTTP requests.
+* `show_quota=false` after various operation, show the "x-ms-rate-remaining-resource" response header.  Useful for debugging/understanding Azure quota's.
 * `user=AzManagers._manifest["ssh_user"]` ssh user.
 * `spot=false` use Azure SPOT VMs for the scale-set
 * `maxprice=-1` set maximum price per hour for a VM in the scale-set.  `-1` uses the market price.
@@ -590,6 +601,7 @@ function Distributed.addprocs(template::Dict, n::Int;
         env = Dict(),
         nretry = 20,
         verbose = 0,
+        show_quota = false,
         user = "",
         spot = false,
         maxprice = -1,
@@ -606,7 +618,7 @@ function Distributed.addprocs(template::Dict, n::Int;
     resourcegroup == "" && (resourcegroup = get(template, "resourcegroup", _manifest["resourcegroup"]))
     user == "" && (user = _manifest["ssh_user"])
 
-    manager = azmanager!(session, nretry, verbose)
+    manager = azmanager!(session, nretry, verbose, show_quota)
     sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
@@ -724,6 +736,16 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     nothing
 end
 
+function remaining_resource(r)
+    _remaining_resource = ""
+    for header in r.headers
+        if header[1] == "x-ms-ratelimit-remaining-resource"
+            _remaining_resource = header[2]
+        end
+    end
+    _remaining_resource
+end
+
 """
     nworkers_provisioned([service=false])
 
@@ -760,30 +782,36 @@ Remove an azure scale-set and all of its virtual machines.
 * `session=AzSession(;lazy=true)` The Azure session used for authentication.
 * `nretry=20` Number of retries for HTTP REST calls to Azure services.
 * `verbose=0` verbose flag used in HTTP requests.
+* `show_quota=false` after various operation, show the "x-ms-rate-remaining-resource" response header.  Useful for debugging/understanding Azure quota's.
 """
 function rmgroup(groupname;
         subscriptionid = "",
         resourcegroup = "",
         session = AzSession(;lazy=true),
         nretry = 20,
-        verbose = 0)
+        verbose = 0,
+        show_quota = false)
     load_manifest()
     subscriptionid == "" && (subscriptionid = AzManagers._manifest["subscriptionid"])
     resourcegroup == "" && (resourcegroup = AzManagers._manifest["resourcegroup"])
 
-    manager = azmanager!(session, nretry, verbose)
-    rmgroup(manager, subscriptionid, resourcegroup, groupname, nretry, verbose)
+    manager = azmanager!(session, nretry, verbose, show_quota)
+    rmgroup(manager, subscriptionid, resourcegroup, groupname, nretry, verbose, show_quota)
 end
 
-function rmgroup(manager::AzManager, subscriptionid, resourcegroup, groupname, nretry=20, verbose=0)
+function rmgroup(manager::AzManager, subscriptionid, resourcegroup, groupname, nretry=20, verbose=0, show_quota=false)
     groupnames = list_scalesets(manager, subscriptionid, resourcegroup, nretry, verbose)
     if groupname ∈ groupnames
         try
-            @retry nretry azrequest(
+            r = @retry nretry azrequest(
                 "DELETE",
                 verbose,
                 "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$groupname?api-version=2022-11-01",
                 ["Authorization" => "Bearer $(token(manager.session))"])
+
+            if show_quota
+                @info "Quotas after deleting scale-set" remaining_resource(r)
+            end
         catch
         end
     end
@@ -1319,7 +1347,7 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
                     "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions?api-version=2022-08-03",
                     ["Authorization"=>"Bearer $(token(manager.session))"])
                 r = JSON.parse(String(_r.body))
-                versions = VersionNumber.(get.(getnextlinks!(manager, get(r, "value", String[]), get(r, "nextLink", ""), manager.nretry, manager.verbose), "name", ""))
+                versions,_r = VersionNumber.(get.(getnextlinks!(manager, _r, get(r, "value", String[]), get(r, "nextLink", ""), manager.nretry, manager.verbose), "name", ""))
                 if length(versions) > 0
                     sigimageversion = string(maximum(versions))
                 end
@@ -1681,6 +1709,10 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
         target,
         ["Authorization"=>"Bearer $(token(manager.session))"])
 
+    if manager.show_quota
+        @info "Quota after getting skus" remaining_resource(_r)
+    end
+
     resources = JSON.parse(String(_r.body))["value"]
 
     # filter to get only virtualMachines, TODO - can this filter be done in the above REST call?
@@ -1720,6 +1752,10 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
 
+    if manager.show_quota
+        @info "Quota after getting quota usage" remaining_resource(_r)
+    end
+
     usages = r["value"]
 
     k = findfirst(usage->usage["name"]["value"]==family, usages)
@@ -1744,7 +1780,7 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     ncores_available - (ncores_per_machine * δn), ncores_spot_available - (ncores_per_machine * δn)
 end
 
-function getnextlinks!(manager::AzManager, value, nextlink, nretry, verbose)
+function getnextlinks!(manager::AzManager, _r, value, nextlink, nretry, verbose)
     while nextlink != ""
         _r = @retry nretry azrequest(
             "GET",
@@ -1755,7 +1791,7 @@ function getnextlinks!(manager::AzManager, value, nextlink, nretry, verbose)
         value = [value;get(r,"value",[])]
         nextlink = get(r, "nextLink", "")
     end
-    value
+    value, _r
 end
 
 function list_scalesets(manager::AzManager, subscriptionid, resourcegroup, nretry, verbose)
@@ -1765,7 +1801,7 @@ function list_scalesets(manager::AzManager, subscriptionid, resourcegroup, nretr
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2022-11-01",
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
-    scalesets = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
+    scalesets,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
     [get(scaleset, "name", "") for scaleset in scalesets]
 end
 
@@ -1776,6 +1812,11 @@ function scaleset_capacity(manager::AzManager, subscriptionid, resourcegroup, sc
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2022-11-01",
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
+
+    if manager.show_quota
+        @info "Quota after getting scale set capacity" remaining_resource(_r)
+    end
+
     r["sku"]["capacity"]
 end
 
@@ -1799,7 +1840,7 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/microsoft.Compute/virtualMachineScaleSets/$scalesetname/networkInterfaces?api-version=2022-11-01",
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
-    networkinterfaces = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
+    networkinterfaces = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
     @debug "done getting network interfaces from scaleset"
 
     _r = @retry nretry azrequest(
@@ -1808,7 +1849,7 @@ function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, sca
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/virtualMachines?api-version=2022-11-01",
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
-    _vms = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
+    _vms,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
     @debug "done getting vms"
 
     networkinterfaces_vmids = [get(get(get(networkinterface, "properties", Dict()), "virtualMachine", Dict()), "id", "") for networkinterface in networkinterfaces]
@@ -1839,6 +1880,10 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2022-11-01",
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
+
+    if manager.show_quota
+        @info "Quota after getting a list of existing scale-sets" remaining_resource(_r)
+    end
 
     _template = deepcopy(template["value"])
 
@@ -1925,24 +1970,32 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     @debug "done checking quota, δn=$(δn), n=$n"
 
     _template["sku"]["capacity"] = n
-    @retry nretry azrequest(
+    _r = @retry nretry azrequest(
         "PUT",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2022-11-01",
         ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
         String(json(_template)))
 
+    if manager.show_quota
+        @info "Quota after requesting that the scale-set is created or grows" remaining_resource(_r)
+    end
+
     n
 end
 
 function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, ids, nretry, verbose)
     body = Dict("instanceIds"=>ids)
-    @retry nretry azrequest(
+    _r = @retry nretry azrequest(
         "POST",
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/delete?api-version=2022-11-01",
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
         json(body))
+
+    if manager.show_quota
+        @info "Quota after requesting deletion of $(length(ids)) virtual machines" remaining_resource(_r)
+    end
 end
 
 # see https://docs.microsoft.com/en-us/azure/virtual-machines/linux/add-disk
@@ -2304,6 +2357,7 @@ Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` w
 * `customenv=false` If true, then send the current project environment to the workers where it will be instantiated.
 * `nretry=10` Max retries for re-tryable REST call failures
 * `verbose=0` Verbosity flag passes to HTTP.jl methods
+* `show_quota=false` after various operation, show the "x-ms-rate-remaining-resource" response header.  Useful for debugging/understanding Azure quota's.
 * `julia_num_threads=Threads.nthreads()` set `JULIA_NUM_THREADS` environment variable before starting the detached process
 * `omp_num_threads = get(ENV, "OMP_NUM_THREADS", 1)` set `OMP_NUM_THREADS` environment variable before starting the detached process
 * `env=Dict()` Dictionary of environemnt variables that will be exported before starting the detached process
@@ -2323,6 +2377,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         osdisksize = 60,
         nretry = 10,
         verbose = 0,
+        show_quota = false,
         julia_num_threads = Threads.nthreads(),
         omp_num_threads = parse(Int, get(ENV, "OMP_NUM_THREADS", "1")),
         env = Dict(),
@@ -2352,7 +2407,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         nic_template = nic_templates[nic_template]
     end
 
-    manager = azmanager!(session, nretry, verbose)
+    manager = azmanager!(session, nretry, verbose, show_quota)
 
     vm_template["value"]["properties"]["osProfile"]["computerName"] = vmname
 
@@ -2498,18 +2553,20 @@ Delete the VM that was created using the `addproc` method.
 * `session=AzSession(;lazy=true)` Azure session for OAuth2 authentication
 * `verbose=0` verbosity flag passed to HTTP.jl methods
 * `nretry=10` max number of retries for retryable REST calls
+* `show_quota=false` after various operation, show the "x-ms-rate-remaining-resource" response header.  Useful for debugging/understanding Azure quota's.
 """
 function rmproc(vm;
         session = AzSession(;lazy=true),
         nretry = 10,
-        verbose = 0)
+        verbose = 0,
+        show_quota = false)
     timeout = Distributed.worker_timeout()
 
     resourcegroup = vm["resourcegroup"]
     subscriptionid = vm["subscriptionid"]
     vmname = vm["name"]
 
-    manager = azmanager!(session, nretry, verbose)
+    manager = azmanager!(session, nretry, verbose, show_quota)
 
     _r = @retry nretry azrequest(
         "GET",
@@ -2546,7 +2603,7 @@ function rmproc(vm;
                 ["Authorization" => "Bearer $(token(session))"])
 
             r = JSON.parse(String(_r.body))
-            vms = getnextlinks!(manager, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
+            vms,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
 
             haveit = false
             for vm in vms
