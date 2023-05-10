@@ -32,7 +32,7 @@ jobs:
       NSG_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-nsg"
       SUBNET_NAME: "default"
       COMMIT_SHA: "${{ github.sha }}"
-      JULIA_VERSION: "${{ matrix.julia-version }}"
+      JULIA_VERSION: "${{ matrix.version }}"
     steps:
       - uses: actions/checkout@v2
 
