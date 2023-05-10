@@ -1,9 +1,24 @@
-name: Tests
-on: [push, pull_request]
+name: CI
+on:
+  push:
+    branches: [master]
+    tags: ["*"]
+  pull_request:
 jobs:
   test:
-
-    env: 
+    name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - ${{ github.event_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - 1.6
+          - 1 # automatically expands to the latest stable 1.x release of Julia
+        os:
+          - ubuntu-latest
+        arch:
+          - x64
+    env:
       TENANT_ID: "${{ secrets.TENANT_ID }}" 
       SUBSCRIPTION_ID: "${{ secrets.SUBSCRIPTION_ID }}"
       RESOURCE_GROUP: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
@@ -18,16 +33,8 @@ jobs:
       SUBNET_NAME: "default"
       COMMIT_SHA: "${{ github.sha }}"
       JULIA_VERSION: "${{ matrix.julia-version }}"
-
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      matrix:
-        julia-version: [1.6, 1.8]
-        os: [ubuntu-latest]
-
     steps:
-      - uses: actions/checkout@v1.0.0 
+      - uses: actions/checkout@v2
 
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
@@ -90,3 +97,20 @@ jobs:
         run: |
           az group delete -n "$RESOURCE_GROUP" --yes
         if: ${{ always() }}
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: '1'
+      - run: |
+          julia --project=docs -e '
+            using Pkg
+            Pkg.develop(PackageSpec(path=pwd()))
+            Pkg.instantiate()'
+      - run: julia --project=docs docs/make.jl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
