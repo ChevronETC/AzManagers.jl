@@ -708,10 +708,10 @@ end
 
 function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSet, instanceid)
     if haskey(manager.pending_down, scaleset)
-        @debug "pushing worker with id=$id onto pending_down"
+        @debug "pushing worker with id=$instanceid onto pending_down"
         push!(manager.pending_down[scaleset], instanceid)
     else
-        @debug "creating pending_down vector for id=$id"
+        @debug "creating pending_down vector for id=$instanceid"
         manager.pending_down[scaleset] = [instanceid]
     end
     nothing
