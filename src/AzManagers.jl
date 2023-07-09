@@ -79,12 +79,12 @@ isretryable(e) = false
 status(e::HTTP.StatusError) = e.status
 status(e) = 999
 
-function retrywarn(i, retries, s, e, r)
+function retrywarn(i, retries, s, e)
     if isa(e, HTTP.ExceptionRequest.StatusError)
         @debug "$(e.status): $(String(e.response.body)), retry $i of $retries, retrying in $s seconds"
         if e.status == 429
             remaining_resource = nothing
-            for header in r.headers
+            for header in e.response.headers
                 if header[1] == "x-ms-ratelimit-remaining-resource"
                     remaining_resource = header
                     break
@@ -122,7 +122,7 @@ macro retry(retries, ex::Expr)
                 else
                     s = min(2.0^(i-1), maximum_backoff) + rand()
                 end
-                retrywarn(i, $(esc(retries)), s, e, r)
+                retrywarn(i, $(esc(retries)), s, e)
                 sleep(s)
             end
         end
@@ -239,10 +239,11 @@ function scaleset_pruning()
             join the cluster.
             =#
             prune_scalesets()
-            sleep(interval)
         catch e
             @error "scaleset pruning error"
             logerror(e, Logging.Error)
+        finally
+            sleep(interval)
         end
     end
 end
@@ -352,13 +353,7 @@ function prune_cluster()
     # remove from list workers that have a corresponding scale-set vm instance.  What remains can be deleted from the cluster.
     _scalesets = scalesets(manager)
     for scaleset in keys(_scalesets)
-        _r = @retry manager.nretry azrequest(
-            "GET",
-            manager.verbose,
-            "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)/virtualMachines?api-version=2022-11-01",
-            ["Authorization"=>"Bearer $(token(manager.session))"])
-        r = JSON.parse(String(_r.body))
-        vms,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), manager.nretry, manager.verbose)
+        vms = list_scaleset_vms(manager, scaleset)
 
         vm_names = String[]
         for vm in vms
@@ -366,10 +361,6 @@ function prune_cluster()
             if lowercase(status) ∈ ("creating", "updating", "succeeded")
                 push!(vm_names, vm["name"])
             end
-        end
-
-        if manager.show_quota
-            @info "Quota after getting instances for cluster pruning" remaining_resource(_r)
         end
 
         for (id,wrkr) in wrkrs
@@ -414,17 +405,7 @@ function prune_scalesets()
 
     for scaleset in keys(_scalesets)
         # update scale-set instances
-        _r = @retry manager.nretry azrequest(
-            "GET",
-            manager.verbose,
-            "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)/virtualMachines?api-version=2022-11-01",
-            ["Authorization"=>"Bearer $(token(manager.session))"])
-        r = JSON.parse(String(_r.body))
-        _vms,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), manager.nretry, manager.verbose)
-
-        if manager.show_quota
-            @info "Quota after getting instances for scaleset pruning" remaining_resource(_r)
-        end
+        _vms = list_scaleset_vms(manager, scaleset)
 
         for _vm in _vms
             instanceid = split(_vm["id"],'/')[end]
@@ -439,7 +420,7 @@ function prune_scalesets()
             time_elapsed = now(Dates.UTC) - time_created
             vm_state = lowercase(get(get(_vm, "properties", Dict()), "provisioningState", "none"))
             if time_elapsed > worker_timeout || vm_state == "failed"
-                @debug "scaleset pruning, adding $instanceid to deletion queue, vm_state=$vm_state, time_elapsed=$time_elapsed"
+                @debug "scaleset pruning, adding $instanceid in $(scaleset.scalesetname) to deletion queue because it failed to join the cluster after $time_elapsed seconds, vm_state=$vm_state."
                 add_instance_to_pending_down_list(manager, scaleset, instanceid)
             end
         end
@@ -567,6 +548,8 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `user=AzManagers._manifest["ssh_user"]` ssh user.
 * `spot=false` use Azure SPOT VMs for the scale-set
 * `maxprice=-1` set maximum price per hour for a VM in the scale-set.  `-1` uses the market price.
+* `spot_base_regular_priority_count=0` If spot is true, only start adding spot machines once there are this many non-spot machines added.
+* `spot_regular_percentage_above_base` If spot is true, then when ading new machines (above `spot_base_reqular_priority_count`) use regular (non-spot) priority for this percent of new machines.
 * `waitfor=false` wait for the cluster to be provisioned before returning, or return control to the caller immediately[2]
 * `mpi_ranks_per_worker=0` set the number of MPI ranks per Julia worker[3]
 * `mpi_flags="-bind-to core:\$(ENV["OMP_NUM_THREADS"]) -map-by numa"` extra flags to pass to mpirun (has effect when `mpi_ranks_per_worker>0`)
@@ -605,6 +588,8 @@ function Distributed.addprocs(template::Dict, n::Int;
         user = "",
         spot = false,
         maxprice = -1,
+        spot_base_regular_priority_count = 0,
+        spot_regular_percentage_above_base = 0,
         waitfor = false,
         mpi_ranks_per_worker = 0,
         mpi_flags = "-bind-to core:$(get(ENV, "OMP_NUM_THREADS", 1)) --map-by numa",
@@ -633,7 +618,7 @@ function Distributed.addprocs(template::Dict, n::Int;
     @info "Provisioning $n virtual machines in scale-set $group..."
     _scalesets[scaleset] = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename, osdisksize,
         nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, hyperthreading, julia_num_threads, omp_num_threads,
-        env, spot, maxprice, verbose, customenv, overprovision)
+        env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base, verbose, customenv, overprovision)
 
     if waitfor
         @info "Initiating cluster..."
@@ -802,17 +787,15 @@ end
 function rmgroup(manager::AzManager, subscriptionid, resourcegroup, groupname, nretry=20, verbose=0, show_quota=false)
     groupnames = list_scalesets(manager, subscriptionid, resourcegroup, nretry, verbose)
     if groupname ∈ groupnames
-        try
-            r = @retry nretry azrequest(
-                "DELETE",
-                verbose,
-                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$groupname?api-version=2022-11-01",
-                ["Authorization" => "Bearer $(token(manager.session))"])
+        @debug "deleting scaleset $groupname"
+        r = @retry nretry azrequest(
+            "DELETE",
+            verbose,
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$groupname?api-version=2023-03-01",
+            ["Authorization" => "Bearer $(token(manager.session))"])
 
-            if show_quota
-                @info "Quotas after deleting scale-set" remaining_resource(r)
-            end
-        catch
+        if show_quota
+            @info "Quotas after deleting scale-set" remaining_resource(r)
         end
     end
     nothing
@@ -1264,28 +1247,6 @@ end
 #
 # Azure scale-set methods
 #
-function is_vm_in_scaleset(manager::AzManager, config::WorkerConfig)
-    u = config.userdata
-    scalesetnames = list_scalesets(manager, u["subscriptionid"], u["resourcegroup"], manager.nretry, manager.verbose)
-    if u["scalesetname"] ∉ scalesetnames
-        return false
-    end
-    _r = @retry manager.nretry azrequest(
-        "GET",
-        manager.verbose,
-        "https://management.azure.com/subscriptions/$(u["subscriptionid"])/resourceGroups/$(u["resourcegroup"])/providers/Microsoft.Compute/virtualMachineScaleSets/$(u["scalesetname"])/virtualMachines?api-version=$API_VERSION_COMPUTE",
-        ["Authorization"=>"Bearer $(token(manager.session))"])
-
-    hasit = false
-    r = JSON.parse(String(_r.body))
-    for vm in get(r, "value", [])
-        if get(vm, "name", "") == u["name"]
-            hasit = true
-        end
-    end
-    hasit
-end
-
 function scaleset_image(manager::AzManager, sigimagename, sigimageversion, imagename)
     # early exit
     if imagename != "" || (sigimagename != "" && sigimageversion != "")
@@ -1344,7 +1305,7 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
                 _r = @retry manager.nretry azrequest(
                     "GET",
                     manager.verbose,
-                    "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions?api-version=2022-08-03",
+                    "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions?api-version=2022-03-03",
                     ["Authorization"=>"Bearer $(token(manager.session))"])
                 r = JSON.parse(String(_r.body))
                 versions,_r = VersionNumber.(get.(getnextlinks!(manager, _r, get(r, "value", String[]), get(r, "nextLink", ""), manager.nretry, manager.verbose), "name", ""))
@@ -1392,7 +1353,7 @@ function image_osdisksize(manager::AzManager, template, sigimagename, sigimageve
         r = @retry manager.nretry azrequest(
             "GET",
             manager.verbose,
-            "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions/$sigimageversion?api-version=2022-08-03",
+            "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions/$sigimageversion?api-version=2022-03-03",
             ["Authorization"=>"Bearer $(token(manager.session))"]
         )
         b = JSON.parse(String(r.body))
@@ -1794,22 +1755,97 @@ function getnextlinks!(manager::AzManager, _r, value, nextlink, nretry, verbose)
     value, _r
 end
 
+function resourcegraphrequest(manager, body)
+    skiptoken = ""
+    data = []
+    local _r
+    while true
+        if skiptoken != ""
+            body["\$skipToken"] = skiptoken
+        end
+        _r = @retry manager.nretry azrequest(
+            "POST",
+            manager.verbose,
+            "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01",
+            ["Authorization"=>"Bearer $(token(manager.session))", "Content-Type"=>"application/json"],
+            json(body)
+        )
+        r = JSON.parse(String(_r.body))
+        data = [data;get(r, "data", [])]
+        skiptoken = get(r, "\$skipToken", "")
+
+        if skiptoken == ""
+            break
+        end
+    end
+
+    if manager.show_quota
+        @info "Quota after getting instances for scaleset pruning" remaining_resource(_r)
+    end
+
+    data
+end
+
 function list_scalesets(manager::AzManager, subscriptionid, resourcegroup, nretry, verbose)
     _r = @retry nretry azrequest(
         "GET",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2022-11-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2023-03-01",
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
     scalesets,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
     [get(scaleset, "name", "") for scaleset in scalesets]
 end
 
+function list_scaleset_vms_uniform(manager, scaleset)
+    _r = @retry manager.nretry azrequest(
+            "GET",
+            manager.verbose,
+            "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)/virtualMachines?api-version=2022-11-01",
+            ["Authorization"=>"Bearer $(token(manager.session))"])
+    r = JSON.parse(String(_r.body))
+    vms,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), manager.nretry, manager.verbose)
+
+    if manager.show_quota
+        @info "Quota after getting instances for scaleset pruning" remaining_resource(_r)
+    end
+
+    vms
+end
+
+function list_scaleset_vms_flexible(manager, scaleset)
+    body = Dict(
+            "subscriptions" => [
+                scaleset.subscriptionid
+            ],
+            "query" => "Resources | where type =~ \"Microsoft.Compute/virtualMachines\" | where resourceGroup =~ \"$(scaleset.resourcegroup)\" | where properties.virtualMachineScaleSet.id contains \"$(scaleset.scalesetname)\" | project id,name,properties"
+        )
+    vms = resourcegraphrequest(manager, body)
+    vms
+end
+
+function list_scaleset_vms(manager, scaleset)
+    _r = @retry manager.nretry azrequest(
+        "GET",
+        manager.verbose,
+        "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)?api-version=2023-03-01",
+        ["Authorization"=>"Bearer $(token(manager.session))"])
+    r = JSON.parse(String(_r.body))
+
+    local vms
+    if get(get(r, "properties", Dict()), "orchestrationMode", "Uniform") == "Flexible"
+        vms = list_scaleset_vms_flexible(manager, scaleset)
+    else
+        vms = list_scaleset_vms_uniform(manager, scaleset)
+    end
+    vms
+end
+
 function scaleset_capacity(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
     _r = @retry nretry azrequest(
         "GET",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2022-11-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
 
@@ -1824,52 +1860,14 @@ function scaleset_capacity!(manager::AzManager, subscriptionid, resourcegroup, s
     @retry nretry azrequest(
         "PATCH",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2022-11-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
         ["Authorization"=>"Bearer $(token(manager.session))", "Content-Type"=>"application/json"],
         json(Dict("sku"=>Dict("capacity"=>capacity))))
 end
 
-function scaleset_listvms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose; allowed_states=("Succeeded", "Updating"))
-    scalesetnames = list_scalesets(manager, subscriptionid, resourcegroup, nretry, verbose)
-    scalesetname ∉ scalesetnames && return String[]
-
-    @debug "getting network interfaces from scaleset"
-    _r = @retry nretry azrequest(
-        "GET",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/microsoft.Compute/virtualMachineScaleSets/$scalesetname/networkInterfaces?api-version=2022-11-01",
-        ["Authorization"=>"Bearer $(token(manager.session))"])
-    r = JSON.parse(String(_r.body))
-    networkinterfaces = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
-    @debug "done getting network interfaces from scaleset"
-
-    _r = @retry nretry azrequest(
-        "GET",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/virtualMachines?api-version=2022-11-01",
-        ["Authorization"=>"Bearer $(token(manager.session))"])
-    r = JSON.parse(String(_r.body))
-    _vms,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
-    @debug "done getting vms"
-
-    networkinterfaces_vmids = [get(get(get(networkinterface, "properties", Dict()), "virtualMachine", Dict()), "id", "") for networkinterface in networkinterfaces]
-    vms = Dict{String,String}[]
-
-    for vm in _vms
-        if vm["properties"]["provisioningState"] ∈ allowed_states
-            i = findfirst(id->id == vm["id"], networkinterfaces_vmids)
-            if i != nothing
-                push!(vms, Dict("name"=>vm["name"], "host"=>vm["properties"]["osProfile"]["computerName"], "bindaddr"=>networkinterfaces[i]["properties"]["ipConfigurations"][1]["properties"]["privateIPAddress"], "instanceid"=>vm["instanceId"]))
-            end
-        end
-    end
-    @debug "done collating vms and nics"
-    vms
-end
-
 function scaleset_create_or_update(manager::AzManager, user, subscriptionid, resourcegroup, scalesetname, sigimagename, sigimageversion,
         imagename, osdisksize, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, hyperthreading, julia_num_threads,
-        omp_num_threads, env, spot, maxprice, verbose, custom_environment, overprovision)
+        omp_num_threads, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base, verbose, custom_environment, overprovision)
     load_manifest()
     ssh_key = _manifest["ssh_public_key_file"]
 
@@ -1877,7 +1875,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     _r = @retry nretry azrequest(
         "GET",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2022-11-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2023-03-01",
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
 
@@ -1925,6 +1923,19 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         _template["properties"]["virtualMachineProfile"]["priority"] = "Spot"
         _template["properties"]["virtualMachineProfile"]["evictionPolicy"] = "Delete"
         _template["properties"]["virtualMachineProfile"]["billingProfile"] = Dict("maxPrice"=>maxprice)
+
+        if spot_base_regular_priority_count > 0 || spot_regular_percentage_above_base > 0
+            _template["properties"]["orchestrationMode"] = "Flexible"
+            _template["properties"]["virtualMachineProfile"]["networkProfile"]["networkApiVersion"] = "2020-11-01"
+            _template["properties"]["priorityMixPolicy"] = Dict("baseRegularPriorityCount" => spot_base_regular_priority_count, "regularPriorityPercentageAboveBase" => spot_regular_percentage_above_base)
+
+            # the following seems to be required for "flexible" orchestration mode
+            _template["properties"]["platformFaultDomainCount"] = 1
+            haskey(_template["properties"], "overprovision") && (delete!(_template["properties"], "overprovision"))
+            haskey(_template["properties"], "doNotRunExtensionsOnOverprovisionedVMs") && (delete!(_template["properties"], "doNotRunExtensionsOnOverprovisionedVMs"))
+            haskey(_template["properties"], "upgradePolicy") && (delete!(_template["properties"], "upgradePolicy"))
+            #
+        end
     end
 
     if hyperthreading !== nothing
@@ -1973,7 +1984,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     _r = @retry nretry azrequest(
         "PUT",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2022-11-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
         ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
         String(json(_template)))
 
@@ -1989,7 +2000,7 @@ function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetn
     _r = @retry nretry azrequest(
         "POST",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/delete?api-version=2022-11-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/delete?api-version=2023-03-01",
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
         json(body))
 
