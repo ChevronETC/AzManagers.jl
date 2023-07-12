@@ -9,8 +9,8 @@ pkgs=TOML.parse(read(joinpath(dirname(azmanagers_pinfo.path),"Manifest.toml"), S
 pkg = VERSION < v"1.7.0" ? pkgs["AzManagers"][1] : pkgs["deps"]["AzManagers"][1]
 azmanagers_rev=get(pkg, "repo-rev", "")
 
-@testset "AzManagers, addprocs, ppi=$ppi" for ppi in (1,)
-    ninstances = 1
+@testset "AzManagers, addprocs, ppi=$ppi, flexible=$flexible" for ppi in (1,), flexible in (true,false)
+    ninstances = 4
     group = "test$(randstring('a':'z',4))"
     
     # Set up iteration vars
@@ -20,13 +20,25 @@ azmanagers_rev=get(pkg, "repo-rev", "")
     #
     # Unit Test 1 - Create scale set and start Julia processes
     #
-    addprocs(templatename, ninstances;
+    if flexible
+        addprocs(templatename, ninstances;
         waitfor = true,
         subscriptionid = subscriptionid,
         resourcegroup = resourcegroup,
         ppi = ppi,
         group = group,
-        session = session)
+        session = session,
+        spot = true,
+        spot_base_regular_priority_count = 2)
+    else
+        addprocs(templatename, ninstances;
+            waitfor = true,
+            subscriptionid = subscriptionid,
+            resourcegroup = resourcegroup,
+            ppi = ppi,
+            group = group,
+            session = session)
+    end
     
     # Verify that the scale set is present
     _r = HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
