@@ -343,7 +343,7 @@ function prune_cluster()
     wrkrs2 = Dict{Int,Dict}()
     wrkrs1[-1] = Dict()
     spot_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_SPOT_EVICT_INTERVAL", "60")) # more than 30 seconds  
-    while keys(wrkrs1) !== keys(wrks2)
+    while keys(wrkrs1) !== keys(wrkrs2)
         for key ∈ keys(wrkrs1)
             delete!(wrkrs1,key)
         end
