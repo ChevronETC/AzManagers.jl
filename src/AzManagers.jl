@@ -383,8 +383,8 @@ function prune_cluster()
             end
         end
         
-        @info "AzManagers.prune_cluster() -- wrkrs1=$(wrkrs1)"
-        @info "AzManagers.prune_cluster() -- wrkrs2=$(wrkrs2)"
+        @info "AzManagers.prune_cluster() -- keys(wrkrs1)=$(keys(wrkrs1))"
+        @info "AzManagers.prune_cluster() -- keys(wrkrs2)=$(keys(wrkrs2))"
         sleep(spot_interval)
 
         # copy wrkrs1 to wrkrs2
