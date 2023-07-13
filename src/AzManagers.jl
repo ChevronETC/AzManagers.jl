@@ -177,7 +177,7 @@ mutable struct AzManager <: ClusterManager
     show_quota::Bool
     scalesets::Dict{ScaleSet,Int}
     pending_up::Channel{TCPSocket}
-    pending_down::Dict{ScaleSet,Vector{String}}
+    pending_down::Dict{ScaleSet,Set{String}}
     port::UInt16
     server::Sockets.TCPServer
     worker_socket::TCPSocket
@@ -203,7 +203,7 @@ function azmanager!(session, nretry, verbose, show_quota)
 
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(32)
-    _manager.pending_down = Dict{ScaleSet,Vector{Int}}()
+    _manager.pending_down = Dict{ScaleSet,Set{String}}()
     _manager.scalesets = Dict{ScaleSet,Int}()
     _manager.task_add = @async add_pending_connections()
     _manager.task_process = @async process_pending_connections()
@@ -266,7 +266,7 @@ end
 
 scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : Dict{ScaleSet,Int}()
 scalesets() = scalesets(azmanager())
-pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Vector{String}}()
+pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Set{String}}()
 
 function delete_scaleset(manager, scaleset)
     @debug "deleting scaleset, $scaleset"
@@ -694,10 +694,10 @@ end
 function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSet, instanceid)
     if haskey(manager.pending_down, scaleset)
         @debug "pushing worker with id=$instanceid onto pending_down"
-        push!(manager.pending_down[scaleset], instanceid)
+        push!(manager.pending_down[scaleset], string(instanceid))
     else
         @debug "creating pending_down vector for id=$instanceid"
-        manager.pending_down[scaleset] = [instanceid]
+        manager.pending_down[scaleset] = Set{String}([string(instanceid)])
     end
     nothing
 end
