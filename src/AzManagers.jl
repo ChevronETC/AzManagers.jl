@@ -344,10 +344,14 @@ function prune_cluster()
     wrkrs1[-1] = Dict()
     spot_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_SPOT_EVICT_INTERVAL", "60")) # more than 30 seconds  
     while keys(wrkrs1) !== keys(wrks2)
+        for key ∈ keys(wrkrs1)
+            delete!(wrkrs1,key)
+        end
+
         for wrkr in Distributed.PGRP.workers
             if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
                 if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
-                    wrkrs[wrkr.id] = wrkr.config.userdata
+                    wrkrs1[wrkr.id] = wrkr.config.userdata
                 end
             end
         end
@@ -369,12 +373,12 @@ function prune_cluster()
                 end
             end
 
-            for (id,wrkr) in wrkrs
+            for (id,wrkr) in wrkrs1
                 is_sub = get(wrkr, "subscriptionid", "") == scaleset.subscriptionid
                 is_rg = get(wrkr, "resourcegroup", "") == scaleset.resourcegroup
                 is_ss = get(wrkr, "scalesetname", "") == scaleset.scalesetname
                 if is_sub && is_rg && is_ss && get(wrkr, "name", "") ∈ vm_names
-                    delete!(wrkrs, id)
+                    delete!(wrkrs1, id)
                 end
             end
         end
@@ -393,7 +397,7 @@ function prune_cluster()
     end
 
     # deregister workers that do not have a corresponding scale-set vm instance
-    for pid in keys(wrkrs)
+    for pid in keys(wrkrs1)
         @info "pruning worker $pid"
         @async Distributed.deregister_worker(pid)
     end
