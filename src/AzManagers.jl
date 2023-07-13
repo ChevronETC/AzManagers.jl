@@ -233,7 +233,7 @@ function scaleset_pruning()
             The following seems required for an over-provisioned scaleset. it
             is not clear why this is needed.
             =#
-            # prune_cluster()
+            prune_cluster()
             #=
             The following handles vms that are provisioined, but that fail to
             join the cluster.
@@ -339,37 +339,56 @@ function prune_cluster()
     manager = azmanager()
 
     # list of workers registered with Distributed.jl
-    wrkrs = Dict{Int,Dict}()
-    for wrkr in Distributed.PGRP.workers
-        if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
-            if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
-                wrkrs[wrkr.id] = wrkr.config.userdata
-            end
-        end
-    end
-
-    sleep(10)
-
-    # remove from list workers that have a corresponding scale-set vm instance.  What remains can be deleted from the cluster.
-    _scalesets = scalesets(manager)
-    for scaleset in keys(_scalesets)
-        vms = list_scaleset_vms(manager, scaleset)
-
-        vm_names = String[]
-        for vm in vms
-            status = get(get(vm, "properties", Dict()), "provisioningState", "none")
-            if lowercase(status) ∈ ("creating", "updating", "succeeded")
-                push!(vm_names, vm["name"])
+    wrkrs1 = Dict{Int,Dict}()
+    wrkrs2 = Dict{Int,Dict}()
+    wrkrs1[-1] = Dict()
+    spot_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_SPOT_EVICT_INTERVAL", "60")) # more than 30 seconds  
+    while keys(wrkrs1) !== keys(wrks2)
+        for wrkr in Distributed.PGRP.workers
+            if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
+                if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
+                    wrkrs[wrkr.id] = wrkr.config.userdata
+                end
             end
         end
 
-        for (id,wrkr) in wrkrs
-            is_sub = get(wrkr, "subscriptionid", "") == scaleset.subscriptionid
-            is_rg = get(wrkr, "resourcegroup", "") == scaleset.resourcegroup
-            is_ss = get(wrkr, "scalesetname", "") == scaleset.scalesetname
-            if is_sub && is_rg && is_ss && get(wrkr, "name", "") ∈ vm_names
-                delete!(wrkrs, id)
+        sleep(10)
+
+        # remove from list workers that have a corresponding scale-set vm instance.  What remains can be deleted from the cluster.
+        _scalesets = scalesets(manager)
+        for scaleset in keys(_scalesets)
+            @info "AzManagers.prune_cluster() -- scaleset=$(scaleset)"
+            vms = list_scaleset_vms(manager, scaleset)
+            @info "AzManagers.prune_cluster() -- scaleset_vms=$(vms)"
+
+            vm_names = String[]
+            for vm in vms
+                status = get(get(vm, "properties", Dict()), "provisioningState", "none")
+                if lowercase(status) ∈ ("creating", "updating", "succeeded")
+                    push!(vm_names, vm["name"])
+                end
             end
+
+            for (id,wrkr) in wrkrs
+                is_sub = get(wrkr, "subscriptionid", "") == scaleset.subscriptionid
+                is_rg = get(wrkr, "resourcegroup", "") == scaleset.resourcegroup
+                is_ss = get(wrkr, "scalesetname", "") == scaleset.scalesetname
+                if is_sub && is_rg && is_ss && get(wrkr, "name", "") ∈ vm_names
+                    delete!(wrkrs, id)
+                end
+            end
+        end
+        
+        @info "AzManagers.prune_cluster() -- wrkrs1=$(wrkrs1)"
+        @info "AzManagers.prune_cluster() -- wrkrs2=$(wrkrs2)"
+        sleep(spot_interval)
+
+        # copy wrkrs1 to wrkrs2
+        for key ∈ keys(wrkrs2)
+            delete!(wrkrs2,key)
+        end
+        for key ∈ keys(wrkrs1)
+            wrkrs2[key] = wrkrs1[key]
         end
     end
 
