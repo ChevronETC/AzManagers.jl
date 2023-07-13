@@ -350,34 +350,34 @@ function prune_cluster()
 
     sleep(10)
 
-    # remove from list workers that have a corresponding scale-set vm instance.  What remains can be deleted from the cluster.
-    _scalesets = scalesets(manager)
-    for scaleset in keys(_scalesets)
-        vms = list_scaleset_vms(manager, scaleset)
+    # # remove from list workers that have a corresponding scale-set vm instance.  What remains can be deleted from the cluster.
+    # _scalesets = scalesets(manager)
+    # for scaleset in keys(_scalesets)
+    #     vms = list_scaleset_vms(manager, scaleset)
 
-        vm_names = String[]
-        for vm in vms
-            status = get(get(vm, "properties", Dict()), "provisioningState", "none")
-            if lowercase(status) ∈ ("creating", "updating", "succeeded")
-                push!(vm_names, vm["name"])
-            end
-        end
+    #     vm_names = String[]
+    #     for vm in vms
+    #         status = get(get(vm, "properties", Dict()), "provisioningState", "none")
+    #         if lowercase(status) ∈ ("creating", "updating", "succeeded")
+    #             push!(vm_names, vm["name"])
+    #         end
+    #     end
 
-        for (id,wrkr) in wrkrs
-            is_sub = get(wrkr, "subscriptionid", "") == scaleset.subscriptionid
-            is_rg = get(wrkr, "resourcegroup", "") == scaleset.resourcegroup
-            is_ss = get(wrkr, "scalesetname", "") == scaleset.scalesetname
-            if is_sub && is_rg && is_ss && get(wrkr, "name", "") ∈ vm_names
-                delete!(wrkrs, id)
-            end
-        end
-    end
+    #     for (id,wrkr) in wrkrs
+    #         is_sub = get(wrkr, "subscriptionid", "") == scaleset.subscriptionid
+    #         is_rg = get(wrkr, "resourcegroup", "") == scaleset.resourcegroup
+    #         is_ss = get(wrkr, "scalesetname", "") == scaleset.scalesetname
+    #         if is_sub && is_rg && is_ss && get(wrkr, "name", "") ∈ vm_names
+    #             delete!(wrkrs, id)
+    #         end
+    #     end
+    # end
 
-    # deregister workers that do not have a corresponding scale-set vm instance
-    for pid in keys(wrkrs)
-        @info "pruning worker $pid"
-        @async Distributed.deregister_worker(pid)
-    end
+    # # deregister workers that do not have a corresponding scale-set vm instance
+    # for pid in keys(wrkrs)
+    #     @info "pruning worker $pid"
+    #     @async Distributed.deregister_worker(pid)
+    # end
 end
 
 function prune_scalesets()
