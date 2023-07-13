@@ -344,6 +344,7 @@ function prune_cluster()
     wrkrs2[-1] = Dict()
     spot_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_SPOT_EVICT_INTERVAL", "60")) # more than 30 seconds  
     while keys(wrkrs1) !== keys(wrkrs2)
+        @info "AzManagers.prune_cluster() -- keys(wrkrs1) !== keys(wrkrs2) $(keys(wrkrs1) !== keys(wrkrs2))"
         for key ∈ keys(wrkrs1)
             delete!(wrkrs1,key)
         end
@@ -395,6 +396,7 @@ function prune_cluster()
     end
 
     # deregister workers that do not have a corresponding scale-set vm instance
+    @info "AzManagers.prune_cluster() -- deregister keys(wrkrs1)=$(keys(wrkrs1))"
     for pid in keys(wrkrs1)
         @info "pruning worker $pid"
         @async Distributed.deregister_worker(pid)
