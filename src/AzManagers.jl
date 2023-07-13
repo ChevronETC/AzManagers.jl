@@ -341,14 +341,23 @@ function prune_cluster()
     # list of workers registered with Distributed.jl
     wrkrs1 = Dict{Int,Dict}()
     wrkrs2 = Dict{Int,Dict}()
-    wrkrs2[-1] = Dict()
+    wrkrs2[1] = Dict()
     spot_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_SPOT_EVICT_INTERVAL", "60")) # more than 30 seconds  
-    while keys(wrkrs1) !== keys(wrkrs2)
-        @info "AzManagers.prune_cluster() -- keys(wrkrs1) !== keys(wrkrs2) $(keys(wrkrs1) !== keys(wrkrs2))"
+    while count < 2 && keys(wrkrs1) != keys(wrkrs2)
+
+        # copy wrkrs1 to wrkrs2
+        for key ∈ keys(wrkrs2)
+            delete!(wrkrs2,key)
+        end
+        for key ∈ keys(wrkrs1)
+            wrkrs2[key] = wrkrs1[key]
+        end
+
+        @info "AzManagers.prune_cluster() -- keys(wrkrs1) !== keys(wrkrs2) $(keys(wrkrs1) != keys(wrkrs2))"
+
         for key ∈ keys(wrkrs1)
             delete!(wrkrs1,key)
         end
-
         for wrkr in Distributed.PGRP.workers
             if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
                 if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
@@ -385,14 +394,6 @@ function prune_cluster()
         @info "AzManagers.prune_cluster() -- keys(wrkrs1)=$(keys(wrkrs1))"
         @info "AzManagers.prune_cluster() -- keys(wrkrs2)=$(keys(wrkrs2))"
         sleep(spot_interval)
-
-        # copy wrkrs1 to wrkrs2
-        for key ∈ keys(wrkrs2)
-            delete!(wrkrs2,key)
-        end
-        for key ∈ keys(wrkrs1)
-            wrkrs2[key] = wrkrs1[key]
-        end
     end
 
     # deregister workers that do not have a corresponding scale-set vm instance
