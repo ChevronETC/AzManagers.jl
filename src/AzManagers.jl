@@ -361,9 +361,7 @@ function prune_cluster()
         # remove from list workers that have a corresponding scale-set vm instance.  What remains can be deleted from the cluster.
         _scalesets = scalesets(manager)
         for scaleset in keys(_scalesets)
-            @info "AzManagers.prune_cluster() -- scaleset=$(scaleset)"
             vms = list_scaleset_vms(manager, scaleset)
-            @info "AzManagers.prune_cluster() -- scaleset_vms=$(vms)"
 
             vm_names = String[]
             for vm in vms
