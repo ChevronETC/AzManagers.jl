@@ -430,7 +430,9 @@ function prune_scalesets()
         # update scale-set instances
         _vms = list_scaleset_vms(manager, scaleset)
 
-        @info "AzManagers.prune_scalesets -- BEFORE manager.pending_down[scaleset]=$(manager.pending_down[scaleset])"
+        if isdefined(manager, :pending_down) && haskey(manager.pending_down, scaleset)
+            @info "AzManagers.prune_scalesets -- BEFORE manager.pending_down[scaleset]=$(manager.pending_down[scaleset])"
+        end
 
         for _vm in _vms
             instanceid = split(_vm["id"],'/')[end]
@@ -450,7 +452,9 @@ function prune_scalesets()
             end
         end
 
-        @info "AzManagers.prune_scalesets -- AFTER  manager.pending_down[scaleset]=$(manager.pending_down[scaleset])"
+        if isdefined(manager, :pending_down) && haskey(manager.pending_down, scaleset)
+            @info "AzManagers.prune_scalesets -- AFTER  manager.pending_down[scaleset]=$(manager.pending_down[scaleset])"
+        end
     end
 end
 
