@@ -320,10 +320,9 @@ function scaleset_sync()
     manager = azmanager()
     lock(manager.lock)
     try
-        @info "AzManagers.scaleset_sync -- nworkers()=$(nworkers()) nprocs()=(nprocs()) pending_down_count=$(pending_down_count)"
-
         _pending_down = pending_down(manager)
         pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
+        @info "AzManagers.scaleset_sync -- nworkers()=$(nworkers()) nprocs()=(nprocs()) pending_down_count=$(pending_down_count)"
         if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned(true))
             @debug "client/server scaleset book-keeping mismatch, synching client to server."
             _scalesets = scalesets(manager)
