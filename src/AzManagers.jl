@@ -6,7 +6,10 @@ function logerror(e, loglevel=Logging.Info)
     io = IOBuffer()
     showerror(io, e)
     write(io, "\n\terror type: $(typeof(e))\n")
-    for (exc, bt) in Base.catch_stack()
+
+    my_catch_stack = VERSION < v"1.7" ? Base.catch_stack : current_exceptions
+
+    for (exc, bt) in my_catch_stack()
         showerror(io, exc, bt)
         println(io)
     end
