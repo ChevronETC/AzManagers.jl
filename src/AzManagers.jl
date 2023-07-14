@@ -321,7 +321,7 @@ function scaleset_sync()
     try
         _pending_down = pending_down(manager)
         pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
-        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
+        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned(true))
             @debug "client/server scaleset book-keeping mismatch, synching client to server."
             _scalesets = scalesets(manager)
             for scaleset in keys(_scalesets)
@@ -329,11 +329,9 @@ function scaleset_sync()
             end
         end
 
-        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
+        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned(true))
             # remove machines from the cluster that are not in the scaleset
             prune_cluster()
-        end
-        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
             # remove machines that are provisioned, but that failed to join the cluster
             prune_scalesets()
         end
