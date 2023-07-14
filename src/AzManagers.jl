@@ -329,7 +329,7 @@ function scaleset_sync()
             end
         end
 
-        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned(true))
+        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
             # remove machines from the cluster that are not in the scaleset
             prune_cluster()
             # remove machines that are provisioned, but that failed to join the cluster
