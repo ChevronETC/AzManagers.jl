@@ -322,7 +322,7 @@ function scaleset_sync()
     try
         _pending_down = pending_down(manager)
         pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
-        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
+        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned(true))
             @debug "client/server scaleset book-keeping mismatch, synching client to server."
             _scalesets = scalesets(manager)
             for scaleset in keys(_scalesets)
@@ -725,10 +725,10 @@ end
 function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSet, instanceid)
     if haskey(manager.pending_down, scaleset)
         @debug "pushing worker with id=$instanceid onto pending_down"
-        push!(manager.pending_down[scaleset], instanceid)
+        push!(manager.pending_down[scaleset], string(instanceid))
     else
         @debug "creating pending_down vector for id=$instanceid"
-        manager.pending_down[scaleset] = [instanceid]
+        manager.pending_down[scaleset] = Set{String}([string(instanceid)])
     end
     nothing
 end
