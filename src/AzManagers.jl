@@ -449,6 +449,7 @@ function prune_scalesets()
             vm_state = lowercase(get(get(_vm, "properties", Dict()), "provisioningState", "none"))
             if time_elapsed > worker_timeout || vm_state == "failed"
                 @debug "scaleset pruning, adding $instanceid in $(scaleset.scalesetname) to deletion queue because it failed to join the cluster after $time_elapsed seconds, vm_state=$vm_state."
+                @info "AzManagers.prune_scalesets -- adding instanceid=$(instanceid) to pending_down"
                 add_instance_to_pending_down_list(manager, scaleset, instanceid)
             end
         end
