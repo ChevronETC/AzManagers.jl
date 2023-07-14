@@ -225,7 +225,8 @@ function __init__()
 end
 
 function scaleset_pruning()
-    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
+    # interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
+    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "120"))
 
     while true
         try
@@ -353,7 +354,7 @@ function prune_cluster()
             wrkrs2[key] = wrkrs1[key]
         end
 
-        @info "AzManagers.prune_cluster() -- keys(wrkrs1) !== keys(wrkrs2) $(keys(wrkrs1) != keys(wrkrs2))"
+        @info "AzManagers.prune_cluster() -- keys(wrkrs1) != keys(wrkrs2) $(keys(wrkrs1) != keys(wrkrs2))"
 
         for key ∈ keys(wrkrs1)
             delete!(wrkrs1,key)
