@@ -320,6 +320,8 @@ function scaleset_sync()
     manager = azmanager()
     lock(manager.lock)
     try
+        @info "AzManagers.scaleset_sync -- nworkers()=$(nworkers()) nprocs()=(nprocs()) pending_down_count=$(pending_down_count)"
+
         _pending_down = pending_down(manager)
         pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
         if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned(true))
@@ -724,9 +726,11 @@ end
 
 function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSet, instanceid)
     if haskey(manager.pending_down, scaleset)
+        @info "AzManagers.add_instance_to_pending_down_list -- pushing worker with id=$instanceid onto pending_down"
         @debug "pushing worker with id=$instanceid onto pending_down"
         push!(manager.pending_down[scaleset], string(instanceid))
     else
+        @info "AzManagers.add_instance_to_pending_down_list -- creating pending_down vector for id=$instanceid"
         @debug "creating pending_down vector for id=$instanceid"
         manager.pending_down[scaleset] = Set{String}([string(instanceid)])
     end
@@ -746,6 +750,7 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
 
     scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
 
+    @info "Distributed.kill -- adding id=$(instanceid) to pending_down"
     add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
 
     @debug "...kill, pushed."
