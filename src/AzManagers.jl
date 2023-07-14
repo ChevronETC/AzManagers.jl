@@ -177,7 +177,7 @@ mutable struct AzManager <: ClusterManager
     show_quota::Bool
     scalesets::Dict{ScaleSet,Int}
     pending_up::Channel{TCPSocket}
-    pending_down::Dict{ScaleSet,Vector{String}}
+    pending_down::Dict{ScaleSet,Set{String}}
     port::UInt16
     server::Sockets.TCPServer
     worker_socket::TCPSocket
@@ -203,14 +203,14 @@ function azmanager!(session, nretry, verbose, show_quota)
 
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(32)
-    _manager.pending_down = Dict{ScaleSet,Vector{Int}}()
+    _manager.pending_down = Dict{ScaleSet,Set{String}}()
     _manager.scalesets = Dict{ScaleSet,Int}()
     _manager.task_add = @async add_pending_connections()
     _manager.task_process = @async process_pending_connections()
     _manager.lock = ReentrantLock()
     _manager.scaleset_request_counter = 0
 
-    @async scaleset_pruning()
+    # @async scaleset_pruning()
     @async scaleset_cleaning()
 
     _manager
@@ -224,30 +224,30 @@ function __init__()
     end
 end
 
-function scaleset_pruning()
-    # interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
-    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "120"))
+# function scaleset_pruning()
+#     # interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
+#     interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "120"))
 
-    while true
-        try
-            #=
-            The following seems required for an over-provisioned scaleset. it
-            is not clear why this is needed.
-            =#
-            prune_cluster()
-            #=
-            The following handles vms that are provisioined, but that fail to
-            join the cluster.
-            =#
-            prune_scalesets()
-        catch e
-            @error "scaleset pruning error"
-            logerror(e, Logging.Error)
-        finally
-            sleep(interval)
-        end
-    end
-end
+#     while true
+#         try
+#             #=
+#             The following seems required for an over-provisioned scaleset. it
+#             is not clear why this is needed.
+#             =#
+#             prune_cluster()
+#             #=
+#             The following handles vms that are provisioined, but that fail to
+#             join the cluster.
+#             =#
+#             prune_scalesets()
+#         catch e
+#             @error "scaleset pruning error"
+#             logerror(e, Logging.Error)
+#         finally
+#             sleep(interval)
+#         end
+#     end
+# end
 
 function scaleset_cleaning()
     interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_CLEAN_POLL_INTERVAL", "60"))
@@ -267,7 +267,7 @@ end
 
 scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : Dict{ScaleSet,Int}()
 scalesets() = scalesets(azmanager())
-pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Vector{String}}()
+pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Set{String}}()
 
 function delete_scaleset(manager, scaleset)
     @debug "deleting scaleset, $scaleset"
@@ -295,19 +295,21 @@ function delete_pending_down_vms()
     lock(manager.lock)
 
     for (scaleset, ids) in pending_down(manager)
-        @debug "deleting pending down vms $ids in $scaleset"
+        @debug "AzManagers.delete_pending_down_vms -- deleting pending down vms $ids in $scaleset"
         try
             new_capacity = max(0, scalesets(manager)[scaleset] - length(ids))
             if new_capacity == 0
                 # this should save some requests, because one request will delete the scaleset, rather than deleting the vm's first
                 delete_scaleset(manager, scaleset)
             else
+                @info "AzManagers.delete_pending_down_vms -- ids=$(ids)"
                 delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
                 scalesets(manager)[scaleset] = new_capacity
             end
+            @info "AzManagers.delete_pending_down_vms -- pending_down(manager)=$(pending_down(manager))"
             delete!(pending_down(manager), scaleset)
         catch e
-            @error "error deleting scaleset vms, manual clean-up may be required."
+            @error "AzManagers.delete_pending_down_vms -- error deleting scaleset vms, manual clean-up may be required."
             logerror(e, Logging.Error)
         end
     end
@@ -322,15 +324,24 @@ function scaleset_sync()
     try
         _pending_down = pending_down(manager)
         pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
-        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
-            @debug "client/server scaleset book-keeping mismatch, synching client to server."
+        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned(true))
+            @debug "AzManagers.scaleset_sync -- client/server scaleset book-keeping mismatch, synching client to server."
             _scalesets = scalesets(manager)
             for scaleset in keys(_scalesets)
                 _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
             end
         end
+
+        @error "AzManagers.scaleset_sync -- nworkers()=$(nworkers()) nprocs()=$(nprocs()) pending_down_count=$(pending_down_count) nworkers_provisioned=$(nworkers_provisioned)"
+
+        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
+            # remove machines from the cluster that are not in the scaleset
+            prune_cluster()
+            # remove machines that are provisioned, but that failed to join the cluster
+            prune_scalesets()
+        end
     catch e
-        @error "scaleset syncing error"
+        @error "AzManagers.scaleset_sync -- scaleset syncing error"
         logerror(e)
     end
     unlock(manager.lock)
