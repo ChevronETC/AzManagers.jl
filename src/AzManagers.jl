@@ -332,7 +332,7 @@ function scaleset_sync()
             end
         end
 
-        @error "AzManagers.scaleset_sync -- nworkers()=$(nworkers()) nprocs()=$(nprocs()) pending_down_count=$(pending_down_count) nworkers_provisioned=$(nworkers_provisioned)"
+        @info "AzManagers.scaleset_sync -- nworkers()=$(nworkers()) nprocs()=$(nprocs()) pending_down_count=$(pending_down_count) nworkers_provisioned=$(nworkers_provisioned)"
 
         if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
             # remove machines from the cluster that are not in the scaleset
