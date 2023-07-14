@@ -210,7 +210,7 @@ function azmanager!(session, nretry, verbose, show_quota)
     _manager.lock = ReentrantLock()
     _manager.scaleset_request_counter = 0
 
-    @async scaleset_pruning()
+    # @async scaleset_pruning()
     @async scaleset_cleaning()
 
     _manager
@@ -224,29 +224,29 @@ function __init__()
     end
 end
 
-function scaleset_pruning()
-    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
+# function scaleset_pruning()
+#     interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
 
-    while true
-        try
-            #=
-            The following seems required for an over-provisioned scaleset. it
-            is not clear why this is needed.
-            =#
-            prune_cluster()
-            #=
-            The following handles vms that are provisioined, but that fail to
-            join the cluster.
-            =#
-            prune_scalesets()
-        catch e
-            @error "scaleset pruning error"
-            logerror(e, Logging.Error)
-        finally
-            sleep(interval)
-        end
-    end
-end
+#     while true
+#         try
+#             #=
+#             The following seems required for an over-provisioned scaleset. it
+#             is not clear why this is needed.
+#             =#
+#             prune_cluster()
+#             #=
+#             The following handles vms that are provisioined, but that fail to
+#             join the cluster.
+#             =#
+#             prune_scalesets()
+#         catch e
+#             @error "scaleset pruning error"
+#             logerror(e, Logging.Error)
+#         finally
+#             sleep(interval)
+#         end
+#     end
+# end
 
 function scaleset_cleaning()
     interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_CLEAN_POLL_INTERVAL", "60"))
@@ -327,6 +327,15 @@ function scaleset_sync()
             for scaleset in keys(_scalesets)
                 _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
             end
+        end
+
+        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
+            # remove machines from the cluster that are not in the scaleset
+            prune_cluster()
+        end
+        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
+            # remove machines that are provisioned, but that failed to join the cluster
+            prune_scalesets()
         end
     catch e
         @error "scaleset syncing error"
