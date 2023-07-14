@@ -338,7 +338,6 @@ end
 
 function prune_cluster()
     manager = azmanager()
-    lock(manager.lock)
 
     # list of workers registered with Distributed.jl
     wrkrs1 = Dict{Int,Dict}()
@@ -402,14 +401,9 @@ function prune_cluster()
         @info "pruning worker $pid"
         @async Distributed.deregister_worker(pid)
     end
-
-    unlock(manager.lock)
 end
 
 function prune_scalesets()
-    manager = azmanager()
-    lock(manager.lock)
-
     worker_timeout = Second(parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "720")))
     manager = azmanager()
 
@@ -433,10 +427,10 @@ function prune_scalesets()
     end
     
     for scaleset in keys(_scalesets)
-        @info "AzManagers.prune_scalesets() -- length(instanceids[scaleset])=$(length(instanceids[scaleset]))"
-
         # update scale-set instances
         _vms = list_scaleset_vms(manager, scaleset)
+
+        @info "AzManagers.prune_scalesets -- BEFORE manager.pending_down[scaleset]=$(manager.pending_down[scaleset])"
 
         for _vm in _vms
             instanceid = split(_vm["id"],'/')[end]
@@ -445,7 +439,6 @@ function prune_scalesets()
             if instanceid ∈ instanceids[scaleset]
                 continue
             end
-            @info "AzManagers.prune_scalesets() -- instanceid=$(instanceid) ∈ instanceids[scaleset]=$(instanceid ∈ instanceids[scaleset])" 
             
             # otherwise, decide if we should remove the instance from the scale-set
             time_created = DateTime(_vm["properties"]["timeCreated"][1:23], DateFormat("yyyy-mm-ddTHH:MM:SS.s"))
@@ -456,9 +449,9 @@ function prune_scalesets()
                 add_instance_to_pending_down_list(manager, scaleset, instanceid)
             end
         end
-    end
 
-    unlock(manager.lock)
+        @info "AzManagers.prune_scalesets -- AFTER  manager.pending_down[scaleset]=$(manager.pending_down[scaleset])"
+    end
 end
 
 function delete_scalesets()
