@@ -438,11 +438,16 @@ function prune_scalesets()
         for _vm in _vms
             instanceid = split(_vm["id"],'/')[end]
 
+            _vmid = _vm["id"]
+
             # if the instanceid corresponds to a registered worker, do nothing
             if instanceid ∈ instanceids[scaleset]
                 continue
             end
-            
+
+            @info "AzManagers.prune_scalesets -- _vm[id[]=", _vm["id"]
+            @info "AzManagers.prune_scalesets -- instanceids[scaleset]=$(instanceids[scaleset])"
+
             # otherwise, decide if we should remove the instance from the scale-set
             time_created = DateTime(_vm["properties"]["timeCreated"][1:23], DateFormat("yyyy-mm-ddTHH:MM:SS.s"))
             time_elapsed = now(Dates.UTC) - time_created
