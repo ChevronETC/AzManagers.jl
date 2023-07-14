@@ -449,10 +449,10 @@ function prune_scalesets()
             time_elapsed = now(Dates.UTC) - time_created
             vm_state = lowercase(get(get(_vm, "properties", Dict()), "provisioningState", "none"))
 
-            _vmid = _vm["id"]
-            @info "AzManagers.prune_scalesets -- _vmid=$(_vmid) _vm[id[]", _vm["id"]
-            @info "AzManagers.prune_scalesets -- instanceids[scaleset]=$(instanceids[scaleset])"
-            @info "AzManagers.prune_scalesets -- time_elapsed=$(time_elapsed) worker_timeout=$(worker_timeout)" 
+            # _vmid = _vm["id"]
+            # @info "AzManagers.prune_scalesets -- _vmid=$(_vmid) _vm[id[]", _vm["id"]
+            # @info "AzManagers.prune_scalesets -- instanceids[scaleset]=$(instanceids[scaleset])"
+            # @info "AzManagers.prune_scalesets -- time_elapsed=$(time_elapsed) worker_timeout=$(worker_timeout)" 
 
             if time_elapsed > worker_timeout || vm_state == "failed"
                 @debug "scaleset pruning, adding $instanceid in $(scaleset.scalesetname) to deletion queue because it failed to join the cluster after $time_elapsed seconds, vm_state=$vm_state."
