@@ -749,7 +749,7 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
 
     scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
 
-    @info "Distributed.kill -- adding id=$(instanceid) to pending_down"
+    @info "Distributed.kill -- adding id=$(u["instanceid"]) to pending_down"
     add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
 
     @debug "...kill, pushed."
