@@ -322,7 +322,6 @@ function scaleset_sync()
     try
         _pending_down = pending_down(manager)
         pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
-        @info "AzManagers.scaleset_sync -- nworkers()=$(nworkers()) nprocs()=(nprocs()) pending_down_count=$(pending_down_count)"
         if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned(true))
             @debug "client/server scaleset book-keeping mismatch, synching client to server."
             _scalesets = scalesets(manager)
@@ -344,7 +343,7 @@ function prune_cluster()
     wrkrs1 = Dict{Int,Dict}()
     wrkrs2 = Dict{Int,Dict}()
     wrkrs2[1] = Dict()
-    spot_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_SPOT_EVICT_INTERVAL", "60")) # more than 30 seconds  
+    spot_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_SPOT_EVICT_INTERVAL", "120")) # more than 30 seconds  
     while keys(wrkrs1) != keys(wrkrs2)
 
         # copy wrkrs1 to wrkrs2
