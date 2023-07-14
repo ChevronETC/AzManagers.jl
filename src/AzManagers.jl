@@ -177,7 +177,7 @@ mutable struct AzManager <: ClusterManager
     show_quota::Bool
     scalesets::Dict{ScaleSet,Int}
     pending_up::Channel{TCPSocket}
-    pending_down::Dict{ScaleSet,Vector{String}}
+    pending_down::Dict{ScaleSet,Set{String}}
     port::UInt16
     server::Sockets.TCPServer
     worker_socket::TCPSocket
@@ -203,7 +203,7 @@ function azmanager!(session, nretry, verbose, show_quota)
 
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(32)
-    _manager.pending_down = Dict{ScaleSet,Vector{Int}}()
+    _manager.pending_down = Dict{ScaleSet,Set{String}}()
     _manager.scalesets = Dict{ScaleSet,Int}()
     _manager.task_add = @async add_pending_connections()
     _manager.task_process = @async process_pending_connections()
@@ -267,7 +267,7 @@ end
 
 scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : Dict{ScaleSet,Int}()
 scalesets() = scalesets(azmanager())
-pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Vector{String}}()
+pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Set{String}}()
 
 function delete_scaleset(manager, scaleset)
     @debug "deleting scaleset, $scaleset"
@@ -338,6 +338,7 @@ end
 
 function prune_cluster()
     manager = azmanager()
+    lock(manager.lock)
 
     # list of workers registered with Distributed.jl
     wrkrs1 = Dict{Int,Dict}()
@@ -401,9 +402,14 @@ function prune_cluster()
         @info "pruning worker $pid"
         @async Distributed.deregister_worker(pid)
     end
+
+    unlock(manager.lock)
 end
 
 function prune_scalesets()
+    manager = azmanager()
+    lock(manager.lock)
+
     worker_timeout = Second(parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "720")))
     manager = azmanager()
 
@@ -425,8 +431,10 @@ function prune_scalesets()
             end
         end
     end
-
+    
     for scaleset in keys(_scalesets)
+        @info "AzManagers.prune_scalesets() -- length(instanceids[scaleset])=$(length(instanceids[scaleset]))"
+
         # update scale-set instances
         _vms = list_scaleset_vms(manager, scaleset)
 
@@ -437,7 +445,8 @@ function prune_scalesets()
             if instanceid ∈ instanceids[scaleset]
                 continue
             end
-
+            @info "AzManagers.prune_scalesets() -- instanceid=$(instanceid) ∈ instanceids[scaleset]=$(instanceid ∈ instanceids[scaleset])" 
+            
             # otherwise, decide if we should remove the instance from the scale-set
             time_created = DateTime(_vm["properties"]["timeCreated"][1:23], DateFormat("yyyy-mm-ddTHH:MM:SS.s"))
             time_elapsed = now(Dates.UTC) - time_created
@@ -448,6 +457,8 @@ function prune_scalesets()
             end
         end
     end
+
+    unlock(manager.lock)
 end
 
 function delete_scalesets()
