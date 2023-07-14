@@ -1439,22 +1439,28 @@ end
 function compress_environment(julia_environment_folder)
     project_text = read(joinpath(julia_environment_folder, "Project.toml"), String)
     manifest_text = read(joinpath(julia_environment_folder, "Manifest.toml"), String)
-    local project_compressed,manifest_compressed
+    localpreferences_text = isfile(joinpath(julia_environment_folder, "LocalPreferences.toml")) ? read(joinpath(julia_environment_folder, "LocalPreferences.toml"), String) : ""
+    local project_compressed,manifest_compressed,localpreferences_compressed
     with_logger(ConsoleLogger(stdout, Logging.Info)) do
         project_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(project_text)))
         manifest_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(manifest_text)))
+        localpreferences_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(localpreferences_text)))
     end
 
-    project_compressed, manifest_compressed
+    project_compressed, manifest_compressed, localpreferences_compressed
 end
 
-function decompress_environment(project_compressed, manifest_compressed, remote_julia_environment_name)
+function decompress_environment(project_compressed, manifest_compressed, localpreferences_compressed, remote_julia_environment_name)
     mkpath(joinpath(Pkg.envdir(), remote_julia_environment_name))
 
     text = String(CodecZlib.transcode(ZlibDecompressor, Vector{UInt8}(base64decode(project_compressed))))
     write(joinpath(Pkg.envdir(), remote_julia_environment_name, "Project.toml"), text)
     text = String(CodecZlib.transcode(ZlibDecompressor, Vector{UInt8}(base64decode(manifest_compressed))))
     write(joinpath(Pkg.envdir(), remote_julia_environment_name, "Manifest.toml"), text)
+    text = String(CodecZlib.transcode(ZlibDecompressor, Vector{UInt8}(base64decode(localpreferences_compressed))))
+    if text != ""
+        write(joinpath(Pkg.envdir(), remote_julia_environment_name, "LocalPreferences.toml"), text)
+    end
 end
 
 function nvidia_has_nvidia_smi()
@@ -1551,12 +1557,12 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
             =#
             remote_julia_environment_name = splitpath(julia_environment_folder)[end]
 
-            project_compressed, manifest_compressed = compress_environment(julia_environment_folder)
+            project_compressed, manifest_compressed, localpreferences_compressed = compress_environment(julia_environment_folder)
 
             cmd *= """
             
             sudo su - $user <<'EOF'
-            julia -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$remote_julia_environment_name")'
+            julia -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$localpreferences_compressed", "$remote_julia_environment_name")'
             julia -e 'using Pkg, AzManagers; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); pkg"registry up"; Pkg.activate(path); AzManagers.robust_instantiate(); Pkg.precompile()'
             EOF
             """

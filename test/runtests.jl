@@ -115,6 +115,8 @@ end
 
     Pkg.add(PackageSpec(name="AzManagers", rev=azmanagers_rev))
 
+    write("LocalPreferences.toml", "[FooPackage]\nfoo = \"bar\"\n")
+
     r = randstring('a':'z',4)
     bname = "test$r"
 
@@ -123,9 +125,17 @@ end
         using Pkg
         pinfo = Pkg.project()
         write(stdout, "project path is $(pinfo.path)\n")
+        write(stdout, "$(readdir(pinfo.path))")
     end
     wait(testjob)
-    @test contains(read(testjob), "myproject")
+    testjob_stdout = read(testjob)
+    @test contains(testjob_stdout, "myproject")
+
+    x = readdir(".")
+    @test contains(testjob_stdout, "LocalPreferences.toml")
+    @test contains(testjob_stdout, "Manifest.toml")
+    @test contains(testjob_stdout, "Project.toml")
+
     rmproc(testvm; session=session)
 end
 
@@ -138,6 +148,8 @@ end
     Pkg.add("JSON")
     Pkg.add("HTTP")
 
+    write("LocalPreferences.toml", "[FooPackage]\nfoo = \"bar\"\n")
+
     Pkg.add(PackageSpec(name="AzManagers", rev=azmanagers_rev))
 
     group = "test$(randstring('a':'z',4))"
@@ -145,9 +157,16 @@ end
     addprocs(templatename, 1; waitfor=true, group=group, session=session, customenv=true)
     @everywhere using Pkg
     pinfo = remotecall_fetch(Pkg.project, workers()[1])
+    @test contains(pinfo.path, "myproject")
+
+    files = remotecall_fetch(Pkg.readdir, workers()[1], joinpath(pinfo.path, "myproject"))
+    x = readdir(".")
+    @test "LocalPreferences.toml" ∈ files
+    @test "Project.toml" ∈ files
+    @test "Manifest.toml" ∈ files
+
     rmprocs(workers())
 
-    @test contains(pinfo.path, "myproject")
 end
 
 @testset "tags, addprocs" begin
