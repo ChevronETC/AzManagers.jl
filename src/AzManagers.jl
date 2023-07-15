@@ -210,7 +210,7 @@ function azmanager!(session, nretry, verbose, show_quota)
     _manager.lock = ReentrantLock()
     _manager.scaleset_request_counter = 0
 
-    @async scaleset_pruning()
+    # @async scaleset_pruning()
     @async scaleset_cleaning()
 
     _manager
@@ -224,30 +224,29 @@ function __init__()
     end
 end
 
-function scaleset_pruning()
-    # interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
-    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "120"))
+# function scaleset_pruning()
+#     interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
 
-    while true
-        try
-            #=
-            The following seems required for an over-provisioned scaleset. it
-            is not clear why this is needed.
-            =#
-            prune_cluster()
-            #=
-            The following handles vms that are provisioined, but that fail to
-            join the cluster.
-            =#
-            prune_scalesets()
-        catch e
-            @error "scaleset pruning error"
-            logerror(e, Logging.Error)
-        finally
-            sleep(interval)
-        end
-    end
-end
+#     while true
+#         try
+#             #=
+#             The following seems required for an over-provisioned scaleset. it
+#             is not clear why this is needed.
+#             =#
+#             prune_cluster()
+#             #=
+#             The following handles vms that are provisioined, but that fail to
+#             join the cluster.
+#             =#
+#             prune_scalesets()
+#         catch e
+#             @error "scaleset pruning error"
+#             logerror(e, Logging.Error)
+#         finally
+#             sleep(interval)
+#         end
+#     end
+# end
 
 function scaleset_cleaning()
     interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_CLEAN_POLL_INTERVAL", "60"))
@@ -328,6 +327,13 @@ function scaleset_sync()
             for scaleset in keys(_scalesets)
                 _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
             end
+        end
+
+        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
+            # remove machines from the cluster that are not in the scaleset
+            prune_cluster()
+            # remove machines that are provisioned, but that failed to join the cluster
+            prune_scalesets()
         end
     catch e
         @error "scaleset syncing error"
@@ -447,12 +453,6 @@ function prune_scalesets()
             time_created = DateTime(_vm["properties"]["timeCreated"][1:23], DateFormat("yyyy-mm-ddTHH:MM:SS.s"))
             time_elapsed = now(Dates.UTC) - time_created
             vm_state = lowercase(get(get(_vm, "properties", Dict()), "provisioningState", "none"))
-
-            # _vmid = _vm["id"]
-            # @info "AzManagers.prune_scalesets -- _vmid=$(_vmid) _vm[id[]", _vm["id"]
-            # @info "AzManagers.prune_scalesets -- instanceids[scaleset]=$(instanceids[scaleset])"
-            # @info "AzManagers.prune_scalesets -- time_elapsed=$(time_elapsed) worker_timeout=$(worker_timeout)" 
-
             if time_elapsed > worker_timeout || vm_state == "failed"
                 @debug "scaleset pruning, adding $instanceid in $(scaleset.scalesetname) to deletion queue because it failed to join the cluster after $time_elapsed seconds, vm_state=$vm_state."
                 @info "AzManagers.prune_scalesets -- adding instanceid=$(instanceid) to pending_down"
@@ -732,11 +732,9 @@ end
 
 function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSet, instanceid)
     if haskey(manager.pending_down, scaleset)
-        @info "AzManagers.add_instance_to_pending_down_list -- pushing worker with id=$instanceid onto pending_down"
         @debug "pushing worker with id=$instanceid onto pending_down"
         push!(manager.pending_down[scaleset], string(instanceid))
     else
-        @info "AzManagers.add_instance_to_pending_down_list -- creating pending_down vector for id=$instanceid"
         @debug "creating pending_down vector for id=$instanceid"
         manager.pending_down[scaleset] = Set{String}([string(instanceid)])
     end
