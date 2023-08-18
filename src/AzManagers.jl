@@ -182,6 +182,8 @@ mutable struct AzManager <: ClusterManager
     scalesets::Dict{ScaleSet,Int}
     pending_up::Channel{TCPSocket}
     pending_down::Dict{ScaleSet,Set{String}}
+    deleted::Dict{ScaleSet,Dict{String,DateTime}}
+    pruned::Dict{ScaleSet,Set{String}}
     port::UInt16
     server::Sockets.TCPServer
     worker_socket::TCPSocket
@@ -208,6 +210,8 @@ function azmanager!(session, nretry, verbose, show_quota)
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(32)
     _manager.pending_down = Dict{ScaleSet,Set{String}}()
+    _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
+    _manager.pruned = Dict{ScaleSet,Set{String}}()
     _manager.scalesets = Dict{ScaleSet,Int}()
     _manager.task_add = @async add_pending_connections()
     _manager.task_process = @async process_pending_connections()
@@ -377,10 +381,32 @@ function prune_cluster()
         end
     end
 
-    # deregister workers that do not have a corresponding scale-set vm instance
+    # remove from list workers that are already scheduled for removal from the cluster
+    for id in pending_down(manager)
+        delete!(wrkrs, id)
+    end
+
+    # remove from list workers that are in TERMINATED or TERMINATING cluster state
+    for (id,wrkr) in Distributed.map_pid_wrkr
+        if isdefined(wrkr, :state) && wrkr.state ∈ (Distributed.W_TERMINATED, Distributed.W_TERMINATING)
+            delete!(wrkrs, id)
+        end
+    end
+
+    # remove from list workers that are in Distributed's deletion pool
+    for (id,wrkr) in Distributed.map_pid_wrkr
+        if isdefined(wrkr, :state) && wrkr.state ∈ (Distributed.W_TERMINATED, Distributed.W_TERMINATING)
+            delete!(wrkrs, id)
+        end
+    end
+
+    # remove workers that do not have a corresponding scale-set vm instance
     for pid in keys(wrkrs)
-        @info "pruning worker $pid"
-        @async Distributed.deregister_worker(pid)
+        @info "Removing worker $pid from the Julia cluster since it is no longer in the scaleset." wrkrs[pid]
+        # We can't use rmprocs here since the worker process is gone.  The worker process would usually do the
+        # following two lines (see the Distributed.message_handler_loop function)
+        Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
+        Distributed.deregister_worker(pid)
     end
 end
 
@@ -421,11 +447,17 @@ function prune_scalesets()
             end
 
             # otherwise, decide if we should remove the instance from the scale-set
-            time_created = DateTime(_vm["properties"]["timeCreated"][1:23], DateFormat("yyyy-mm-ddTHH:MM:SS.s"))
-            time_elapsed = now(Dates.UTC) - time_created
+            time_touched = get(get(manager.deleted, scaleset, Dict()), instanceid, DateTime(_vm["properties"]["timeCreated"][1:23], DateFormat("yyyy-mm-ddTHH:MM:SS.s")))
+            time_elapsed = now(Dates.UTC) - time_touched
             vm_state = lowercase(get(get(_vm, "properties", Dict()), "provisioningState", "none"))
-            if time_elapsed > worker_timeout || vm_state == "failed"
-                @debug "scaleset pruning, adding $instanceid in $(scaleset.scalesetname) to deletion queue because it failed to join the cluster after $time_elapsed seconds, vm_state=$vm_state."
+            is_worker_deleting = scaleset ∈ keys(manager.pending_down) && instanceid ∈ manager.pending_down[scaleset]
+            is_vm_deleting = lowercase(vm_state) == "deleting"
+            ispruned_already = scaleset ∈ keys(manager.pruned) && instanceid ∈ manager.pruned[scaleset]
+
+            doprune = (time_elapsed > worker_timeout || vm_state == "failed") && !is_worker_deleting && !is_vm_deleting && !ispruned_already
+            if doprune
+                @info "Putting machine with instance id $instanceid in $(scaleset.scalesetname) onto the deletion queue because it failed to join the Julia cluster after $(round(time_elapsed, Second)), vm_state=$vm_state."
+                add_instance_to_pruned_list(manager, scaleset, instanceid)
                 add_instance_to_pending_down_list(manager, scaleset, instanceid)
             end
         end
@@ -707,6 +739,28 @@ function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSe
     nothing
 end
 
+function add_instance_to_pruned_list(manager::AzManager, scaleset::ScaleSet, instanceid)
+    if haskey(manager.pruned, scaleset)
+        @debug "pushing worker with id=$instanceid onto pruned"
+        push!(manager.pruned[scaleset], string(instanceid))
+    else
+        @debug "creating pruned vector for id=$instanceid"
+        manager.pruned[scaleset] = Set{String}([string(instanceid)])
+    end
+    nothing
+end
+
+function add_instance_to_deleted_list(manager::AzManager, scaleset::ScaleSet, instanceid)
+    if haskey(manager.deleted, scaleset)
+        @debug "pushing worker with id=$instanceid onto deleted"
+        manager.deleted[scaleset][instanceid] = now(Dates.UTC)
+    else
+        @debug "creating deleted dictionary for id=$instanceid"
+        manager.deleted[scaleset] = Dict(instanceid=>now(Dates.UTC))
+    end
+    nothing
+end
+
 function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     @debug "kill for id=$id"
     try
@@ -721,6 +775,7 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
 
     add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
+    add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
 
     @debug "...kill, pushed."
     nothing
@@ -2120,7 +2175,7 @@ end
 
 function timestamp_metaformatter(level::Logging.LogLevel, _module, group, id, file, line)
     @nospecialize
-    timestamp = Dates.format(now(), "yyyy-mm-ddTHH:MM:SS")
+    timestamp = Dates.format(now(Dates.UTC), "yyyy-mm-ddTHH:MM:SS")
     color = Logging.default_logcolor(level)
     prefix = timestamp*" - "*(level == Logging.Warn ? "Warning" : string(level))*':'
     suffix = ""
