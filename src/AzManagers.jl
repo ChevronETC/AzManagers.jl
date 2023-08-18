@@ -348,15 +348,13 @@ function prune_cluster()
 
     # list of workers registered with Distributed.jl
     wrkrs = Dict{Int,Dict}()
-    for wrkr in Distributed.PGRP.workers
-        if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
+    for (pid,wrkr) in Distributed.map_pid_wrkr
+        if pid != 1 && isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
             if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
-                wrkrs[wrkr.id] = wrkr.config.userdata
+                wrkrs[pid] = wrkr.config.userdata
             end
         end
     end
-
-    sleep(10)
 
     # remove from list workers that have a corresponding scale-set vm instance.  What remains can be deleted from the cluster.
     _scalesets = scalesets(manager)
@@ -394,16 +392,17 @@ function prune_scalesets()
 
     # list of workers registered with Distributed.jl, organized by scale-set
     instanceids = Dict{ScaleSet,Array{String}}()
-    for scaleset in keys(_scalesets)
-        instanceids[scaleset] = String[]
-    end
-
-    for wrkr in Distributed.PGRP.workers
+    for wrkr in values(Distributed.map_pid_wrkr)
         if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
             if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
                 userdata = wrkr.config.userdata
                 if haskey(userdata, "instanceid") && haskey(userdata, "scalesetname") && haskey(userdata, "resourcegroup") && haskey(userdata, "subscriptionid")
-                    push!(instanceids[ScaleSet(userdata["subscriptionid"], userdata["resourcegroup"], userdata["scalesetname"])], userdata["instanceid"])
+                    ss = ScaleSet(userdata["subscriptionid"], userdata["resourcegroup"], userdata["scalesetname"])
+                    if haskey(instanceids, ss)
+                        push!(instanceids[ss], userdata["instanceid"])
+                    else
+                        instanceids[ss] = [userdata["instanceid"]]
+                    end
                 end
             end
         end
@@ -417,7 +416,7 @@ function prune_scalesets()
             instanceid = split(_vm["id"],'/')[end]
 
             # if the instanceid corresponds to a registered worker, do nothing
-            if instanceid ∈ instanceids[scaleset]
+            if scaleset ∈ keys(instanceids) && instanceid ∈ instanceids[scaleset]
                 continue
             end
 
