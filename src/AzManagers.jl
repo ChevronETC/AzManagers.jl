@@ -285,8 +285,13 @@ end
 function delete_empty_scalesets()
     manager = azmanager()
     lock(manager.lock)
-    for (scaleset, capacity) in scalesets(manager)
+    _scalesets = scalesets(manager)
+    for (scaleset, capacity) in _scalesets
         if capacity == 0
+            # double-check capacity in case there is client/server mis-match
+            _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+        end
+        if _scalesets[scaleset] == 0
             delete_scaleset(manager, scaleset)
         end
     end
@@ -300,14 +305,9 @@ function delete_pending_down_vms()
     for (scaleset, ids) in pending_down(manager)
         @debug "deleting pending down vms $ids in $scaleset"
         try
+            delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
             new_capacity = max(0, scalesets(manager)[scaleset] - length(ids))
-            if new_capacity == 0
-                # this should save some requests, because one request will delete the scaleset, rather than deleting the vm's first
-                delete_scaleset(manager, scaleset)
-            else
-                delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
-                scalesets(manager)[scaleset] = new_capacity
-            end
+            scalesets(manager)[scaleset] = new_capacity
             delete!(pending_down(manager), scaleset)
         catch e
             if status(e) == 404
