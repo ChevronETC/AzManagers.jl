@@ -170,6 +170,7 @@ struct ScaleSet
     subscriptionid
     resourcegroup
     scalesetname
+    ScaleSet(subscriptionid, resourcegroup, scalesetname) = new(lowercase(subscriptionid), lowercase(resourcegroup), lowercase(scalesetname))
 end
 Base.Dict(scaleset::ScaleSet) = Dict("subscriptionid"=>scaleset.subscriptionid, "resourcegroup"=>scaleset.resourcegroup, "name"=>scaleset.scalesetname)
 
@@ -367,10 +368,8 @@ function prune_cluster()
         end
 
         for (id,wrkr) in wrkrs
-            is_sub = get(wrkr, "subscriptionid", "") == scaleset.subscriptionid
-            is_rg = get(wrkr, "resourcegroup", "") == scaleset.resourcegroup
-            is_ss = get(wrkr, "scalesetname", "") == scaleset.scalesetname
-            if is_sub && is_rg && is_ss && get(wrkr, "name", "") ∈ vm_names
+            _scaleset = ScaleSet(get(wrkr, "subscriptionid", ""), get(wrkr, "resourcegroup", ""), get(wrkr, "scalesetname", ""))
+            if _scaleset == scaleset && get(wrkr, "name", "") ∈ vm_names
                 delete!(wrkrs, id)
             end
         end
@@ -851,9 +850,9 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
         "bind_addr" => string(getipaddr(IPv4)),
         "ppi" => ppi,
         "userdata" => Dict(
-            "subscriptionid" => r["compute"]["subscriptionId"],
-            "resourcegroup" => r["compute"]["resourceGroupName"],
-            "scalesetname" => r["compute"]["vmScaleSetName"],
+            "subscriptionid" => lowercase(r["compute"]["subscriptionId"]),
+            "resourcegroup" => lowercase(r["compute"]["resourceGroupName"]),
+            "scalesetname" => lowercase(r["compute"]["vmScaleSetName"]),
             "instanceid" => split(r["compute"]["resourceId"], '/')[end],
             "localid" => 1,
             "name" => r["compute"]["name"],
