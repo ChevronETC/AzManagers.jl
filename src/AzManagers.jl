@@ -329,7 +329,7 @@ function scaleset_sync()
     try
         _pending_down = pending_down(manager)
         pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
-        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
+        if nprocs()-1+pending_down_count != nworkers_provisioned()
             @debug "client/server scaleset book-keeping mismatch, synching client to server."
             _scalesets = scalesets(manager)
             for scaleset in keys(_scalesets)
