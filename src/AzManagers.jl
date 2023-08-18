@@ -2061,6 +2061,25 @@ function mount_datadisks()
     end
 end
 
+function simulate_spot_eviction(pid)
+    if pid == 1
+        return
+    end
+    instanceid = Distributed.map_pid_wrkr[pid].config.userdata["instanceid"]
+    subscriptionid = Distributed.map_pid_wrkr[pid].config.userdata["subscriptionid"]
+    resourcegroup = Distributed.map_pid_wrkr[pid].config.userdata["resourcegroup"]
+    scalesetname = Distributed.map_pid_wrkr[pid].config.userdata["scalesetname"]
+
+    manager = azmanager()
+    session = manager.session
+
+    HTTP.request(
+        "POST",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/virtualMachines/$instanceid/simulateEviction?api-version=2023-03-01",
+        ["Authorization" => "Bearer $(token(session))"])
+    nothing
+end
+
 #
 # detached service and REST API
 #
