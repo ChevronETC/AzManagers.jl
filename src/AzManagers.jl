@@ -310,8 +310,12 @@ function delete_pending_down_vms()
             end
             delete!(pending_down(manager), scaleset)
         catch e
-            @error "error deleting scaleset vms, manual clean-up may be required."
-            logerror(e, Logging.Error)
+            if status(e) == 404
+                # the resource is already deleted, nothing else to do
+            else
+                @error "error deleting scaleset vms, manual clean-up may be required."
+                logerror(e, Logging.Error)
+            end
         end
     end
     unlock(manager.lock)
@@ -1833,11 +1837,19 @@ function list_scaleset_vms_flexible(manager, scaleset)
 end
 
 function list_scaleset_vms(manager, scaleset)
-    _r = @retry manager.nretry azrequest(
-        "GET",
-        manager.verbose,
-        "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)?api-version=2023-03-01",
-        ["Authorization"=>"Bearer $(token(manager.session))"])
+    local vms, _r
+    try
+        _r = @retry manager.nretry azrequest(
+            "GET",
+            manager.verbose,
+            "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)?api-version=2023-03-01",
+            ["Authorization"=>"Bearer $(token(manager.session))"])
+    catch e
+        if status(e) == 404
+            # the scale-set does not exist, so the set of vms is empty
+            return []
+        end
+    end
     r = JSON.parse(String(_r.body))
 
     local vms
@@ -1850,12 +1862,20 @@ function list_scaleset_vms(manager, scaleset)
 end
 
 function scaleset_capacity(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
-    _r = @retry nretry azrequest(
-        "GET",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
-        ["Authorization"=>"Bearer $(token(manager.session))"])
-    r = JSON.parse(String(_r.body))
+    local r
+    try
+        _r = @retry nretry azrequest(
+            "GET",
+            verbose,
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
+            ["Authorization"=>"Bearer $(token(manager.session))"])
+        r = JSON.parse(String(_r.body))
+    catch e
+        if status(e) == 404
+            return 0
+        end
+        throw(e)
+    end
 
     if manager.show_quota
         @info "Quota after getting scale set capacity" remaining_resource(_r)
