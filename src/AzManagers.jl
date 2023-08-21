@@ -170,6 +170,7 @@ struct ScaleSet
     subscriptionid
     resourcegroup
     scalesetname
+    ScaleSet(subscriptionid, resourcegroup, scalesetname) = new(lowercase(subscriptionid), lowercase(resourcegroup), lowercase(scalesetname))
 end
 Base.Dict(scaleset::ScaleSet) = Dict("subscriptionid"=>scaleset.subscriptionid, "resourcegroup"=>scaleset.resourcegroup, "name"=>scaleset.scalesetname)
 
@@ -181,6 +182,8 @@ mutable struct AzManager <: ClusterManager
     scalesets::Dict{ScaleSet,Int}
     pending_up::Channel{TCPSocket}
     pending_down::Dict{ScaleSet,Set{String}}
+    deleted::Dict{ScaleSet,Dict{String,DateTime}}
+    pruned::Dict{ScaleSet,Set{String}}
     port::UInt16
     server::Sockets.TCPServer
     worker_socket::TCPSocket
@@ -207,6 +210,8 @@ function azmanager!(session, nretry, verbose, show_quota)
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(32)
     _manager.pending_down = Dict{ScaleSet,Set{String}}()
+    _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
+    _manager.pruned = Dict{ScaleSet,Set{String}}()
     _manager.scalesets = Dict{ScaleSet,Int}()
     _manager.task_add = @async add_pending_connections()
     _manager.task_process = @async process_pending_connections()
@@ -284,8 +289,13 @@ end
 function delete_empty_scalesets()
     manager = azmanager()
     lock(manager.lock)
-    for (scaleset, capacity) in scalesets(manager)
+    _scalesets = scalesets(manager)
+    for (scaleset, capacity) in _scalesets
         if capacity == 0
+            # double-check capacity in case there is client/server mis-match
+            _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+        end
+        if _scalesets[scaleset] == 0
             delete_scaleset(manager, scaleset)
         end
     end
@@ -299,18 +309,17 @@ function delete_pending_down_vms()
     for (scaleset, ids) in pending_down(manager)
         @debug "deleting pending down vms $ids in $scaleset"
         try
+            delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
             new_capacity = max(0, scalesets(manager)[scaleset] - length(ids))
-            if new_capacity == 0
-                # this should save some requests, because one request will delete the scaleset, rather than deleting the vm's first
-                delete_scaleset(manager, scaleset)
-            else
-                delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
-                scalesets(manager)[scaleset] = new_capacity
-            end
+            scalesets(manager)[scaleset] = new_capacity
             delete!(pending_down(manager), scaleset)
         catch e
-            @error "error deleting scaleset vms, manual clean-up may be required."
-            logerror(e, Logging.Error)
+            if status(e) == 404
+                # the resource is already deleted, nothing else to do
+            else
+                @error "error deleting scaleset vms, manual clean-up may be required."
+                logerror(e, Logging.Error)
+            end
         end
     end
     unlock(manager.lock)
@@ -324,7 +333,7 @@ function scaleset_sync()
     try
         _pending_down = pending_down(manager)
         pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
-        if nworkers() != nprocs() && ((nworkers()+pending_down_count) != nworkers_provisioned())
+        if nprocs()-1+pending_down_count != nworkers_provisioned()
             @debug "client/server scaleset book-keeping mismatch, synching client to server."
             _scalesets = scalesets(manager)
             for scaleset in keys(_scalesets)
@@ -343,15 +352,13 @@ function prune_cluster()
 
     # list of workers registered with Distributed.jl
     wrkrs = Dict{Int,Dict}()
-    for wrkr in Distributed.PGRP.workers
-        if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
+    for (pid,wrkr) in Distributed.map_pid_wrkr
+        if pid != 1 && isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
             if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
-                wrkrs[wrkr.id] = wrkr.config.userdata
+                wrkrs[pid] = wrkr.config.userdata
             end
         end
     end
-
-    sleep(10)
 
     # remove from list workers that have a corresponding scale-set vm instance.  What remains can be deleted from the cluster.
     _scalesets = scalesets(manager)
@@ -367,19 +374,39 @@ function prune_cluster()
         end
 
         for (id,wrkr) in wrkrs
-            is_sub = get(wrkr, "subscriptionid", "") == scaleset.subscriptionid
-            is_rg = get(wrkr, "resourcegroup", "") == scaleset.resourcegroup
-            is_ss = get(wrkr, "scalesetname", "") == scaleset.scalesetname
-            if is_sub && is_rg && is_ss && get(wrkr, "name", "") ∈ vm_names
+            _scaleset = ScaleSet(get(wrkr, "subscriptionid", ""), get(wrkr, "resourcegroup", ""), get(wrkr, "scalesetname", ""))
+            if _scaleset == scaleset && get(wrkr, "name", "") ∈ vm_names
                 delete!(wrkrs, id)
             end
         end
     end
 
-    # deregister workers that do not have a corresponding scale-set vm instance
+    # remove from list workers that are already scheduled for removal from the cluster
+    for id in pending_down(manager)
+        delete!(wrkrs, id)
+    end
+
+    # remove from list workers that are in TERMINATED or TERMINATING cluster state
+    for (id,wrkr) in Distributed.map_pid_wrkr
+        if isdefined(wrkr, :state) && wrkr.state ∈ (Distributed.W_TERMINATED, Distributed.W_TERMINATING)
+            delete!(wrkrs, id)
+        end
+    end
+
+    # remove from list workers that are in Distributed's deletion pool
+    for (id,wrkr) in Distributed.map_pid_wrkr
+        if isdefined(wrkr, :state) && wrkr.state ∈ (Distributed.W_TERMINATED, Distributed.W_TERMINATING)
+            delete!(wrkrs, id)
+        end
+    end
+
+    # remove workers that do not have a corresponding scale-set vm instance
     for pid in keys(wrkrs)
-        @info "pruning worker $pid"
-        @async Distributed.deregister_worker(pid)
+        @info "Removing worker $pid from the Julia cluster since it is no longer in the scaleset." wrkrs[pid]
+        # We can't use rmprocs here since the worker process is gone.  The worker process would usually do the
+        # following two lines (see the Distributed.message_handler_loop function)
+        Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
+        Distributed.deregister_worker(pid)
     end
 end
 
@@ -391,16 +418,17 @@ function prune_scalesets()
 
     # list of workers registered with Distributed.jl, organized by scale-set
     instanceids = Dict{ScaleSet,Array{String}}()
-    for scaleset in keys(_scalesets)
-        instanceids[scaleset] = String[]
-    end
-
-    for wrkr in Distributed.PGRP.workers
+    for wrkr in values(Distributed.map_pid_wrkr)
         if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
             if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
                 userdata = wrkr.config.userdata
                 if haskey(userdata, "instanceid") && haskey(userdata, "scalesetname") && haskey(userdata, "resourcegroup") && haskey(userdata, "subscriptionid")
-                    push!(instanceids[ScaleSet(userdata["subscriptionid"], userdata["resourcegroup"], userdata["scalesetname"])], userdata["instanceid"])
+                    ss = ScaleSet(userdata["subscriptionid"], userdata["resourcegroup"], userdata["scalesetname"])
+                    if haskey(instanceids, ss)
+                        push!(instanceids[ss], userdata["instanceid"])
+                    else
+                        instanceids[ss] = [userdata["instanceid"]]
+                    end
                 end
             end
         end
@@ -414,16 +442,22 @@ function prune_scalesets()
             instanceid = split(_vm["id"],'/')[end]
 
             # if the instanceid corresponds to a registered worker, do nothing
-            if instanceid ∈ instanceids[scaleset]
+            if scaleset ∈ keys(instanceids) && instanceid ∈ instanceids[scaleset]
                 continue
             end
 
             # otherwise, decide if we should remove the instance from the scale-set
-            time_created = DateTime(_vm["properties"]["timeCreated"][1:23], DateFormat("yyyy-mm-ddTHH:MM:SS.s"))
-            time_elapsed = now(Dates.UTC) - time_created
+            time_touched = get(get(manager.deleted, scaleset, Dict()), instanceid, DateTime(_vm["properties"]["timeCreated"][1:23], DateFormat("yyyy-mm-ddTHH:MM:SS.s")))
+            time_elapsed = now(Dates.UTC) - time_touched
             vm_state = lowercase(get(get(_vm, "properties", Dict()), "provisioningState", "none"))
-            if time_elapsed > worker_timeout || vm_state == "failed"
-                @debug "scaleset pruning, adding $instanceid in $(scaleset.scalesetname) to deletion queue because it failed to join the cluster after $time_elapsed seconds, vm_state=$vm_state."
+            is_worker_deleting = scaleset ∈ keys(manager.pending_down) && instanceid ∈ manager.pending_down[scaleset]
+            is_vm_deleting = lowercase(vm_state) == "deleting"
+            ispruned_already = scaleset ∈ keys(manager.pruned) && instanceid ∈ manager.pruned[scaleset]
+
+            doprune = (time_elapsed > worker_timeout || vm_state == "failed") && !is_worker_deleting && !is_vm_deleting && !ispruned_already
+            if doprune
+                @info "Putting machine with instance id $instanceid in $(scaleset.scalesetname) onto the deletion queue because it failed to join the Julia cluster after $(round(time_elapsed, Second)), vm_state=$vm_state."
+                add_instance_to_pruned_list(manager, scaleset, instanceid)
                 add_instance_to_pending_down_list(manager, scaleset, instanceid)
             end
         end
@@ -705,6 +739,28 @@ function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSe
     nothing
 end
 
+function add_instance_to_pruned_list(manager::AzManager, scaleset::ScaleSet, instanceid)
+    if haskey(manager.pruned, scaleset)
+        @debug "pushing worker with id=$instanceid onto pruned"
+        push!(manager.pruned[scaleset], string(instanceid))
+    else
+        @debug "creating pruned vector for id=$instanceid"
+        manager.pruned[scaleset] = Set{String}([string(instanceid)])
+    end
+    nothing
+end
+
+function add_instance_to_deleted_list(manager::AzManager, scaleset::ScaleSet, instanceid)
+    if haskey(manager.deleted, scaleset)
+        @debug "pushing worker with id=$instanceid onto deleted"
+        manager.deleted[scaleset][instanceid] = now(Dates.UTC)
+    else
+        @debug "creating deleted dictionary for id=$instanceid"
+        manager.deleted[scaleset] = Dict(instanceid=>now(Dates.UTC))
+    end
+    nothing
+end
+
 function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     @debug "kill for id=$id"
     try
@@ -719,6 +775,7 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
 
     add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
+    add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
 
     @debug "...kill, pushed."
     nothing
@@ -851,9 +908,9 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
         "bind_addr" => string(getipaddr(IPv4)),
         "ppi" => ppi,
         "userdata" => Dict(
-            "subscriptionid" => r["compute"]["subscriptionId"],
-            "resourcegroup" => r["compute"]["resourceGroupName"],
-            "scalesetname" => r["compute"]["vmScaleSetName"],
+            "subscriptionid" => lowercase(r["compute"]["subscriptionId"]),
+            "resourcegroup" => lowercase(r["compute"]["resourceGroupName"]),
+            "scalesetname" => lowercase(r["compute"]["vmScaleSetName"]),
             "instanceid" => split(r["compute"]["resourceId"], '/')[end],
             "localid" => 1,
             "name" => r["compute"]["name"],
@@ -1834,11 +1891,19 @@ function list_scaleset_vms_flexible(manager, scaleset)
 end
 
 function list_scaleset_vms(manager, scaleset)
-    _r = @retry manager.nretry azrequest(
-        "GET",
-        manager.verbose,
-        "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)?api-version=2023-03-01",
-        ["Authorization"=>"Bearer $(token(manager.session))"])
+    local vms, _r
+    try
+        _r = @retry manager.nretry azrequest(
+            "GET",
+            manager.verbose,
+            "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)?api-version=2023-03-01",
+            ["Authorization"=>"Bearer $(token(manager.session))"])
+    catch e
+        if status(e) == 404
+            # the scale-set does not exist, so the set of vms is empty
+            return []
+        end
+    end
     r = JSON.parse(String(_r.body))
 
     local vms
@@ -1851,12 +1916,20 @@ function list_scaleset_vms(manager, scaleset)
 end
 
 function scaleset_capacity(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
-    _r = @retry nretry azrequest(
-        "GET",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
-        ["Authorization"=>"Bearer $(token(manager.session))"])
-    r = JSON.parse(String(_r.body))
+    local r
+    try
+        _r = @retry nretry azrequest(
+            "GET",
+            verbose,
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
+            ["Authorization"=>"Bearer $(token(manager.session))"])
+        r = JSON.parse(String(_r.body))
+    catch e
+        if status(e) == 404
+            return 0
+        end
+        throw(e)
+    end
 
     if manager.show_quota
         @info "Quota after getting scale set capacity" remaining_resource(_r)
@@ -2062,6 +2135,25 @@ function mount_datadisks()
     end
 end
 
+function simulate_spot_eviction(pid)
+    if pid == 1
+        return
+    end
+    instanceid = Distributed.map_pid_wrkr[pid].config.userdata["instanceid"]
+    subscriptionid = Distributed.map_pid_wrkr[pid].config.userdata["subscriptionid"]
+    resourcegroup = Distributed.map_pid_wrkr[pid].config.userdata["resourcegroup"]
+    scalesetname = Distributed.map_pid_wrkr[pid].config.userdata["scalesetname"]
+
+    manager = azmanager()
+    session = manager.session
+
+    HTTP.request(
+        "POST",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/virtualMachines/$instanceid/simulateEviction?api-version=2023-03-01",
+        ["Authorization" => "Bearer $(token(session))"])
+    nothing
+end
+
 #
 # detached service and REST API
 #
@@ -2083,7 +2175,7 @@ end
 
 function timestamp_metaformatter(level::Logging.LogLevel, _module, group, id, file, line)
     @nospecialize
-    timestamp = Dates.format(now(), "yyyy-mm-ddTHH:MM:SS")
+    timestamp = Dates.format(now(Dates.UTC), "yyyy-mm-ddTHH:MM:SS")
     color = Logging.default_logcolor(level)
     prefix = timestamp*" - "*(level == Logging.Warn ? "Warning" : string(level))*':'
     suffix = ""
