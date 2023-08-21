@@ -838,6 +838,11 @@ function preempted()
 end
 preempted(id) = remotecall_fetch(preempted, id)
 
+function azure_sn()
+    io = open(`strings /var/lib/hyperv/.kvp_pool_3`)
+    sn = chomp(split(read(io,String), "\n")[16])
+end
+
 function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
     c = connect(IPv4(master_address), master_port)
 
@@ -858,7 +863,8 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
             "localid" => 1,
             "name" => r["compute"]["name"],
             "mpi" => mpi_size > 0,
-            "mpi_size" => mpi_size))
+            "mpi_size" => mpi_size,
+            "instance_sn" => azure_sn()))
     _vm = base64encode(json(vm))
 
     nbytes_written = write(c, _vm*"\n")
