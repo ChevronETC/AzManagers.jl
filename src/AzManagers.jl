@@ -839,8 +839,9 @@ end
 preempted(id) = remotecall_fetch(preempted, id)
 
 function azure_sn()
-    io = open(`strings /var/lib/hyperv/.kvp_pool_3`)
-    sn = chomp(split(read(io,String), "\n")[16])
+    s = split(read("/var/lib/hyperv/.kvp_pool_3", String), '\0'; keepempty=false)
+    i = findfirst(_s->_s=="PhysicalHostName", s)
+    s[i+1]
 end
 
 function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
@@ -864,7 +865,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
             "name" => r["compute"]["name"],
             "mpi" => mpi_size > 0,
             "mpi_size" => mpi_size,
-            "instance_sn" => azure_sn()))
+            "physical_hostname" => azure_sn()))
     _vm = base64encode(json(vm))
 
     nbytes_written = write(c, _vm*"\n")
