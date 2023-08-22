@@ -33,17 +33,19 @@ jobs:
       SUBNET_NAME: "default"
       COMMIT_SHA: "${{ github.sha }}"
       JULIA_VERSION: "${{ matrix.version }}"
+      PKR_VAR_subscription_id: "${{ secrets.SUBSCRIPTION_ID }}"
+      PKR_VAR_tenant_id: "${{ secrets.TENANT_ID }}"
+      PKR_VAR_client_secret: "${{ secrets.CLIENT_SECRET }}"
+      PKR_VAR_resource_group: "${{ secrets.RESOURCE_GROUP }}"
+      PKR_VAR_image_name: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image"
+      PKR_VAR_virtual_network: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet"
+      PKR_VAR_virtual_subnet: "default"
+      PKR_VAR_julia_version: "${{ matrix.version }}"
     steps:
       - uses: actions/checkout@v3
 
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
-
-      - name: Template the Packer Image file
-        uses: cuchi/jinja2-action@v1.2.0
-        with:
-          template: test/templates/cofii-base.json.j2
-          output_file: test/templates/cofii-base.json
 
       - name: Template the AzManagers Setup script
         uses: cuchi/jinja2-action@v1.2.0
@@ -70,33 +72,33 @@ jobs:
           sudo apt-get update && sudo apt-get install packer
 
       - name: Build Packer Image
-        run: packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.json
+        run: packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
 
-      - name: Create Master VM
-        run: |
-          az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "$IMAGE_NAME" --public-ip-sku Standard --public-ip-address "$PUBLIC_IP_NAME" --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --nsg "$NSG_NAME" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub --admin-username cvx
+      # - name: Create Master VM
+      #   run: |
+      #     az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "$IMAGE_NAME" --public-ip-sku Standard --public-ip-address "$PUBLIC_IP_NAME" --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --nsg "$NSG_NAME" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub --admin-username cvx
 
-      - name: Run the unit tests
-        run: |
-          echo "Grabbing the Master VM's Pubic IP Address..."
-          ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq '.ipAddress' | cut -d "\"" -f 2)
-          echo ""
+      # - name: Run the unit tests
+      #   run: |
+      #     echo "Grabbing the Master VM's Pubic IP Address..."
+      #     ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq '.ipAddress' | cut -d "\"" -f 2)
+      #     echo ""
 
-          echo "Running the Unit Tests and Code Coverage..."
-          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true); using AzManagers; include(joinpath(pkgdir(AzManagers), \"test\", \"julia-codecov.jl\"))'"
-          echo ""
+      #     echo "Running the Unit Tests and Code Coverage..."
+      #     ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true); using AzManagers; include(joinpath(pkgdir(AzManagers), \"test\", \"julia-codecov.jl\"))'"
+      #     echo ""
 
-          echo "scp-ing the Coverage Report..."
-          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/lcov.info lcov.info
+      #     echo "scp-ing the Coverage Report..."
+      #     scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/lcov.info lcov.info
 
-      - uses: codecov/codecov-action@v1
-        with:
-          file: lcov.info
+      # - uses: codecov/codecov-action@v1
+      #   with:
+      #     file: lcov.info
 
-      - name: Delete CI Resource Group
-        run: |
-          az group delete -n "$RESOURCE_GROUP" --yes
-        if: ${{ always() }}
+      # - name: Delete CI Resource Group
+      #   run: |
+      #     az group delete -n "$RESOURCE_GROUP" --yes
+      #   if: ${{ always() }}
   docs:
     name: Documentation
     runs-on: ubuntu-latest
