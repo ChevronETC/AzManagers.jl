@@ -82,7 +82,7 @@
         "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"720\"' .bashrc",
         "export PATH=\"${PATH}:/opt/julia/bin\"",
         "echo \"installing julia packages\"",
-        "julia -e 'using Pkg; pkg\"add AzSessions AzManagers#{{ env['COMMIT_SHA'] }} Coverage Distributed HTTP JSON MPI MPIPreferences Random Test\"'",
+        "julia -e 'using Pkg; pkg\"add AzSessions AzManagers#master Coverage Distributed HTTP JSON MPI MPIPreferences Random Test\"'",
         "julia -e 'using MPIPreferences; MPIPreferences.use_jll_binary(\"MPICH_jll\")'"
       ]
       max_retries = 5
