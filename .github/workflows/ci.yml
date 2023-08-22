@@ -35,6 +35,7 @@ jobs:
       JULIA_VERSION: "${{ matrix.version }}"
       PKR_VAR_subscription_id: "${{ secrets.SUBSCRIPTION_ID }}"
       PKR_VAR_tenant_id: "${{ secrets.TENANT_ID }}"
+      PKR_VAR_client_id: "${{ secrets.CLIENT_ID }}"
       PKR_VAR_client_secret: "${{ secrets.CLIENT_SECRET }}"
       PKR_VAR_resource_group: "${{ secrets.RESOURCE_GROUP }}"
       PKR_VAR_image_name: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image"

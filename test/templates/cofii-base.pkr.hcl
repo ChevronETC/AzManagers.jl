@@ -6,6 +6,10 @@ variable "tenant_id" {
     default = "tenantid"
 }
 
+variable "client_id" {
+    default = "clientid"
+}
+
 variable "client_secret" {
     default = "secret"
 }
