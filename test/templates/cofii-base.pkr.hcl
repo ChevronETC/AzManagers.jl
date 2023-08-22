@@ -63,7 +63,7 @@ source "azure-arm" "cofii" {
         image_name = var.image_name
         image_version = var.image_version
         replication_regions = ["South Central US"]
-    },
+    }
     shared_image_gallery_timeout = "120m"
     build_resource_group_name = var.resource_group
     managed_image_resource_group_name = var.resource_group
@@ -78,7 +78,7 @@ source "azure-arm" "cofii" {
 
 build {
     sources = [
-        "soruce.azure-arm.cofii"
+        "source.azure-arm.cofii"
     ]
 
     provisioner "shell" {
