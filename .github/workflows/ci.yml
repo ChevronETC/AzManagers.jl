@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        julia-version:
+        version:
           # - 1.6
           - 1.9
         os:
@@ -21,30 +21,23 @@ jobs:
     env:
       TENANT_ID: "${{ secrets.TENANT_ID }}" 
       SUBSCRIPTION_ID: "${{ secrets.SUBSCRIPTION_ID }}"
-      RESOURCE_GROUP: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
+      RESOURCE_GROUP: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}"
       CLIENT_ID: "${{ secrets.CLIENT_ID }}"
       CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
-      GALLERY_NAME: "${{ github.run_id }}${{ matrix.julia-version }}gallery"
-      IMAGE_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image"
-      VM_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vm"
-      PUBLIC_IP_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip"
-      VNET_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet"
-      NSG_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-nsg"
+      GALLERY_NAME: "${{ github.run_id }}${{ matrix.version }}gallery"
+      IMAGE_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-image"
+      VM_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vm"
+      PUBLIC_IP_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-pubip"
+      VNET_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vnet"
+      NSG_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-nsg"
       SUBNET_NAME: "default"
       COMMIT_SHA: "${{ github.sha }}"
-      JULIA_VERSION: "${{ matrix.julia-version }}"
-      PKR_VAR_subscription_id: "${{ secrets.SUBSCRIPTION_ID }}"
-      PKR_VAR_tenant_id: "${{ secrets.TENANT_ID }}"
-      PKR_VAR_client_id: "${{ secrets.CLIENT_ID }}"
-      PKR_VAR_client_secret: "${{ secrets.CLIENT_SECRET }}"
-      PKR_VAR_resource_group: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
-      PKR_VAR_image_name: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image"
-      PKR_VAR_virtual_network: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet"
-      PKR_VAR_virtual_subnet: "default"
-      PKR_VAR_julia_version: "${{ matrix.julia-version }}"
-      PKR_VAR_gallery: "${{ github.run_id }}${{ matrix.julia-version }}gallery"
+      JULIA_VERSION: "${{ matrix.version }}"
     steps:
       - uses: actions/checkout@v3
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ matrix.version }}
 
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
@@ -77,6 +70,17 @@ jobs:
         run: |
           packer init ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
           packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
+          PKR_VAR_subscription_id: "${{ secrets.SUBSCRIPTION_ID }}"
+        env:
+          PKR_VAR_tenant_id: "${{ secrets.TENANT_ID }}"
+          PKR_VAR_client_id: "${{ secrets.CLIENT_ID }}"
+          PKR_VAR_client_secret: "${{ secrets.CLIENT_SECRET }}"
+          PKR_VAR_resource_group: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}"
+          PKR_VAR_image_name: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-image"
+          PKR_VAR_virtual_network: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vnet"
+          PKR_VAR_virtual_subnet: "default"
+          PKR_VAR_julia_version: "${{ matrix.version }}"
+          PKR_VAR_gallery: "${{ github.run_id }}${{ matrix.version }}gallery"
 
       # - name: Create Master VM
       #   run: |
