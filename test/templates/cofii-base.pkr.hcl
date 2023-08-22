@@ -114,7 +114,7 @@ build {
             "sudo mkdir -p /opt/julia",
             "sudo tar --strip-components=1 -xzvf julia-${var.julia_version}.0-linux-x86_64.tar.gz -C /opt/julia",
             "sudo rm -f julia-${var.julia_version}.0-linux-x86_64.tar.gz",
-            "sed -i '1 i export PATH=\"${PATH}:/opt/julia/bin\"' ~/.bashrc",
+            "sed -i '1 i export PATH=\"/opt/julia/bin:$${PATH}\"' ~/.bashrc",
             "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"720\"' ~/.bashrc"
         ]
     }
