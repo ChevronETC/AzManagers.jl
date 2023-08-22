@@ -107,7 +107,7 @@ build {
         inline = [
             "echo \"**** installing Julia ****\"",
             "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/${var.julia_version}/julia-${var.julia_version}.0-linux-x86_64.tar.gz",
-            "mkdir -p /opt/julia",
+            "sudo mkdir -p /opt/julia",
             "sudo tar --strip-components=1 -xzvf julia-${var.julia_version}.0-linux-x86_64.tar.gz -C /opt/julia",
             "sudo rm -f julia-${var.julia_version}.0-linux-x86_64.tar.gz",
             "cd",
