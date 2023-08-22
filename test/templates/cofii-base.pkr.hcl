@@ -31,24 +31,24 @@ variable "julia_version" {
 }
 
 source "azure-arm" "cofii" {
-    subscription_id: var.subscription_id
-    tenant_id: var.tenant_id
-    client_id: var.client_id
-    client_secret: var.client_secret
-    os_type: "Linux"
-    vm_size: "Standard_D8s_v3"
-    image_publisher: "canonical"
-    image_offer: "0001-com-ubuntu-server-jammy"
-    image_sku: "22_04-lts-gen2"
-    build_resource_group_name: var.resource_group
-    managed_image_resource_group_name: var.resource_group
-    managed_image_name: var.image_name
-    managed_image_storage_account_type: "Premium_LRS"
-    virtual_network_name: var.virtual_network
-    virtual_network_subnet_name: var.virtual_subnet
-    virtual_network_resource_group_name: var.resource_group
-    private_virtual_network_with_public_ip: true
-    ssh_username: cvx
+    subscription_id = var.subscription_id
+    tenant_id = var.tenant_id
+    client_id = var.client_id
+    client_secret = var.client_secret
+    os_type = "Linux"
+    vm_size = "Standard_D8s_v3"
+    image_publisher = "canonical"
+    image_offer = "0001-com-ubuntu-server-jammy"
+    image_sku = "22_04-lts-gen2"
+    build_resource_group_name = var.resource_group
+    managed_image_resource_group_name = var.resource_group
+    managed_image_name = var.image_name
+    managed_image_storage_account_type = "Premium_LRS"
+    virtual_network_name = var.virtual_network
+    virtual_network_subnet_name = var.virtual_subnet
+    virtual_network_resource_group_name = var.resource_group
+    private_virtual_network_with_public_ip = true
+    ssh_username = "cvx"
 }
 
 build {
