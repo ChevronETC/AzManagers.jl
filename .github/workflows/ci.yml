@@ -42,7 +42,14 @@ jobs:
       - name: test julia version
         run: |
           JULIA_VERSION=$(julia -e 'print(stdout, VERSION)')
+          JULIA_VERSION_SPLIT=(${VERSION//./ })
+          JULIA_VERSION_MAJOR=${VERSION_SPLIT[0]}
+          JULIA_VERSION_MINOR=${VERSION_SPLIT[1]}
+          JULIA_VERSION_PATCH=${VERSION_SPLIT[2]}
           echo "julia version is $JULIA_VERSION"
+          echo "julia version major is $JULIA_VERSION_MAJOR"
+          echo "julia version minor is $JULIA_VERSION_MINOR"
+          echo "julia version patch is $JULIA_VERSION_PATCH"
 
       # - name: Create an SSH Key Pair
       #   run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
