@@ -11,8 +11,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        version:
-          - 1.6
+        julia-version:
+          # - 1.6
           - 1.9
         os:
           - ubuntu-latest
@@ -32,16 +32,16 @@ jobs:
       NSG_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-nsg"
       SUBNET_NAME: "default"
       COMMIT_SHA: "${{ github.sha }}"
-      JULIA_VERSION: "${{ matrix.version }}"
+      JULIA_VERSION: "${{ matrix.julia-version }}"
       PKR_VAR_subscription_id: "${{ secrets.SUBSCRIPTION_ID }}"
       PKR_VAR_tenant_id: "${{ secrets.TENANT_ID }}"
       PKR_VAR_client_id: "${{ secrets.CLIENT_ID }}"
       PKR_VAR_client_secret: "${{ secrets.CLIENT_SECRET }}"
-      PKR_VAR_resource_group: "${{ secrets.RESOURCE_GROUP }}"
+      PKR_VAR_resource_group: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
       PKR_VAR_image_name: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image"
       PKR_VAR_virtual_network: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet"
       PKR_VAR_virtual_subnet: "default"
-      PKR_VAR_julia_version: "${{ matrix.version }}"
+      PKR_VAR_julia_version: "${{ matrix.julia-version }}"
       PKR_VAR_gallery: "${{ github.run_id }}${{ matrix.julia-version }}gallery"
     steps:
       - uses: actions/checkout@v3
