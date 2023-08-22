@@ -54,7 +54,6 @@
         "sudo mkdir -p /opt/julia",
         "cd /tmp"
       ]
-      max_retries = 5
     },
     {
       "type": "shell",
@@ -85,7 +84,6 @@
         "julia -e 'using Pkg; pkg\"add AzSessions AzManagers#master Coverage Distributed HTTP JSON MPI MPIPreferences Random Test\"'",
         "julia -e 'using MPIPreferences; MPIPreferences.use_jll_binary(\"MPICH_jll\")'"
       ]
-      max_retries = 5
     }
   ]
 }
