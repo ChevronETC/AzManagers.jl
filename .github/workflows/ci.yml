@@ -40,9 +40,9 @@ jobs:
           version: ${{ matrix.version }}
 
       - name: test julia version
-        run: echo "julia version is $JULIA_VERSION"
-        env:
-          JULIA_VERSION: ${{ julia-version }}
+        run: |
+          JULIA_VERSION=$(julia -e 'print(stdout, VERSION)')
+          echo "julia version is $JULIA_VERSION"
 
       # - name: Create an SSH Key Pair
       #   run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
