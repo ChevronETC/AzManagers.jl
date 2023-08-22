@@ -22,6 +22,10 @@ variable "image_name" {
     default = "imagename"
 }
 
+variable "gallery" {
+    default = "gallery"
+}
+
 variable "virtual_network" {
     default = "virtualnetwork"
 }
@@ -53,6 +57,14 @@ source "azure-arm" "cofii" {
     image_publisher = "canonical"
     image_offer = "0001-com-ubuntu-server-jammy"
     image_sku = "22_04-lts-gen2"
+    shared_image_gallery_destination {
+        resource_group = var.resource_group
+        gallery_name = var.gallery
+        image_name = var.image_name
+        image_version = var.image_version
+        replication_regions = ["South Central US"]
+    },
+    shared_image_gallery_timeout = "120m"
     build_resource_group_name = var.resource_group
     managed_image_resource_group_name = var.resource_group
     managed_image_name = var.image_name
