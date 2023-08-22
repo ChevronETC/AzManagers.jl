@@ -70,8 +70,8 @@ jobs:
         run: |
           packer init ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
           packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
-          PKR_VAR_subscription_id: "${{ secrets.SUBSCRIPTION_ID }}"
         env:
+          PKR_VAR_subscription_id: "${{ secrets.SUBSCRIPTION_ID }}"
           PKR_VAR_tenant_id: "${{ secrets.TENANT_ID }}"
           PKR_VAR_client_id: "${{ secrets.CLIENT_ID }}"
           PKR_VAR_client_secret: "${{ secrets.CLIENT_SECRET }}"
