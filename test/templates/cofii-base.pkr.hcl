@@ -38,8 +38,16 @@ variable "virtual_subnet" {
     default = "subnet"
 }
 
-variable "julia_version" {
-    default = 1.9
+variable "julia_version_major" {
+    default = "1"
+}
+
+variable "julia_version_minor" {
+    default = "8"
+}
+
+variable "julia_version_patch" {
+    default = "0"
 }
 
 variable "azmanagers_version" {
@@ -110,9 +118,9 @@ build {
     provisioner "shell" {
         inline = [
             "echo \"**** installing Julia ****\"",
-            "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/${var.julia_version}/julia-${var.julia_version}.0-linux-x86_64.tar.gz",
+            "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/${var.julia_version}/julia-${var.julia_version_major}.${var.julia_version_minor}-linux-x86_64.tar.gz",
             "sudo mkdir -p /opt/julia",
-            "sudo tar --strip-components=1 -xzvf julia-${var.julia_version}.0-linux-x86_64.tar.gz -C /opt/julia",
+            "sudo tar --strip-components=1 -xzvf julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz -C /opt/julia",
             "sudo rm -f julia-${var.julia_version}.0-linux-x86_64.tar.gz",
             "sed -i '1 i export PATH=\"/opt/julia/bin:$${PATH}\"' ~/.bashrc",
             "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"720\"' ~/.bashrc"
