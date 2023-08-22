@@ -54,6 +54,7 @@ source "azure-arm" "cofii" {
     image_offer = "0001-com-ubuntu-server-jammy"
     image_sku = "22_04-lts-gen2"
     build_resource_group_name = var.resource_group
+    managed_image_resource_group_name = var.resource_group
     managed_image_name = var.image_name
     managed_image_storage_account_type = "Premium_LRS"
     virtual_network_name = var.virtual_network

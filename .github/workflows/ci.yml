@@ -73,7 +73,9 @@ jobs:
           sudo apt-get update && sudo apt-get install packer
 
       - name: Build Packer Image
-        run: packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
+        run: |
+        packer init ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
+        packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
 
       # - name: Create Master VM
       #   run: |
