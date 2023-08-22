@@ -121,7 +121,7 @@ build {
             "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/${var.julia_version}/julia-${var.julia_version_major}.${var.julia_version_minor}-linux-x86_64.tar.gz",
             "sudo mkdir -p /opt/julia",
             "sudo tar --strip-components=1 -xzvf julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz -C /opt/julia",
-            "sudo rm -f julia-${var.julia_version}.0-linux-x86_64.tar.gz",
+            "sudo rm -f julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz",
             "sed -i '1 i export PATH=\"/opt/julia/bin:$${PATH}\"' ~/.bashrc",
             "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"720\"' ~/.bashrc"
         ]
@@ -132,6 +132,26 @@ build {
             "echo \"**** installing julia packages ****\"",
             "julia -e 'using Pkg; pkg\"add AzSessions AzManagers#${var.azmanagers_version} Coverage Distributed HTTP JSON MPI MPIPreferences Random Test\"'",
             "julia -e 'using MPIPreferences; MPIPreferences.use_jll_binary(\"MPICH_jll\")'"
+        ]
+    }
+
+    provisioner "file" {
+        source = "test/templates/azmanagers-setup.jl",
+        destination = "/tmp/azmanagers-setup.jl"
+    }
+
+    provisioner "shell" {
+        inline = [
+            "TENANT_ID=\"${var.tenant_id}\"",
+            "SUBSCRIPTION_ID=\"${var.subscription_id}\"",
+            "RESOURCE_GROUP=\"${var.resource_group}\"",
+            "CLIENT_ID=\"${var.client_id}\"",
+            "CLIENT_SECRET=\"${var.client_secret}\"",
+            "IMAGE_NAME=\"${var.image_name}\"",
+            "VENT_NAME=\"${var.virtual_network}\"",
+            "SUBNET_NAME=\"${var.virtual_subnet}\"",
+            "GALLERY_NAME=\"${var.gallery}\"",
+            "julia /tmp/azmanagers-setup.jl"
         ]
     }
 }

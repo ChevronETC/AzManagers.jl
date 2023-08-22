@@ -1,0 +1,50 @@
+using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
+
+tenant_id = "{{ env['TENANT_ID'] }}"
+subscriptionid = "{{ env['SUBSCRIPTION_ID'] }}"
+resourcegroup = "{{ env['RESOURCE_GROUP'] }}"
+client_id = "{{ env['CLIENT_ID'] }}"
+client_secret = "{{ env['CLIENT_SECRET'] }}"
+imagename = "{{ env['IMAGE_NAME'] }}"
+
+templatename = "cbox02"
+
+sstemplate = AzManagers.build_sstemplate(
+        templatename,
+        subscriptionid       = subscriptionid,
+        admin_username       = "cvx",
+        location             = "southcentralus",
+        resourcegroup        = resourcegroup,
+        resourcegroup_vnet   = resourcegroup,
+        vnet                 = "{{ env['VNET_NAME'] }}",
+        subnet               = "{{ env['SUBNET_NAME'] }}",
+        imagegallery         = "{{ env['GALLERY_NAME'] }}",
+        imagename            = imagename,
+        skuname              = "Standard_D2s_v5")
+
+vmtemplate = AzManagers.build_vmtemplate(
+        templatename,
+        subscriptionid       = subscriptionid,
+        admin_username       = "cvx",
+        location             = "southcentralus",
+        resourcegroup        = resourcegroup,
+        resourcegroup_vnet   = resourcegroup,
+        imagegallery         = "{{ env['GALLERY_NAME'] }}",
+        imagename            = imagename,
+        vmsize              = "Standard_D2s_v5")
+
+nictemplate = AzManagers.build_nictemplate(
+        templatename,
+        accelerated          = false,
+        subscriptionid       = subscriptionid,
+        location             = "southcentralus",
+        resourcegroup_vnet   = resourcegroup,
+        vnet                 = "{{ env['VNET_NAME'] }}",
+        subnet               = "{{ env['SUBNET_NAME'] }}")
+        
+AzManagers.save_template_scaleset(templatename, sstemplate)
+AzManagers.save_template_vm(templatename, vmtemplate)
+AzManagers.save_template_nic(templatename, nictemplate)
+
+AzSessions.write_manifest(;client_id=client_id, client_secret=client_secret, tenant=tenant_id)
+AzManagers.write_manifest(;resourcegroup=resourcegroup, subscriptionid=subscriptionid, ssh_user="cvx")
