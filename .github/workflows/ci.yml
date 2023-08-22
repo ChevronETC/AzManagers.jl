@@ -42,7 +42,7 @@ jobs:
       - name: test julia version
         run: |
           JULIA_VERSION=$(julia -e 'print(stdout, VERSION)')
-          JULIA_VERSION_SPLIT=(${VERSION//./ })
+          JULIA_VERSION_SPLIT=(${JULIA_VERSION//./ })
           JULIA_VERSION_MAJOR=${VERSION_SPLIT[0]}
           JULIA_VERSION_MINOR=${VERSION_SPLIT[1]}
           JULIA_VERSION_PATCH=${VERSION_SPLIT[2]}
