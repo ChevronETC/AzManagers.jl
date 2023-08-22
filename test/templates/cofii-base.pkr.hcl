@@ -26,6 +26,10 @@ variable "gallery" {
     default = "gallery"
 }
 
+variable "image_version" {
+    default = "1.0.0"
+}
+
 variable "virtual_network" {
     default = "virtualnetwork"
 }
@@ -96,6 +100,7 @@ build {
             "sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" upgrade",
             "sudo apt-get -y install git"
         ]
+        max_retries = 5
     }
 
     provisioner "shell" {
