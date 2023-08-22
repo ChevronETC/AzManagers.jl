@@ -13,7 +13,7 @@ jobs:
       matrix:
         version:
           - 1.6
-          - 1.9
+          - 1 # automatically expands to the latest stable 1.x release of Julia
         os:
           - ubuntu-latest
         arch:
@@ -34,7 +34,7 @@ jobs:
       COMMIT_SHA: "${{ github.sha }}"
       JULIA_VERSION: "${{ matrix.version }}"
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
@@ -101,7 +101,7 @@ jobs:
     name: Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - uses: julia-actions/setup-julia@v1
         with:
           version: '1'
