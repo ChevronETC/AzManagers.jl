@@ -110,19 +110,15 @@ build {
             "sudo mkdir -p /opt/julia",
             "sudo tar --strip-components=1 -xzvf julia-${var.julia_version}.0-linux-x86_64.tar.gz -C /opt/julia",
             "sudo rm -f julia-${var.julia_version}.0-linux-x86_64.tar.gz",
-            "cd",
-            "echo env",
-            "echo $ENV",
-            "sed -i '1 i export PATH=\"/opt/julia/bin\"' .bashrc",
-            "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"720\"' .bashrc"
+            "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"720\"' ~/.bashrc"
         ]
     }
 
     provisioner "shell" {
         inline = [
             "echo \"**** installing julia packages ****\"",
-            "julia -e 'using Pkg; pkg\"add AzSessions AzManagers#master Coverage Distributed HTTP JSON MPI MPIPreferences Random Test\"'",
-            "julia -e 'using MPIPreferences; MPIPreferences.use_jll_binary(\"MPICH_jll\")'"
+            "/opt/julia/bin/julia -e 'using Pkg; pkg\"add AzSessions AzManagers#master Coverage Distributed HTTP JSON MPI MPIPreferences Random Test\"'",
+            "/opt/julia/bin/julia -e 'using MPIPreferences; MPIPreferences.use_jll_binary(\"MPICH_jll\")'"
         ]
     }
 }
