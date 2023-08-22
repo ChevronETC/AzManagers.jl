@@ -118,7 +118,7 @@ build {
     provisioner "shell" {
         inline = [
             "echo \"**** installing Julia ****\"",
-            "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/${var.julia_version}/julia-${var.julia_version_major}.${var.julia_version_minor}-linux-x86_64.tar.gz",
+            "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/${var.julia_version_major}.${var.julia_version_minor}/julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_varsion_patch}-linux-x86_64.tar.gz",
             "sudo mkdir -p /opt/julia",
             "sudo tar --strip-components=1 -xzvf julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz -C /opt/julia",
             "sudo rm -f julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz",
