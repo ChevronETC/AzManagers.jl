@@ -136,7 +136,7 @@ build {
     }
 
     provisioner "file" {
-        source = "test/templates/azmanagers-setup.jl",
+        source = "test/templates/azmanagers-setup.jl"
         destination = "/tmp/azmanagers-setup.jl"
     }
 
