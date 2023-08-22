@@ -839,12 +839,15 @@ end
 preempted(id) = remotecall_fetch(preempted, id)
 
 function azure_physical_name(keyval="PhysicalHostName")
+    local physical_hostname
     try
         s = split(read("/var/lib/hyperv/.kvp_pool_3", String), '\0'; keepempty=false)
         i = findfirst(_s->_s==keyval, s)
         physical_hostname = s[i+1]
     catch
         physical_hostname = "unknown"
+    end
+    physical_hostname
 end
 
 function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
