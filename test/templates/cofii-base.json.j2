@@ -50,7 +50,7 @@
       [
         "sudo apt-get -y update",
         "sudo DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" upgrade",
-        "sudo apt-get -y install mpich git",
+        "sudo apt-get -y install git",
         "sudo mkdir -p /opt/julia",
         "cd /tmp"
       ]
@@ -81,9 +81,8 @@
         "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"720\"' .bashrc",
         "export PATH=\"${PATH}:/opt/julia/bin\"",
         "echo \"installing julia packages\"",
-        "export JULIA_MPI_BINARY=\"system\"",
-        "julia -e 'using Pkg; pkg\"add AzSessions AzManagers#{{ env['COMMIT_SHA'] }} Distributed JSON HTTP Test Random Coverage\"'",
-        "julia -e 'using Pkg; pkg\"precompile\"'"
+        "julia -e 'using Pkg; pkg\"add AzSessions AzManagers#{{ env['COMMIT_SHA'] }} Coverage Distributed HTTP JSON MPI MPIPreferences Random Test\"'",
+        "julia -e 'using MPIPreferences; MPIPreferences.use_jll_binary(\"MPICH_jll\")'"
       ]
     }
   ]
