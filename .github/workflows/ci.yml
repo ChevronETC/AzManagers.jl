@@ -74,8 +74,8 @@ jobs:
 
       - name: Build Packer Image
         run: |
-        packer init ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
-        packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
+          packer init ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
+          packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
 
       # - name: Create Master VM
       #   run: |
