@@ -300,5 +300,5 @@ end
         "")
 
     e = HTTP.StatusError(429, "foo", "foo", r)
-    AzManagers.retrywarn(1, 2, 60, e, r)
+    AzManagers.retrywarn(1, 2, 60, e)
 end
