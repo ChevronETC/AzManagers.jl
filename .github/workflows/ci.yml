@@ -80,7 +80,7 @@ jobs:
             -var "julia_version_major=${JULIA_VERSION_MAJOR}" \
             -var "julia_version_minor=${JULIA_VERSION_MINOR}" \
             -var "julia_version_patch=${JULIA_VERSION_PATCH}" \
-            ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl[ppacpack]
+            ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
 
       # - name: Create Master VM
       #   run: |
