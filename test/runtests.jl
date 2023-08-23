@@ -12,6 +12,12 @@ template = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))[te
 subscriptionid = template["subscriptionid"]
 resourcegroup = template["resourcegroup"]
 
+#=
+TODO - flexible orchestration is broken for CI
+error:
+No outbound connectivity configured for virtual machine .... Please attach standard load balancer or public IP address to VM, create NAT gateway
+or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defaultoutboundaccess.
+=#
 @testset "AzManagers, addprocs, ppi=$ppi, flexible=$flexible" for ppi in (1,), flexible in (false,#=true=#)
     ninstances = 4
     group = "test$(randstring('a':'z',4))"
