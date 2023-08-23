@@ -142,15 +142,15 @@ build {
 
     provisioner "shell" {
         inline = [
-            "TENANT_ID=\"${var.tenant_id}\"",
-            "SUBSCRIPTION_ID=\"${var.subscription_id}\"",
-            "RESOURCE_GROUP=\"${var.resource_group}\"",
-            "CLIENT_ID=\"${var.client_id}\"",
-            "CLIENT_SECRET=\"${var.client_secret}\"",
-            "IMAGE_NAME=\"${var.image_name}\"",
-            "VENT_NAME=\"${var.virtual_network}\"",
-            "SUBNET_NAME=\"${var.virtual_subnet}\"",
-            "GALLERY_NAME=\"${var.gallery}\"",
+            "export TENANT_ID=\"${var.tenant_id}\"",
+            "export SUBSCRIPTION_ID=\"${var.subscription_id}\"",
+            "export RESOURCE_GROUP=\"${var.resource_group}\"",
+            "export CLIENT_ID=\"${var.client_id}\"",
+            "export CLIENT_SECRET=\"${var.client_secret}\"",
+            "export IMAGE_NAME=\"${var.image_name}\"",
+            "export VENT_NAME=\"${var.virtual_network}\"",
+            "export SUBNET_NAME=\"${var.virtual_subnet}\"",
+            "export GALLERY_NAME=\"${var.gallery}\"",
             "julia /tmp/azmanagers-setup.jl"
         ]
     }
