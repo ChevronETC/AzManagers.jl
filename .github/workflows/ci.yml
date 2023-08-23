@@ -41,44 +41,53 @@ jobs:
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
 
-      - name: Create Prereq. Azure Resources
+      - name: shas
         run: |
-          az login --service-principal   -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
-          az group create                -g "$RESOURCE_GROUP" -l southcentralus --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com"
-          az group wait                  -g "$RESOURCE_GROUP" --created 
-          az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
-          az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-jammy" -s "22_04-lts-gen2" --os-type linux --hyper-v-generation V2
-          az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME"
-          az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22
-          az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
-          az network vnet subnet update  -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" --vnet-name "$VNET_NAME" --network-security-group "$NSG_NAME"
+          echo "github.ref" ${{ github.ref }}
+          echo "github.base_ref" ${{ github.base_ref }}
+          echo "github.head_ref" ${{ github.head_ref }}
+          echo "github.ref_name" ${{ github.ref_name }}
+          echo "github.ref_type" ${{ github.ref_type }}
+          echo "github.sha" ${{ github.sha }}
 
-      - name: Install Packer
-        run: |
-          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-          sudo apt-get update && sudo apt-get install packer
+      # - name: Create Prereq. Azure Resources
+      #   run: |
+      #     az login --service-principal   -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
+      #     az group create                -g "$RESOURCE_GROUP" -l southcentralus --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com"
+      #     az group wait                  -g "$RESOURCE_GROUP" --created 
+      #     az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
+      #     az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-jammy" -s "22_04-lts-gen2" --os-type linux --hyper-v-generation V2
+      #     az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME"
+      #     az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22
+      #     az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
+      #     az network vnet subnet update  -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" --vnet-name "$VNET_NAME" --network-security-group "$NSG_NAME"
 
-      - name: Build Packer Image
-        run: |
-          export JULIA_VERSION_MAJOR=$(julia -e 'print(stdout, VERSION.major)')
-          export JULIA_VERSION_MINOR=$(julia -e 'print(stdout, VERSION.minor)')
-          export JULIA_VERSION_PATCH=$(julia -e 'print(stdout, VERSION.patch)')
-          packer init ${GITHUB_WORKSPACE}/test/image.pkr.hcl
-          packer build -color=false -timestamp-ui \
-            -var "subscription_id=${SUBSCRIPTION_ID}" \
-            -var "tenant_id=${TENANT_ID}" \
-            -var "client_id=${CLIENT_ID}" \
-            -var "client_secret=${CLIENT_SECRET}" \
-            -var "resource_group=${RESOURCE_GROUP}" \
-            -var "image_name=${IMAGE_NAME}" \
-            -var "virtual_network=${VNET_NAME}" \
-            -var "virtual_subnet=default" \
-            -var "gallery=${GALLERY_NAME}" \
-            -var "julia_version_major=${JULIA_VERSION_MAJOR}" \
-            -var "julia_version_minor=${JULIA_VERSION_MINOR}" \
-            -var "julia_version_patch=${JULIA_VERSION_PATCH}" \
-            ${GITHUB_WORKSPACE}/test/image.pkr.hcl
+      # - name: Install Packer
+      #   run: |
+      #     curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+      #     sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+      #     sudo apt-get update && sudo apt-get install packer
+
+      # - name: Build Packer Image
+      #   run: |
+      #     export JULIA_VERSION_MAJOR=$(julia -e 'print(stdout, VERSION.major)')
+      #     export JULIA_VERSION_MINOR=$(julia -e 'print(stdout, VERSION.minor)')
+      #     export JULIA_VERSION_PATCH=$(julia -e 'print(stdout, VERSION.patch)')
+      #     packer init ${GITHUB_WORKSPACE}/test/image.pkr.hcl
+      #     packer build -color=false -timestamp-ui \
+      #       -var "subscription_id=${SUBSCRIPTION_ID}" \
+      #       -var "tenant_id=${TENANT_ID}" \
+      #       -var "client_id=${CLIENT_ID}" \
+      #       -var "client_secret=${CLIENT_SECRET}" \
+      #       -var "resource_group=${RESOURCE_GROUP}" \
+      #       -var "image_name=${IMAGE_NAME}" \
+      #       -var "virtual_network=${VNET_NAME}" \
+      #       -var "virtual_subnet=default" \
+      #       -var "gallery=${GALLERY_NAME}" \
+      #       -var "julia_version_major=${JULIA_VERSION_MAJOR}" \
+      #       -var "julia_version_minor=${JULIA_VERSION_MINOR}" \
+      #       -var "julia_version_patch=${JULIA_VERSION_PATCH}" \
+      #       ${GITHUB_WORKSPACE}/test/image.pkr.hcl
 
       # - name: Create coordinator VM
       #   run: |

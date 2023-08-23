@@ -130,8 +130,9 @@ build {
     provisioner "shell" {
         inline = [
             "echo \"**** installing julia packages ****\"",
-            "julia -e 'using Pkg; pkg\"add AzSessions AzManagers#${var.azmanagers_version} Coverage Distributed HTTP JSON MPI MPIPreferences Random Test\"'",
+            "julia -e 'using Pkg; Pkg.add([\"AzSessions\", \"Coverage\", \"Distributed\", \"HTTP\", \"JSON\", \"MPI\", \"MPIPreferences\", \"Random\", \"Test\"])'",
             "julia -e 'using MPIPreferences; MPIPreferences.use_jll_binary(\"MPICH_jll\")'"
+            "julia -e 'using Pkg; Pkg.add(PackageSpec(name="AzManagers", rev="${var.azmanagers_version}"))
         ]
     }
 
@@ -142,6 +143,7 @@ build {
 
     provisioner "shell" {
         inline = [
+            "echo \"**** building AzManages manifest and templates ****\"",
             "export TENANT_ID=\"${var.tenant_id}\"",
             "export SUBSCRIPTION_ID=\"${var.subscription_id}\"",
             "export RESOURCE_GROUP=\"${var.resource_group}\"",
