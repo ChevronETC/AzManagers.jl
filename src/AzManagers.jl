@@ -1633,7 +1633,7 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
             
             sudo su - $user <<'EOF'
             julia -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$localpreferences_compressed", "$remote_julia_environment_name")'
-            julia -e 'using Pkg, AzManagers; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); pkg"registry up"; Pkg.activate(path); AzManagers.robust_instantiate(); Pkg.precompile()'
+            julia -e 'using Pkg, AzManagers; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); pkg"registry up"; Pkg.activate(path); (retry(Pkg.instantiate))(); Pkg.precompile()'
             EOF
             """
         catch e
@@ -1643,24 +1643,6 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
     end
 
     cmd, remote_julia_environment_name
-end
-
-function robust_instantiate()
-    itry = 0
-    while true
-        itry += 1
-        try
-            Pkg.instantiate()
-            break
-        catch e
-            if itry >= 10
-                throw(e)
-            else
-                @warn "failed to instantiate evironment, retrying in 10 seconds"
-                sleep(10)
-            end
-        end
-    end
 end
 
 function build_envstring(env::Dict)
