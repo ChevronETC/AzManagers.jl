@@ -37,7 +37,6 @@ jobs:
       - uses: julia-actions/setup-julia@v1
         with:
           version: ${{ matrix.version }}
-        id: get_julia_version
 
       - name: test
         run: echo "${{ steps.julia_version }}"
