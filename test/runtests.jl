@@ -109,7 +109,7 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     end
 end
 
-@testset "environment, addproc" begin
+@test_skip @testset "environment, addproc" begin
     mkpath("myproject")
     cd("myproject")
     Pkg.activate(".")

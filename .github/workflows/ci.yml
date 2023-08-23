@@ -102,10 +102,10 @@ jobs:
         with:
           file: lcov.info
 
-      - name: Delete CI Resource Group
-        run: |
-          az group delete -n "$RESOURCE_GROUP" --yes
-        if: ${{ always() }}
+      # - name: Delete CI Resource Group
+      #   run: |
+      #     az group delete -n "$RESOURCE_GROUP" --yes
+      #   if: ${{ always() }}
   # docs:
   #   name: Documentation
   #   runs-on: ubuntu-latest
