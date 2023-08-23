@@ -1,7 +1,5 @@
 using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
 
-include(joinpath(homedir(), "azmanagers-setup.jl"))
-
 session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_secret=client_secret)
 
 azmanagers_pinfo = Pkg.project()
