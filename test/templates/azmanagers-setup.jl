@@ -1,11 +1,11 @@
 using Distributed, AzManagers, Random, Test, HTTP, AzSessions, JSON
 
-tenant_id = "{{ env['TENANT_ID'] }}"
-subscriptionid = "{{ env['SUBSCRIPTION_ID'] }}"
-resourcegroup = "{{ env['RESOURCE_GROUP'] }}"
-client_id = "{{ env['CLIENT_ID'] }}"
-client_secret = "{{ env['CLIENT_SECRET'] }}"
-imagename = "{{ env['IMAGE_NAME'] }}"
+tenant_id = ENV["TENANT_ID"]
+subscriptionid = ENV["SUBSCRIPTION_ID"]
+resourcegroup = ENV["RESOURCE_GROUP"]
+client_id = ENV["CLIENT_ID"]
+client_secret = ENV["CLIENT_SECRET"]
+imagename = ENV["IMAGE_NAME"]
 
 templatename = "cbox02"
 
@@ -16,9 +16,9 @@ sstemplate = AzManagers.build_sstemplate(
         location             = "southcentralus",
         resourcegroup        = resourcegroup,
         resourcegroup_vnet   = resourcegroup,
-        vnet                 = "{{ env['VNET_NAME'] }}",
-        subnet               = "{{ env['SUBNET_NAME'] }}",
-        imagegallery         = "{{ env['GALLERY_NAME'] }}",
+        vnet                 = ENV["VNET_NAME"],
+        subnet               = ENV["SUBNET_NAME"],
+        imagegallery         = ENV["GALLERY_NAME"],
         imagename            = imagename,
         skuname              = "Standard_D2s_v5")
 
@@ -29,7 +29,7 @@ vmtemplate = AzManagers.build_vmtemplate(
         location             = "southcentralus",
         resourcegroup        = resourcegroup,
         resourcegroup_vnet   = resourcegroup,
-        imagegallery         = "{{ env['GALLERY_NAME'] }}",
+        imagegallery         = ENV["GALLERY_NAME"],
         imagename            = imagename,
         vmsize              = "Standard_D2s_v5")
 
@@ -39,8 +39,8 @@ nictemplate = AzManagers.build_nictemplate(
         subscriptionid       = subscriptionid,
         location             = "southcentralus",
         resourcegroup_vnet   = resourcegroup,
-        vnet                 = "{{ env['VNET_NAME'] }}",
-        subnet               = "{{ env['SUBNET_NAME'] }}")
+        vnet                 = ENV["VNET_NAME"],
+        subnet               = ENV["SUBNET_NAME"])
         
 AzManagers.save_template_scaleset(templatename, sstemplate)
 AzManagers.save_template_vm(templatename, vmtemplate)
