@@ -164,7 +164,7 @@ end
     pinfo = remotecall_fetch(Pkg.project, workers()[1])
     @test contains(pinfo.path, "myproject")
 
-    files = remotecall_fetch(Pkg.readdir, workers()[1], joinpath(pinfo.path, "myproject"))
+    files = remotecall_fetch(Pkg.readdir, workers()[1], dirname(pinfo.path))
     x = readdir(".")
     @test "LocalPreferences.toml" ∈ files
     @test "Project.toml" ∈ files
