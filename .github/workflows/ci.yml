@@ -37,7 +37,7 @@ jobs:
 
       - name: get julia version
         id: get_julia_version
-        uses: julia-actions/setup-julia@v1
+        - uses: julia-actions/setup-julia@v1
           with:
             version: ${{ matrix.version }}
 
