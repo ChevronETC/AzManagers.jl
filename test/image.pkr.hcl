@@ -131,7 +131,7 @@ build {
         inline = [
             "echo \"**** installing julia packages ****\"",
             "julia -e 'using Pkg; Pkg.add([\"AzSessions\", \"Coverage\", \"Distributed\", \"HTTP\", \"JSON\", \"MPI\", \"MPIPreferences\", \"Random\", \"Test\"])'",
-            "julia -e 'using MPIPreferences; MPIPreferences.use_jll_binary(\"MPICH_jll\")'"
+            "julia -e 'using MPIPreferences; MPIPreferences.use_jll_binary(\"MPICH_jll\")'",
             "julia -e 'using Pkg; Pkg.add(PackageSpec(name=\"AzManagers\", rev=\"${var.azmanagers_version}\"))'
         ]
     }
