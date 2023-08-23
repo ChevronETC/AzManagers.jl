@@ -34,15 +34,13 @@ jobs:
       COMMIT_SHA: "${{ github.sha }}"
     steps:
       - uses: actions/checkout@v3
-
-      - name: get julia version
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ matrix.version }}
         id: get_julia_version
-        - uses: julia-actions/setup-julia@v1
-          with:
-            version: ${{ matrix.version }}
 
       - name: test
-        run: echo "${{ steps.get_julia_version.julia_version }}"
+        run: echo "${{ steps.julia_version }}"
 
       # - name: Create an SSH Key Pair
       #   run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
