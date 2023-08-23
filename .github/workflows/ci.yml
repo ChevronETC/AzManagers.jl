@@ -61,11 +61,9 @@ jobs:
 
       - name: Build Packer Image
         run: |
-          JULIA_VERSION=$(julia -e 'print(stdout, VERSION)')
-          JULIA_VERSION_SPLIT=(${JULIA_VERSION//./ })
-          export JULIA_VERSION_MAJOR=${JULIA_VERSION_SPLIT[0]}
-          export JULIA_VERSION_MINOR=${JULIA_VERSION_SPLIT[1]}
-          export JULIA_VERSION_PATCH=${JULIA_VERSION_SPLIT[2]}
+          export JULIA_VERSION_MAJOR=$(julia -e 'print(stdout, VERSION.major)')
+          export JULIA_VERSION_MINOR=$(julia -e 'print(stdout, VERSION.minor)')
+          export JULIA_VERSION_PATCH=$(julia -e 'print(stdout, VERSION.patch)')
           packer init ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
           packer build -color=false -timestamp-ui \
             -var "subscription_id=${SUBSCRIPTION_ID}" \
