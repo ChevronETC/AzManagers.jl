@@ -7,7 +7,8 @@ pkgs=TOML.parse(read(joinpath(dirname(azmanagers_pinfo.path),"Manifest.toml"), S
 pkg = VERSION < v"1.7.0" ? pkgs["AzManagers"][1] : pkgs["deps"]["AzManagers"][1]
 azmanagers_rev=get(pkg, "repo-rev", "")
 
-template = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))["cbox02"]
+templatename = "cbox02"
+template = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))[templatename]
 subscriptionid = template["subscriptionid"]
 resourcegroup = template["resourcegroup"]
 
