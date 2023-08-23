@@ -1,11 +1,15 @@
 using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
 
-session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_secret=client_secret)
+session = AzSession(;protocal=AzClientCredentials)
 
 azmanagers_pinfo = Pkg.project()
 pkgs=TOML.parse(read(joinpath(dirname(azmanagers_pinfo.path),"Manifest.toml"), String))
 pkg = VERSION < v"1.7.0" ? pkgs["AzManagers"][1] : pkgs["deps"]["AzManagers"][1]
 azmanagers_rev=get(pkg, "repo-rev", "")
+
+template = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))["cbox02"]
+subscriptionid = template["subscriptionid"]
+resourcegroup = template["resourcegroup"]
 
 @testset "AzManagers, addprocs, ppi=$ppi, flexible=$flexible" for ppi in (1,), flexible in (true,false)
     ninstances = 4
@@ -20,22 +24,18 @@ azmanagers_rev=get(pkg, "repo-rev", "")
     #
     if flexible
         addprocs(templatename, ninstances;
-        waitfor = true,
-        subscriptionid = subscriptionid,
-        resourcegroup = resourcegroup,
-        ppi = ppi,
-        group = group,
-        session = session,
-        spot = true,
-        spot_base_regular_priority_count = 2)
+            waitfor = true,
+            ppi,
+            group,
+            session,
+            spot = true,
+            spot_base_regular_priority_count = 2)
     else
         addprocs(templatename, ninstances;
             waitfor = true,
-            subscriptionid = subscriptionid,
-            resourcegroup = resourcegroup,
-            ppi = ppi,
-            group = group,
-            session = session)
+            ppi,
+            group,
+            session)
     end
     
     # Verify that the scale set is present
