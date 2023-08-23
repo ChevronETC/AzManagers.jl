@@ -143,7 +143,7 @@ build {
 
     provisioner "shell" {
         inline = [
-            "echo \"**** building AzManages manifest and templates ****\"",
+            "echo \"**** building AzManagers manifest and templates ****\"",
             "export TENANT_ID=\"${var.tenant_id}\"",
             "export SUBSCRIPTION_ID=\"${var.subscription_id}\"",
             "export RESOURCE_GROUP=\"${var.resource_group}\"",
