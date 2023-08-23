@@ -12,7 +12,7 @@ template = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))[te
 subscriptionid = template["subscriptionid"]
 resourcegroup = template["resourcegroup"]
 
-@testset "AzManagers, addprocs, ppi=$ppi, flexible=$flexible" for ppi in (1,), flexible in (true,false)
+@testset "AzManagers, addprocs, ppi=$ppi, flexible=$flexible" for ppi in (1,), flexible in (false,true)
     ninstances = 4
     group = "test$(randstring('a':'z',4))"
     

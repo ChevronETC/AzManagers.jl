@@ -117,6 +117,7 @@ build {
 
     provisioner "shell" {
         inline = [
+            "echo \"**** generating AzManagers ssh key-pair ****\"",
             "ssh-keygen -f /home/cvx/.ssh/azmanagers_rsa -N ''"
         ]
     }
