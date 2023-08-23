@@ -38,50 +38,47 @@ jobs:
         with:
           version: ${{ matrix.version }}
 
-      - name: test
-        run: echo "${{ steps.julia_version }}"
+      - name: Create an SSH Key Pair
+        run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
 
-      # - name: Create an SSH Key Pair
-      #   run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
+      - name: Create Prereq. Azure Resources
+        run: |
+          az login --service-principal   -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
+          az group create                -g "$RESOURCE_GROUP" -l southcentralus --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com"
+          az group wait                  -g "$RESOURCE_GROUP" --created 
+          az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
+          az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-jammy" -s "22_04-lts-gen2" --os-type linux --hyper-v-generation V2
+          az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME"
+          az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22
+          az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
+          az network vnet subnet update  -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" --vnet-name "$VNET_NAME" --network-security-group "$NSG_NAME"
 
-      # - name: Create Prereq. Azure Resources
-      #   run: |
-      #     az login --service-principal   -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
-      #     az group create                -g "$RESOURCE_GROUP" -l southcentralus --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com"
-      #     az group wait                  -g "$RESOURCE_GROUP" --created 
-      #     az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
-      #     az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-jammy" -s "22_04-lts-gen2" --os-type linux --hyper-v-generation V2
-      #     az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME"
-      #     az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22
-      #     az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
-      #     az network vnet subnet update  -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" --vnet-name "$VNET_NAME" --network-security-group "$NSG_NAME"
+      - name: Install Packer
+        run: |
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update && sudo apt-get install packer
 
-      # - name: Install Packer
-      #   run: |
-      #     curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-      #     sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-      #     sudo apt-get update && sudo apt-get install packer
-
-      # - name: Build Packer Image
-      #   run: |
-      #     JULIA_VERSION=$(julia -e 'print(stdout, VERSION)')
-      #     JULIA_VERSION_SPLIT=(${JULIA_VERSION//./ })
-      #     export PKR_VAR_julia_version_major=${JULIA_VERSION_SPLIT[0]}
-      #     export PKR_VAR_julia_version_minor=${JULIA_VERSION_SPLIT[1]}
-      #     export PKR_VAR_julia_version_patch=${JULIA_VERSION_SPLIT[2]}
-      #     packer init ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
-      #     packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
-      #   env:
-      #     PKR_VAR_subscription_id: "${{ secrets.SUBSCRIPTION_ID }}"
-      #     PKR_VAR_tenant_id: "${{ secrets.TENANT_ID }}"
-      #     PKR_VAR_client_id: "${{ secrets.CLIENT_ID }}"
-      #     PKR_VAR_client_secret: "${{ secrets.CLIENT_SECRET }}"
-      #     PKR_VAR_resource_group: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}"
-      #     PKR_VAR_image_name: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-image"
-      #     PKR_VAR_virtual_network: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vnet"
-      #     PKR_VAR_virtual_subnet: "default"
-      #     PKR_VAR_julia_version: "${{ matrix.version }}"
-      #     PKR_VAR_gallery: "${{ github.run_id }}${{ matrix.version }}gallery"
+      - name: Build Packer Image
+        run: |
+          JULIA_VERSION=$(julia -e 'print(stdout, VERSION)')
+          JULIA_VERSION_SPLIT=(${JULIA_VERSION//./ })
+          export PKR_VAR_julia_version_major=${JULIA_VERSION_SPLIT[0]}
+          export PKR_VAR_julia_version_minor=${JULIA_VERSION_SPLIT[1]}
+          export PKR_VAR_julia_version_patch=${JULIA_VERSION_SPLIT[2]}
+          packer init ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
+          packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
+        env:
+          PKR_VAR_subscription_id: "${{ secrets.SUBSCRIPTION_ID }}"
+          PKR_VAR_tenant_id: "${{ secrets.TENANT_ID }}"
+          PKR_VAR_client_id: "${{ secrets.CLIENT_ID }}"
+          PKR_VAR_client_secret: "${{ secrets.CLIENT_SECRET }}"
+          PKR_VAR_resource_group: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}"
+          PKR_VAR_image_name: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-image"
+          PKR_VAR_virtual_network: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vnet"
+          PKR_VAR_virtual_subnet: "default"
+          PKR_VAR_julia_version: "${{ matrix.version }}"
+          PKR_VAR_gallery: "${{ github.run_id }}${{ matrix.version }}gallery"
 
       # - name: Create Master VM
       #   run: |
