@@ -129,15 +129,15 @@ end
     testjob = @detachat testvm begin
         using Pkg
         pinfo = Pkg.project()
-        write(stdout, "project path is $(pinfo.path)\n")
-        write(stdout, "$(readdir(pinfo.path))")
+        write(stdout, "project path is $(dir(pinfo.path))\n")
+        write(stdout, "$(readdir(dir(pinfo.path)))")
     end
     wait(testjob)
     testjob_stdout = read(testjob)
     @test contains(testjob_stdout, "myproject")
 
     x = readdir(".")
-    @test_broken contains(testjob_stdout, "LocalPreferences.toml")
+    @test contains(testjob_stdout, "LocalPreferences.toml")
     @test contains(testjob_stdout, "Manifest.toml")
     @test contains(testjob_stdout, "Project.toml")
 
