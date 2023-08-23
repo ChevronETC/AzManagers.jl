@@ -13,7 +13,7 @@ jobs:
       matrix:
         version:
           # - 1.6
-          - 1.9
+          - 1
         os:
           - ubuntu-latest
         arch:
@@ -40,17 +40,6 @@ jobs:
 
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
-
-      - name: shas
-        run: |
-          echo "github.ref" ${{ github.ref }}
-          echo "github.base_ref" ${{ github.base_ref }}
-          echo "github.head_ref" ${{ github.head_ref }}
-          echo "github.ref_name" ${{ github.ref_name }}
-          echo "github.ref_type" ${{ github.ref_type }}
-          echo "github.sha" ${{ github.sha }}
-          echo "git log"
-          git log --pretty=format'%T %H'
 
       - name: Create Prereq. Azure Resources
         run: |
