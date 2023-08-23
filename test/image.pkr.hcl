@@ -136,8 +136,8 @@ build {
     }
 
     provisioner "file" {
-        source = "test/templates/azmanagers-setup.jl"
-        destination = "/tmp/azmanagers-setup.jl"
+        source = "test/templates.jl"
+        destination = "/tmp/templates.jl"
     }
 
     provisioner "shell" {
@@ -148,10 +148,10 @@ build {
             "export CLIENT_ID=\"${var.client_id}\"",
             "export CLIENT_SECRET=\"${var.client_secret}\"",
             "export IMAGE_NAME=\"${var.image_name}\"",
-            "export VENT_NAME=\"${var.virtual_network}\"",
+            "export VNET_NAME=\"${var.virtual_network}\"",
             "export SUBNET_NAME=\"${var.virtual_subnet}\"",
             "export GALLERY_NAME=\"${var.gallery}\"",
-            "julia /tmp/azmanagers-setup.jl"
+            "julia /tmp/templates.jl"
         ]
     }
 }

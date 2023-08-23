@@ -64,7 +64,7 @@ jobs:
           export JULIA_VERSION_MAJOR=$(julia -e 'print(stdout, VERSION.major)')
           export JULIA_VERSION_MINOR=$(julia -e 'print(stdout, VERSION.minor)')
           export JULIA_VERSION_PATCH=$(julia -e 'print(stdout, VERSION.patch)')
-          packer init ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
+          packer init ${GITHUB_WORKSPACE}/test/image.pkr.hcl
           packer build -color=false -timestamp-ui \
             -var "subscription_id=${SUBSCRIPTION_ID}" \
             -var "tenant_id=${TENANT_ID}" \
@@ -78,15 +78,15 @@ jobs:
             -var "julia_version_major=${JULIA_VERSION_MAJOR}" \
             -var "julia_version_minor=${JULIA_VERSION_MINOR}" \
             -var "julia_version_patch=${JULIA_VERSION_PATCH}" \
-            ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
+            ${GITHUB_WORKSPACE}/test/image.pkr.hcl
 
-      # - name: Create Master VM
+      # - name: Create coordinator VM
       #   run: |
       #     az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "$IMAGE_NAME" --public-ip-sku Standard --public-ip-address "$PUBLIC_IP_NAME" --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --nsg "$NSG_NAME" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub --admin-username cvx
 
       # - name: Run the unit tests
       #   run: |
-      #     echo "Grabbing the Master VM's Pubic IP Address..."
+      #     echo "Grabbing the coordinator VM's Pubic IP Address..."
       #     ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq '.ipAddress' | cut -d "\"" -f 2)
       #     echo ""
 
