@@ -67,18 +67,20 @@ jobs:
           export PKR_VAR_julia_version_minor=${JULIA_VERSION_SPLIT[1]}
           export PKR_VAR_julia_version_patch=${JULIA_VERSION_SPLIT[2]}
           packer init ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
-          packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl
-        env:
-          PKR_VAR_subscription_id: "${{ secrets.SUBSCRIPTION_ID }}"
-          PKR_VAR_tenant_id: "${{ secrets.TENANT_ID }}"
-          PKR_VAR_client_id: "${{ secrets.CLIENT_ID }}"
-          PKR_VAR_client_secret: "${{ secrets.CLIENT_SECRET }}"
-          PKR_VAR_resource_group: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}"
-          PKR_VAR_image_name: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-image"
-          PKR_VAR_virtual_network: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vnet"
-          PKR_VAR_virtual_subnet: "default"
-          PKR_VAR_julia_version: "${{ matrix.version }}"
-          PKR_VAR_gallery: "${{ github.run_id }}${{ matrix.version }}gallery"
+          packer build -color=false -timestamp-ui \
+            -var "subscription_id=${SUBSCRIPTION_ID}" \
+            -var "tenant_id=${TENANT_ID}" \
+            -var "client_id=${CLIENT_ID}" \
+            -var "client_secret=${CLIENT_SECRET}" \
+            -var "resource_group=${RESOURCE_GROUP}" \
+            -var "image_name=${IMAGE_NAME}" \
+            -var "virtual_network=${VNET_NAME}" \
+            -var "virtual_subnet=default" \
+            -var "gallery=${GALLERY_NAME}" \
+            -var "julia_version_major=${JULIA_VERSION_MAJOR}" \
+            -var "julia_version_minor=${JULIA_VERSION_MINOR}" \
+            -var "julia_version_patch=${JULIA_VERSION_PATCH} \
+            ${GITHUB_WORKSPACE}/test/templates/cofii-base.pkr.hcl[ppacpack]
 
       # - name: Create Master VM
       #   run: |
