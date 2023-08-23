@@ -34,10 +34,12 @@ jobs:
       COMMIT_SHA: "${{ github.sha }}"
     steps:
       - uses: actions/checkout@v3
-      - uses: julia-actions/setup-julia@v1
-        with:
-          version: ${{ matrix.version }}
+
+      - name: get julia version
         id: get_julia_version
+        uses: julia-actions/setup-julia@v1
+          with:
+            version: ${{ matrix.version }}
 
       - name: test
         run: echo "${{ steps.get_julia_version.julia_version }}"
