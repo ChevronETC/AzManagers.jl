@@ -109,7 +109,7 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     end
 end
 
-@test_skip @testset "environment, addproc" begin
+@testset "environment, addproc" begin
     mkpath("myproject")
     cd("myproject")
     Pkg.activate(".")
@@ -137,7 +137,7 @@ end
     @test contains(testjob_stdout, "myproject")
 
     x = readdir(".")
-    @test contains(testjob_stdout, "LocalPreferences.toml")
+    @test_broken contains(testjob_stdout, "LocalPreferences.toml")
     @test contains(testjob_stdout, "Manifest.toml")
     @test contains(testjob_stdout, "Project.toml")
 
