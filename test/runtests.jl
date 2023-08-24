@@ -133,9 +133,6 @@ end
         write(stdout, "$(readdir(dirname(pinfo.path)))")
     end
     wait(testjob)
-    @show status(testjob)
-    @show read(testjob)
-    @show read(testjob; stdio=stderr)
     testjob_stdout = read(testjob)
     @test contains(testjob_stdout, "myproject")
 
