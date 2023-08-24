@@ -1,48 +1,45 @@
-name: Tests
-on: [push, pull_request]
+name: CI
+on:
+  push:
+    branches: [master]
+    tags: ["*"]
+  pull_request:
 jobs:
   test:
-
-    env: 
+    name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - ${{ github.event_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - 1.6
+          - 1
+        os:
+          - ubuntu-latest
+        arch:
+          - x64
+    env:
       TENANT_ID: "${{ secrets.TENANT_ID }}" 
       SUBSCRIPTION_ID: "${{ secrets.SUBSCRIPTION_ID }}"
-      RESOURCE_GROUP: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}"
+      RESOURCE_GROUP: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}"
       CLIENT_ID: "${{ secrets.CLIENT_ID }}"
       CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
-      GALLERY_NAME: "${{ github.run_id }}${{ matrix.julia-version }}gallery"
-      IMAGE_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-image"
-      VM_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vm"
-      PUBLIC_IP_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-pubip"
-      VNET_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-vnet"
-      NSG_NAME: "${{ matrix.os }}-${{ matrix.julia-version }}-${{ github.run_id }}-nsg"
+      GALLERY_NAME: "${{ github.run_id }}${{ matrix.version }}gallery"
+      IMAGE_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-image"
+      VM_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vm"
+      PUBLIC_IP_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-pubip"
+      VNET_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vnet"
+      NSG_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-nsg"
       SUBNET_NAME: "default"
       COMMIT_SHA: "${{ github.sha }}"
-      JULIA_VERSION: "${{ matrix.julia-version }}"
-
-    runs-on: ${{ matrix.os }}
-
-    strategy:
-      matrix:
-        julia-version: [1.6, 1.8]
-        os: [ubuntu-latest]
-
     steps:
-      - uses: actions/checkout@v1.0.0 
+      - uses: actions/checkout@v3
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ matrix.version }}
 
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
-
-      - name: Template the Packer Image file
-        uses: cuchi/jinja2-action@v1.2.0
-        with:
-          template: test/templates/cofii-base.json.j2
-          output_file: test/templates/cofii-base.json
-
-      - name: Template the AzManagers Setup script
-        uses: cuchi/jinja2-action@v1.2.0
-        with:
-          template: test/templates/azmanagers-setup.jl.j2
-          output_file: test/templates/azmanagers-setup.jl
 
       - name: Create Prereq. Azure Resources
         run: |
@@ -63,15 +60,34 @@ jobs:
           sudo apt-get update && sudo apt-get install packer
 
       - name: Build Packer Image
-        run: packer build -color=false -timestamp-ui ${GITHUB_WORKSPACE}/test/templates/cofii-base.json
+        run: |
+          export JULIA_VERSION_MAJOR=$(julia -e 'print(stdout, VERSION.major)')
+          export JULIA_VERSION_MINOR=$(julia -e 'print(stdout, VERSION.minor)')
+          export JULIA_VERSION_PATCH=$(julia -e 'print(stdout, VERSION.patch)')
+          packer init ${GITHUB_WORKSPACE}/test/image.pkr.hcl
+          packer build -color=false -timestamp-ui \
+            -var "subscription_id=${SUBSCRIPTION_ID}" \
+            -var "tenant_id=${TENANT_ID}" \
+            -var "client_id=${CLIENT_ID}" \
+            -var "client_secret=${CLIENT_SECRET}" \
+            -var "resource_group=${RESOURCE_GROUP}" \
+            -var "image_name=${IMAGE_NAME}" \
+            -var "virtual_network=${VNET_NAME}" \
+            -var "virtual_subnet=default" \
+            -var "gallery=${GALLERY_NAME}" \
+            -var "julia_version_major=${JULIA_VERSION_MAJOR}" \
+            -var "julia_version_minor=${JULIA_VERSION_MINOR}" \
+            -var "julia_version_patch=${JULIA_VERSION_PATCH}" \
+            -var "azmanagers_version=${{ github.sha }}" \
+            ${GITHUB_WORKSPACE}/test/image.pkr.hcl
 
-      - name: Create Master VM
+      - name: Create coordinator VM
         run: |
           az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "$IMAGE_NAME" --public-ip-sku Standard --public-ip-address "$PUBLIC_IP_NAME" --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --nsg "$NSG_NAME" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub --admin-username cvx
 
       - name: Run the unit tests
         run: |
-          echo "Grabbing the Master VM's Pubic IP Address..."
+          echo "Grabbing the coordinator VM's Pubic IP Address..."
           ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq '.ipAddress' | cut -d "\"" -f 2)
           echo ""
 
@@ -90,3 +106,20 @@ jobs:
         run: |
           az group delete -n "$RESOURCE_GROUP" --yes
         if: ${{ always() }}
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: '1'
+      - run: |
+          julia --project=docs -e '
+            using Pkg
+            Pkg.develop(PackageSpec(path=pwd()))
+            Pkg.instantiate()'
+      - run: julia --project=docs docs/make.jl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}

@@ -1,15 +1,24 @@
 using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
 
-include(joinpath(homedir(), "azmanagers-setup.jl"))
-
-session = AzSession(;protocal=AzClientCredentials, client_id=client_id, client_secret=client_secret)
+session = AzSession(;protocal=AzClientCredentials)
 
 azmanagers_pinfo = Pkg.project()
 pkgs=TOML.parse(read(joinpath(dirname(azmanagers_pinfo.path),"Manifest.toml"), String))
 pkg = VERSION < v"1.7.0" ? pkgs["AzManagers"][1] : pkgs["deps"]["AzManagers"][1]
 azmanagers_rev=get(pkg, "repo-rev", "")
 
-@testset "AzManagers, addprocs, ppi=$ppi, flexible=$flexible" for ppi in (1,), flexible in (true,false)
+templatename = "cbox02"
+template = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))[templatename]
+subscriptionid = template["subscriptionid"]
+resourcegroup = template["resourcegroup"]
+
+#=
+TODO - flexible orchestration is broken for CI
+error:
+No outbound connectivity configured for virtual machine .... Please attach standard load balancer or public IP address to VM, create NAT gateway
+or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defaultoutboundaccess.
+=#
+@testset "AzManagers, addprocs, ppi=$ppi, flexible=$flexible" for ppi in (1,), flexible in (false,#=true=#)
     ninstances = 4
     group = "test$(randstring('a':'z',4))"
     
@@ -22,22 +31,18 @@ azmanagers_rev=get(pkg, "repo-rev", "")
     #
     if flexible
         addprocs(templatename, ninstances;
-        waitfor = true,
-        subscriptionid = subscriptionid,
-        resourcegroup = resourcegroup,
-        ppi = ppi,
-        group = group,
-        session = session,
-        spot = true,
-        spot_base_regular_priority_count = 2)
+            waitfor = true,
+            ppi,
+            group,
+            session,
+            spot = true,
+            spot_base_regular_priority_count = 2)
     else
         addprocs(templatename, ninstances;
             waitfor = true,
-            subscriptionid = subscriptionid,
-            resourcegroup = resourcegroup,
-            ppi = ppi,
-            group = group,
-            session = session)
+            ppi,
+            group,
+            session)
     end
     
     # Verify that the scale set is present
@@ -124,8 +129,8 @@ end
     testjob = @detachat testvm begin
         using Pkg
         pinfo = Pkg.project()
-        write(stdout, "project path is $(pinfo.path)\n")
-        write(stdout, "$(readdir(pinfo.path))")
+        write(stdout, "project path is $(dirname(pinfo.path))\n")
+        write(stdout, "$(readdir(dirname(pinfo.path)))")
     end
     wait(testjob)
     testjob_stdout = read(testjob)
@@ -159,7 +164,7 @@ end
     pinfo = remotecall_fetch(Pkg.project, workers()[1])
     @test contains(pinfo.path, "myproject")
 
-    files = remotecall_fetch(Pkg.readdir, workers()[1], joinpath(pinfo.path, "myproject"))
+    files = remotecall_fetch(Pkg.readdir, workers()[1], dirname(pinfo.path))
     x = readdir(".")
     @test "LocalPreferences.toml" ∈ files
     @test "Project.toml" ∈ files
@@ -295,5 +300,5 @@ end
         "")
 
     e = HTTP.StatusError(429, "foo", "foo", r)
-    AzManagers.retrywarn(1, 2, 60, e, r)
+    AzManagers.retrywarn(1, 2, 60, e)
 end
