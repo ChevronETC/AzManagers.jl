@@ -302,3 +302,12 @@ end
     e = HTTP.StatusError(429, "foo", "foo", r)
     AzManagers.retrywarn(1, 2, 60, e)
 end
+
+@testset "AzManagers AZ Node Name" begin
+    keyval="PhysicalHostName"
+    s = split(read("/var/lib/hyperv/.kvp_pool_3", String), '\0'; keepempty=false)
+    i = findfirst(_s->_s==keyval, s)
+    physical_hostname = s[i+1]
+    m = match(r"[A-Z0-9]+", physical_hostname)
+    @test m !== nothing
+end
