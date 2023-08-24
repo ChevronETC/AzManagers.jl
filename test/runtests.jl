@@ -129,8 +129,8 @@ end
     testjob = @detachat testvm begin
         using Pkg
         pinfo = Pkg.project()
-        write(stdout, "project path is $(dir(pinfo.path))\n")
-        write(stdout, "$(readdir(dir(pinfo.path)))")
+        write(stdout, "project path is $(dirname(pinfo.path))\n")
+        write(stdout, "$(readdir(dirname(pinfo.path)))")
     end
     wait(testjob)
     @show status(testjob)
