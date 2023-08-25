@@ -78,17 +78,8 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     end
 
     #
-    # Unit Test 6 - Verify that physical_hostname on worker
+    # Unit Test 6 - Delete the Julia processes, scale set instances and the scale set itself
     #
-    wrkers = Distributed.map_pid_wrkr
-    for i in workers()
-        userdata = wrkers[i].config.userdata 
-        @test !isnothing(get(userdata, "physical_hostname", nothing))
-    end
-    #
-    # Unit Test 7 - Delete the Julia processes, scale set instances and the scale set itself
-    #
-
     # First, verify that the scale set is present
     _r = HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
     @test _r.status == 200
@@ -309,4 +300,47 @@ end
 
     e = HTTP.StatusError(429, "foo", "foo", r)
     AzManagers.retrywarn(1, 2, 60, e)
+end
+
+@testset "AzManagers, physical_hostname" begin
+
+    group = "test$(randstring('a':'z',4))"
+
+    templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))
+    template = templates_scaleset[templatename]
+    
+    addprocs(templatename, 2;
+    waitfor = true,
+    group,
+    session,
+    spot = true)
+
+    wrkers = Distributed.map_pid_wrkr
+    for i in workers()
+        userdata = wrkers[i].config.userdata 
+        @test !isnothing(get(userdata, "physical_hostname", nothing))
+    end
+
+    @info "Deleting cluster..."
+    rmprocs(workers())
+
+    itry = 0
+    while true
+        itry += 1
+        try
+            HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
+        catch _e
+            e = JSON.parse(String(_e.response.body))
+            if _e.status == 404 && e["error"]["code"] == "ResourceNotFound"
+                @info "Cluster deleted!"
+                break
+            end
+            if itry == 10
+                @warn "cluster not deleted"
+                break
+            end
+        end
+        sleep(5)
+    end
+
 end
