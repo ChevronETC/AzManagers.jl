@@ -303,17 +303,23 @@ end
 end
 
 @testset "AzManagers, physical_hostname" begin
+    mkpath("myproject")
+    cd("myproject")
+    Pkg.activate(".")
+    Pkg.add("AzSessions")
+    Pkg.add("Distributed")
+    Pkg.add("JSON")
+    Pkg.add("HTTP")
+
+    Pkg.add(PackageSpec(name="AzManagers", rev=azmanagers_rev))
 
     group = "test$(randstring('a':'z',4))"
 
     templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))
     template = templates_scaleset[templatename]
+
     
-    addprocs(templatename, 2;
-    waitfor = true,
-    group,
-    session,
-    spot = true)
+    addprocs(template, 2; waitfor=true, group=group, session=session)
 
     wrkers = Distributed.map_pid_wrkr
     for i in workers()
