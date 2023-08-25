@@ -78,7 +78,15 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     end
 
     #
-    # Unit Test 6 - Delete the Julia processes, scale set instances and the scale set itself
+    # Unit Test 6 - Verify that physical_hostname on worker
+    #
+    wrkers = Distributed.map_pid_wrkr
+    for i in workers()
+        userdata = wrkers[i].config.userdata 
+        @test !isnothing(get(userdata, "physical_hostname", nothing))
+    end
+    #
+    # Unit Test 7 - Delete the Julia processes, scale set instances and the scale set itself
     #
 
     # First, verify that the scale set is present
@@ -301,13 +309,4 @@ end
 
     e = HTTP.StatusError(429, "foo", "foo", r)
     AzManagers.retrywarn(1, 2, 60, e)
-end
-
-@testset "AzManagers AZ Node Name" begin
-    keyval="PhysicalHostName"
-    s = split(read("/var/lib/hyperv/.kvp_pool_3", String), '\0'; keepempty=false)
-    i = findfirst(_s->_s==keyval, s)
-    physical_hostname = s[i+1]
-    m = match(r"[A-Z0-9]+", physical_hostname)
-    @test m !== nothing
 end
