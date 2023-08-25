@@ -317,7 +317,7 @@ end
 
     templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))
     template = templates_scaleset[templatename]
-
+    
     
     addprocs(template, 2; waitfor=true, group=group, session=session)
 
