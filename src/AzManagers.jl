@@ -144,7 +144,7 @@ function azrequest(rtype, verbose, url, headers, body=nothing)
     end
 
     options = (retry=false, status_exception=false)
-    if body == nothing
+    if body === nothing
         r = HTTP.request(rtype, url, headers; verbose=verbose, options...)
     else
         r = HTTP.request(rtype, url, headers, body; verbose=verbose, options...)
@@ -514,7 +514,16 @@ function process_pending_connections()
         end
 
         let socket = _socket
-            @async addprocs(manager; socket)
+            @async begin
+                pids = addprocs(manager; socket)
+                for pid in pids
+                    wrkr = Distributed.map_pid_wrkr[pid]
+                    if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata) && lowercase(get(wrkr.config.userdata, "priority", "")) == "spot"
+                        remote_do(machine_prempt_loop, pid) # monitor for Azure spot evictions on each machine
+                    end
+                end
+                pids
+            end
         end
     end
 end
@@ -558,6 +567,14 @@ function spinner(n_target_workers)
     nothing
 end
 
+function nthreads_filter(nthreads)
+    _nthreads = split(string(nthreads), ',')
+    nthreads_default = length(_nthreads) > 0 ? parse(Int, _nthreads[1]) : 1
+    nthreads_interactive = length(_nthreads) > 1 ? parse(Int, _nthreads[2]) : 0
+
+    nthreads_interactive > 0 ? string("$nthreads_default,$nthreads_interactive") : string(nthreads_default)
+end
+
 """
     addprocs(template, ninstances[; kwargs...])
 
@@ -576,7 +593,7 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `group="cbox"` The name of the Azure scale set.  If the scale set does not yet exist, it will be created.
 * `overprovision=true` Use Azure scle-set overprovisioning?
 * `ppi=1` The number of Julia processes to start per Azure scale set instance.
-* `julia_num_threads=Threads.nthreads()` set the number of Julia threads to run on each worker
+* `julia_num_threads="\$(Threads.nthreads(),\$(Threads.nthreads(:interactive))"` set the number of julia threads for the detached process.[2]
 * `omp_num_threads=get(ENV, "OMP_NUM_THREADS", 1)` set the number of OpenMP threads to run on each worker
 * `env=Dict()` each dictionary entry is an environment variable set on the worker before Julia starts. e.g. `env=Dict("OMP_PROC_BIND"=>"close")`
 * `nretry=20` Number of retries for HTTP REST calls to Azure services.
@@ -587,22 +604,23 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `maxprice=-1` set maximum price per hour for a VM in the scale-set.  `-1` uses the market price.
 * `spot_base_regular_priority_count=0` If spot is true, only start adding spot machines once there are this many non-spot machines added.
 * `spot_regular_percentage_above_base` If spot is true, then when ading new machines (above `spot_base_reqular_priority_count`) use regular (non-spot) priority for this percent of new machines.
-* `waitfor=false` wait for the cluster to be provisioned before returning, or return control to the caller immediately[2]
-* `mpi_ranks_per_worker=0` set the number of MPI ranks per Julia worker[3]
+* `waitfor=false` wait for the cluster to be provisioned before returning, or return control to the caller immediately[3]
+* `mpi_ranks_per_worker=0` set the number of MPI ranks per Julia worker[4]
 * `mpi_flags="-bind-to core:\$(ENV["OMP_NUM_THREADS"]) -map-by numa"` extra flags to pass to mpirun (has effect when `mpi_ranks_per_worker>0`)
-* `nvidia_enable_ecc=true` on NVIDIA machines, ensure that ECC is set to `true` or `false` for all GPUs[4]
-* `nvidia_enable_mig=false` on NVIDIA machines, ensure that MIG is set to `true` or `false` for all GPUs[4]
+* `nvidia_enable_ecc=true` on NVIDIA machines, ensure that ECC is set to `true` or `false` for all GPUs[5]
+* `nvidia_enable_mig=false` on NVIDIA machines, ensure that MIG is set to `true` or `false` for all GPUs[5]
 * `hyperthreading=nothing` Turn on/off hyperthreading on supported machine sizes.  The default uses the setting in the template.  To override the template setting, use `true` (on) or `false` (off).
 
 # Notes
 [1] If `addprocs` is called from an Azure VM, then the default `imagename`,`imageversion` are the
 image/version the VM was built with; otherwise, it is the latest version of the image specified in the scale-set template.
-[2] `waitfor=false` reflects the fact that the cluster manager is dynamic.  After the call to `addprocs` returns, use `workers()`
+[2] Interactive threads are supported beginning in version 1.9 of Julia.  For earlier versions, the default for `julia_num_threads` is `Threads.nthreads()`.
+[3] `waitfor=false` reflects the fact that the cluster manager is dynamic.  After the call to `addprocs` returns, use `workers()`
 to monitor the size of the cluster.
-[3] This is inteneded for use with Devito.  In particular, it allows Devito to gain performance by using
+[4] This is inteneded for use with Devito.  In particular, it allows Devito to gain performance by using
 MPI to do domain decomposition using MPI within a single VM.  If `mpi_ranks_per_worker=0`, then MPI is not
 used on the Julia workers.
-[4] This may result in a re-boot of the VMs
+[5] This may result in a re-boot of the VMs
 """
 function Distributed.addprocs(template::Dict, n::Int;
         subscriptionid = "",
@@ -616,7 +634,7 @@ function Distributed.addprocs(template::Dict, n::Int;
         group = "cbox",
         overprovision = true,
         ppi = 1,
-        julia_num_threads = Threads.nthreads(),
+        julia_num_threads = VERSION >= v"1.9" ? "$(Threads.nthreads()),$(Threads.nthreads(:interactive))" : string(Threads.nthreads()),
         omp_num_threads = parse(Int, get(ENV, "OMP_NUM_THREADS", "1")),
         env = Dict(),
         nretry = 20,
@@ -651,6 +669,8 @@ function Distributed.addprocs(template::Dict, n::Int;
     scaleset = ScaleSet(subscriptionid, resourcegroup, group)
 
     osdisksize = max(osdisksize, image_osdisksize(manager, template["value"], sigimagename, sigimageversion, imagename))
+
+    julia_num_threads = nthreads_filter(julia_num_threads)
 
     @info "Provisioning $n virtual machines in scale-set $group..."
     _scalesets[scaleset] = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename, osdisksize,
@@ -876,24 +896,73 @@ function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfi
     end
 end
 
+function get_instanceid()
+    local r
+    try
+        _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01", ["Metadata"=>"true"])
+        r = JSON.parse(String(_r.body))
+    catch
+        r = Dict()
+    end
+    get(r, "name", "")
+end
+
 """
-    preempted([id=myid()])
+    preempted([id=myid()|id="instanceid"])
 
 Check to see if the machine `id::Int` has received an Azure spot preempt message.  Returns
 true if a preempt message is received and false otherwise.
 """
-function preempted()
-    _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2019-08-01", ["Metadata"=>"true"])
+function preempted(instanceid::AbstractString="", clusterid::Int=0)
+    isempty(instanceid) && (instanceid = get_instanceid())
+    clusterid == 0 && (clusterid = myid())
+    local _r
+    try
+        tic = time()
+        _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"])
+        if time() - tic > 55 # 55 seconds, simply because it is less that 60, and 60 seconds is the eviction notice.
+            @warn "$(now()), took longer than 55 seconds to query the meta-data server for scheduled events (elapsed time=$(time() - tic))."
+        end
+    catch
+        @warn "unable to get scheduledevents."
+        return false
+    end
     r = JSON.parse(String(_r.body))
-    for event in r["Events"]
-        if get(event, "EventType", "") == "Preempt"
-            @info "event=$event"
+    for event in get(r, "Events", [])
+        if get(event, "EventType", "") == "Preempt" && instanceid ∈ get(event, "Resources", [])
+            @warn "Machine with id $clusterid ($instanceid) is being pre-empted" now(Dates.UTC) event["NotBefore"] event["EventType"] event["EventSource"]
             return true
         end
     end
     return false
 end
-preempted(id) = remotecall_fetch(preempted, id)
+preempted(id::Int) = remotecall_fetch(preempted, id)
+
+function _machine_preempt_loop(pid, clusterid)
+    instanceid = ""
+    while true
+        instanceid = get_instanceid()
+        instanceid == "" || break
+        sleep(1)
+    end
+    while true
+        if AzManagers.preempted(instanceid, clusterid)
+            # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
+            @info "self-destruct, killing pid=$pid"
+            run(`kill -9 $pid`)
+            exit()
+            break
+        end
+        sleep(1)
+    end
+end
+
+function machine_prempt_loop()
+    project = dirname(Pkg.project().path)
+    pid = getpid()
+    id = myid()
+    open(`julia --project=$project -e "using AzManagers; AzManagers._machine_preempt_loop($pid, $id)"`)
+end
 
 function azure_physical_name(keyval="PhysicalHostName")
     local physical_hostname
@@ -914,7 +983,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
     nbytes_written == Distributed.HDR_COOKIE_LEN || error("unable to write bytes")
     flush(c)
 
-    _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2020-06-01", ["Metadata"=>"true"]; redirect=false)
+    _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false)
     r = JSON.parse(String(_r.body))
     vm = Dict(
         "bind_addr" => string(getipaddr(IPv4)),
@@ -924,6 +993,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
             "resourcegroup" => lowercase(r["compute"]["resourceGroupName"]),
             "scalesetname" => lowercase(r["compute"]["vmScaleSetName"]),
             "instanceid" => split(r["compute"]["resourceId"], '/')[end],
+            "priority" => get(r["compute"], "priority", ""),
             "localid" => 1,
             "name" => r["compute"]["name"],
             "mpi" => mpi_size > 0,
@@ -1328,7 +1398,7 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
 
     # get machines' metadata
     t = @async begin
-        r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute/storageProfile/imageReference?api-version=2019-06-01", ["Metadata"=>"true"]; retry=false, redirect=false)
+        r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute/storageProfile/imageReference?api-version=2021-02-01", ["Metadata"=>"true"]; retry=false, redirect=false)
     end
     tic = time()
     while !istaskdone(t)
@@ -1633,7 +1703,7 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
             
             sudo su - $user <<'EOF'
             julia -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$localpreferences_compressed", "$remote_julia_environment_name")'
-            julia -e 'using Pkg, AzManagers; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); pkg"registry up"; Pkg.activate(path); (retry(Pkg.instantiate))(); Pkg.precompile()'
+            julia -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.Registry.update(); Pkg.activate(path); (retry(Pkg.instantiate))(); Pkg.precompile()'
             EOF
             """
         catch e
@@ -1653,7 +1723,7 @@ function build_envstring(env::Dict)
     envstring
 end
 
-function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads::Int, omp_num_threads::Int, env::Dict, user::String,
+function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads::String, omp_num_threads::Int, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool)
     cmd, remote_julia_environment_name = buildstartupscript(manager, user, disk, custom_environment)
 
@@ -1670,10 +1740,9 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
 
         sudo su - $user <<EOF
         export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
-        export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        julia -e '$(juliaenvstring)using AzManagers; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
+        julia -t $julia_num_threads -e '$(juliaenvstring)using AzManagers; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     else
@@ -1681,11 +1750,10 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
 
         sudo su - $user <<EOF
         export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
-        export JULIA_NUM_THREADS=$julia_num_threads
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
         julia -e '$(juliaenvstring)using AzManagers; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
-        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
+        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -t $julia_num_threads -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     end
@@ -1693,7 +1761,7 @@ function buildstartupscript_cluster(manager::AzManager, ppi::Int, mpi_ranks_per_
     cmd
 end
 
-function buildstartupscript_detached(manager::AzManager, julia_num_threads::Int, omp_num_threads::Int, env::Dict, user::String,
+function buildstartupscript_detached(manager::AzManager, julia_num_threads::String, omp_num_threads::Int, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool, subscriptionid, resourcegroup, vmname)
     cmd, remote_julia_environment_name = buildstartupscript(manager, user, disk, custom_environment)
 
@@ -1706,11 +1774,10 @@ function buildstartupscript_detached(manager::AzManager, julia_num_threads::Int,
     sudo su - $user <<EOF
     $envstring
     export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
-    export JULIA_NUM_THREADS=$julia_num_threads
     export OMP_NUM_THREADS=$omp_num_threads
     ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N '' <<<y
     cd /home/$user
-    julia -e '$(juliaenvstring)using AzManagers; AzManagers.mount_datadisks(); AzManagers.detached_port!($(AzManagers.detached_port())); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
+    julia -t $julia_num_threads -e '$(juliaenvstring)using AzManagers; AzManagers.mount_datadisks(); AzManagers.detached_port!($(AzManagers.detached_port())); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
     EOF
     """
 
@@ -1981,7 +2048,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
     
-    cmd = buildstartupscript_cluster(manager, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, env, user, template["tempdisk"], custom_environment)
+    cmd = buildstartupscript_cluster(manager, spot, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, env, user, template["tempdisk"], custom_environment)
     _cmd = base64encode(cmd)
 
     if length(_cmd) > 64_000
@@ -2090,7 +2157,7 @@ end
 function mount_datadisks()
     try
         @info "mounting data disks"
-        _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2020-06-01", ["Metadata"=>"true"]; redirect=false)
+        _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false)
         r = JSON.parse(String(_r.body))
         luns = String[]
         for datadisks in r["compute"]["storageProfile"]["dataDisks"]
@@ -2465,10 +2532,13 @@ Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` w
 * `nretry=10` Max retries for re-tryable REST call failures
 * `verbose=0` Verbosity flag passes to HTTP.jl methods
 * `show_quota=false` after various operation, show the "x-ms-rate-remaining-resource" response header.  Useful for debugging/understanding Azure quota's.
-* `julia_num_threads=Threads.nthreads()` set `JULIA_NUM_THREADS` environment variable before starting the detached process
+* `julia_num_threads="\$(Threads.nthreads(),\$(Threads.nthreads(:interactive))"` set the number of julia threads for the workers.[1]
 * `omp_num_threads = get(ENV, "OMP_NUM_THREADS", 1)` set `OMP_NUM_THREADS` environment variable before starting the detached process
 * `env=Dict()` Dictionary of environemnt variables that will be exported before starting the detached process
 * `detachedservice=true` start the detached service allowing for RESTful remote code execution
+
+# Notes
+[1] Interactive threads are supported beginning in version 1.9 of Julia.  For earlier versions, the default for `julia_num_threads` is `Threads.nthreads()`.
 """
 function addproc(vm_template::Dict, nic_template=nothing;
         name = "",
@@ -2485,7 +2555,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         nretry = 10,
         verbose = 0,
         show_quota = false,
-        julia_num_threads = Threads.nthreads(),
+        julia_num_threads = VERSION >= v"1.9" ? "$(Threads.nthreads()),$(Threads.nthreads(:interactive))" : string(Threads.nthreads()),
         omp_num_threads = parse(Int, get(ENV, "OMP_NUM_THREADS", "1")),
         env = Dict(),
         detachedservice = true)
@@ -2552,7 +2622,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
 
     local cmd
     if detachedservice
-        cmd = buildstartupscript_detached(manager, julia_num_threads, omp_num_threads, env, user,
+        cmd = buildstartupscript_detached(manager, nthreads_filter(julia_num_threads), omp_num_threads, env, user,
             disk, customenv, subscriptionid, resourcegroup, vmname)
     else
         cmd,_ = buildstartupscript(manager, user, disk, customenv)
