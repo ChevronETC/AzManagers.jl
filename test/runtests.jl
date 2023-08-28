@@ -108,6 +108,64 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     end
 end
 
+@testset "addprocs, spot" begin
+    group = "test$(randstring('a':'z',4))"
+    julia_num_threads = VERSION >= v"1.9" ? "2,0" : "2"
+    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads)
+
+    @test remotecall_fetch(Threads.nthreads, workers()[1]) == 2
+
+    if VERSION >= v"1.9"
+        @test remotecall_fetch(Threads.nthreads, workers()[1], :interactive) == 0
+    end
+    rmprocs(workers())
+
+    group = "test$(randstring('a':'z',4))"
+    julia_num_threads = VERSION >= v"1.9" ? "2,0" : "2"
+    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads, spot = true)
+
+    @test remotecall_fetch(Threads.nthreads, workers()[1]) == 2
+
+    if VERSION >= v"1.9"
+        if workers()[1] != 1
+            @test remotecall_fetch(Threads.nthreads, workers()[1], :interactive) == 1
+        end
+    end
+    rmprocs(workers())
+
+    group = "test$(randstring('a':'z',4))"
+    julia_num_threads = VERSION >= v"1.9" ? "3,2" : "3"
+    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads, spot=true)
+
+    @test remotecall_fetch(Threads.nthreads, workers()[1]) == 3
+
+    if VERSION >= v"1.9"
+        @test remotecall_fetch(Threads.nthreads, workers()[1], :interactive) == 2
+    end
+    rmprocs(workers())
+end
+
+if VERSION >= v"1.9"
+    @testset "spot eviction" begin
+        group = "test$(randstring('a':'z',4))"
+        julia_num_threads = "2,1"
+        addprocs(templatename, 2; waitfor = true, group, session, julia_num_threads, spot = true)
+
+        AzManagers.simulate_spot_eviction(workers()[1])
+
+        tic = time()
+        while time() - tic < 300
+            if nprocs() < 3
+                @info "cluster responded to spot eviction in $(time() - tic) seconds"
+                break
+            end
+            sleep(10)
+        end
+        @test nprocs() < 3
+        rmprocs(workers())
+    end
+end
+
 @testset "environment, addproc" begin
     mkpath("myproject")
     cd("myproject")
