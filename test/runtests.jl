@@ -303,15 +303,6 @@ end
 end
 
 @testset "AzManagers, physical_hostname" begin
-    mkpath("myproject")
-    cd("myproject")
-    Pkg.activate(".")
-    Pkg.add("AzSessions")
-    Pkg.add("Distributed")
-    Pkg.add("JSON")
-    Pkg.add("HTTP")
-
-    Pkg.add(PackageSpec(name="AzManagers", rev=azmanagers_rev))
 
     group = "test$(randstring('a':'z',4))"
 
@@ -324,7 +315,9 @@ end
     for i in workers()
         userdata = wrkers[i].config.userdata 
         @info userdata
-        @test !isnothing(get(userdata, "physical_hostname", nothing))
+        name = get(userdata, "physical_hostname", "unknown")
+
+        @test name !== "unknown" && match(r"[A-Z0-9]", name) !== nothing
     end
 
     @info "Deleting cluster..."
