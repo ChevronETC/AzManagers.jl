@@ -464,6 +464,7 @@ function prune_scalesets()
     end
 end
 
+
 function delete_scalesets()
     manager = azmanager()
     @sync for scaleset in keys(scalesets(manager))
@@ -907,6 +908,56 @@ function azure_physical_name(keyval="PhysicalHostName")
     physical_hostname
 end
 
+
+function get_cpu_test()
+    f_path = tempdir()*"/stream"
+    cfile_path = tempdir()*"/stream.c"
+
+    if !isfile(f_path)
+        try
+            resp = HTTP.request("GET", "https://www.cs.virgina.edu/stream/FTP/Code/stream.c")
+            if resp.status == 200
+                _file = String(resp.body)
+
+                open(cfile_path, "w") do file
+                    write(file, _file)
+                end
+
+                if isfile(cfile_path)
+                    run(`gcc -O $(cfile_path) -o $(f_path)`)
+                end
+            end
+        catch e
+            return ""
+        end
+    end
+    return f_path
+end
+
+function run_cpu_test()
+    cpu_test = get_cpu_test()
+    local result = 0
+
+    if isfile(cpu_test)
+        try
+            io = open(`$cpu_test`)
+            for line in readlines(io)
+                if startswith(line, "Copy")
+                    result = parse(Float64, split(line, " ", keepempty=false)[2])
+                end
+            end
+        catch
+            result = 0
+        end
+    end
+    return result
+end
+
+function init_check_cpu(expected=32000)
+
+    result = run_cpu_test()
+    return result >= expected
+
 function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
     c = connect(IPv4(master_address), master_port)
 
@@ -928,7 +979,8 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
             "name" => r["compute"]["name"],
             "mpi" => mpi_size > 0,
             "mpi_size" => mpi_size,
-            "physical_hostname" => azure_physical_name()))
+            "physical_hostname" => azure_physical_name()),
+            "init_passed" => init_check_cpu())
     _vm = base64encode(json(vm))
 
     nbytes_written = write(c, _vm*"\n")
