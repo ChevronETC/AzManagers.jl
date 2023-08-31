@@ -958,6 +958,8 @@ function init_check_cpu(expected=32000)
     result = run_cpu_test()
     return result >= expected
 
+end
+
 function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
     c = connect(IPv4(master_address), master_port)
 
