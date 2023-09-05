@@ -80,7 +80,6 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     #
     # Unit Test 6 - Delete the Julia processes, scale set instances and the scale set itself
     #
-
     # First, verify that the scale set is present
     _r = HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
     @test _r.status == 200
@@ -301,4 +300,27 @@ end
 
     e = HTTP.StatusError(429, "foo", "foo", r)
     AzManagers.retrywarn(1, 2, 60, e)
+end
+
+@testset "AzManagers, physical_hostname" begin
+
+    group = "test$(randstring('a':'z',4))"
+
+    templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))
+    template = templates_scaleset[templatename]
+    
+    addprocs(template, 2; waitfor=true, group=group, session=session)
+
+    wrkers = Distributed.map_pid_wrkr
+    for i in workers()
+        userdata = wrkers[i].config.userdata 
+        @info userdata
+        name = get(userdata, "physical_hostname", "unknown")
+
+        @test name !== "unknown" && match(r"[A-Z0-9]", name) !== nothing
+    end
+
+    @info "Deleting cluster..."
+    rmprocs(workers())
+
 end
