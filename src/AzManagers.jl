@@ -885,8 +885,10 @@ true if a preempt message is received and false otherwise.
 function preempted()
     _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2019-08-01", ["Metadata"=>"true"])
     r = JSON.parse(String(_r.body))
+    stopStats = ["Reboot", "Redeploy", "Freeze", "Preempt", "Terminate"]
+    schedStats = ["Scheduled", "Started"]
     for event in r["Events"]
-        if get(event, "EventType", "") == "Preempt"
+        if get(event, "EventType", "") in stopStats && get(event, "EventStatus", "") in schedStats
             @info "event=$event"
             return true
         end
