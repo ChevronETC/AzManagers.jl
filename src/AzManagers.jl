@@ -909,19 +909,26 @@ Check to see if the machine `id::Int` has received an Azure spot preempt message
 true if a preempt message is received and false otherwise.
 """
 function preempted(instanceid="")
+    io = open(joinpath(homedir(),"tmp.txt"), "r+")
     @info "getting instanceid"
+    write(io, "getting instanceid\n"); flush(io)
     isempty(instanceid) && (instanceid = get_instanceid())
     @info "calling scheduledevents..."
+    write(io, "calling scheduledevents...\n"); flush(io)
     _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]; redirect=false)
     @info "...called scheduledevents."
+    write(io, "...called scheduledevents.\n"); flush(io)
     r = JSON.parse(String(_r.body))
-    for event in r["Events"]
+    for event in get(r, "Events", [])
         @info "event" event
+        write(io, "event=$event\n"); flush(io)
         if get(event, "EventType", "") == "Preempt" && instanceid ∈ get(event, "Resources", [])
             @warn "Machine with id $(myid()) is being pre-empted" now(Dates.UTC) event["NotBefore"] event["EventType"] event["EventSource"]
+            write(io, "Machine with id $(myid()) is being pre-empted.\n")
             return true
         end
     end
+    close(io)
     return false
 end
 # preempted(id::Int) = remotecall_fetch(preempted, id)
@@ -936,19 +943,26 @@ end
 
 function machine_prempt_loop()
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
-        tsk = @spawn_interactive begin
+        tsk = Threads.@spawn :interactive begin
+            io = open(joinpath(homedir(),"tmp.txt"), "w")
             @info "inside interactive thread"
+            write(io, "inside interactive thread\n"); flush(io)
             instanceid = get_instanceid()
             @info "instanceid=$instanceid"
+            write(io, "instanceid=$instanceid\n"); flush(io)
             while true
                 @info "inside pre-empt loop"
+                write(io, "inside pre-empt loop\n"); flush(io)
                 if preempted(instanceid)
                     # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
                     exit()
                     break
                 end
+                @info "after peempt if statement"
+                write(io, "after preempt if statement\n"); flush(io)
                 sleep(1)
             end
+            close(io)
             try
                 wait(tsk)
             catch e
