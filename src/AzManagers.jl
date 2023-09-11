@@ -909,6 +909,7 @@ Check to see if the machine `id::Int` has received an Azure spot preempt message
 true if a preempt message is received and false otherwise.
 """
 function preempted(instanceid::AbstractString="")
+    @info "getting instanceid"
     isempty(instanceid) && (instanceid = get_instanceid())
     @info "calling scheduledevents..."
     _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]; redirect=false)
@@ -938,7 +939,9 @@ function machine_prempt_loop()
         instanceid = get_instanceid()
         @info "instanceid=$instanceid"
         tsk = @spawn_interactive begin
+            @info "inside interactive thread"
             while true
+                @info "inside pre-empt loop"
                 if preempted(instanceid)
                     # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
                     exit()
