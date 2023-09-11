@@ -908,7 +908,7 @@ end
 Check to see if the machine `id::Int` has received an Azure spot preempt message.  Returns
 true if a preempt message is received and false otherwise.
 """
-function preempted(instanceid="")
+function preempted(instanceid::AbstractString="")
     isempty(instanceid) && (instanceid = get_instanceid())
     @info "calling scheduledevents..."
     _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]; redirect=false)
@@ -923,7 +923,7 @@ function preempted(instanceid="")
     end
     return false
 end
-preempted(id) = remotecall_fetch(preempted, id)
+preempted(id::Int) = remotecall_fetch(preempted, id)
 
 macro spawn_interactive(ex::Expr)
     if VERSION > v"1.9"
