@@ -896,16 +896,20 @@ function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfi
     end
 end
 
+function get_instanceid()
+    _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false)
+    r = JSON.parse(String(_r.body))
+    get(r, "name", "")
+end
+
 """
     preempted([id=myid()])
 
 Check to see if the machine `id::Int` has received an Azure spot preempt message.  Returns
 true if a preempt message is received and false otherwise.
 """
-function preempted()
-    _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false)
-    r = JSON.parse(String(_r.body))
-    instanceid = get(r, "name", "")
+function preempted(instanceid="")
+    isempty(instanceid) && (instanceid = get_instanceid())
     _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]; redirect=false)
     r = JSON.parse(String(_r.body))
     for event in r["Events"]
@@ -929,19 +933,22 @@ end
 
 function machine_prempt_loop()
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
-        tsk = @spawn_interactive while true
-            if preempted()
-                # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
-                exit()
-                break
+        tsk = @spawn_interactive begin
+            instanceid = get_instanceid()
+            while true
+                if preempted(instanceid)
+                    # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
+                    exit()
+                    break
+                end
+                sleep(1)
             end
-            sleep(1)
-        end
-        try
-            wait(tsk)
-        catch e
-            @info "preempt loop failed"
-            logerror(e, Logging.Warn)
+            try
+                wait(tsk)
+            catch e
+                @info "preempt loop failed"
+                logerror(e, Logging.Warn)
+            end
         end
     else
         @warn "AzManagers is not running the preempt loop for pid=$(myid()) since it requires at least one interactive thread on worker machines."
