@@ -935,8 +935,9 @@ end
 
 function machine_prempt_loop()
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
+        instanceid = get_instanceid()
+        @info "instanceid=$instanceid"
         tsk = @spawn_interactive begin
-            instanceid = get_instanceid()
             while true
                 if preempted(instanceid)
                     # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
