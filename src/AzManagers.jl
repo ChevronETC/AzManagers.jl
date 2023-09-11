@@ -927,7 +927,7 @@ end
 # preempted(id::Int) = remotecall_fetch(preempted, id)
 
 macro spawn_interactive(ex::Expr)
-    if VERSION > v"1.9"
+    if VERSION >= v"1.9"
         :(Threads.@spawn :interactive esc($ex))
     else
         :(Threads.@spawn esc($ex))
@@ -936,10 +936,10 @@ end
 
 function machine_prempt_loop()
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
-        instanceid = get_instanceid()
-        @info "instanceid=$instanceid"
         tsk = @spawn_interactive begin
             @info "inside interactive thread"
+            instanceid = get_instanceid()
+            @info "instanceid=$instanceid"
             while true
                 @info "inside pre-empt loop"
                 if preempted(instanceid)
