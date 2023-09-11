@@ -910,7 +910,9 @@ true if a preempt message is received and false otherwise.
 """
 function preempted(instanceid="")
     isempty(instanceid) && (instanceid = get_instanceid())
+    @info "calling scheduledevents..."
     _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]; redirect=false)
+    @info "...called scheduledevents."
     r = JSON.parse(String(_r.body))
     for event in r["Events"]
         @info "event" event
