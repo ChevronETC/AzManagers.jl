@@ -912,21 +912,16 @@ function preempted(instanceid="")
     @info "getting instanceid"
     isempty(instanceid) && (instanceid = get_instanceid())
     @info "calling scheduledevents..."
-    write(io, "calling scheduledevents...\n"); flush(io)
     _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]; redirect=false)
     @info "...called scheduledevents."
-    write(io, "...called scheduledevents.\n"); flush(io)
     r = JSON.parse(String(_r.body))
     for event in get(r, "Events", [])
         @info "event" event
-        write(io, "event=$event\n"); flush(io)
         if get(event, "EventType", "") == "Preempt" && instanceid ∈ get(event, "Resources", [])
             @warn "Machine with id $(myid()) is being pre-empted" now(Dates.UTC) event["NotBefore"] event["EventType"] event["EventSource"]
-            write(io, "Machine with id $(myid()) is being pre-empted.\n")
             return true
         end
     end
-    close(io)
     return false
 end
 # preempted(id::Int) = remotecall_fetch(preempted, id)
