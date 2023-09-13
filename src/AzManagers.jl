@@ -897,8 +897,13 @@ function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfi
 end
 
 function get_instanceid()
-    _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false)
-    r = JSON.parse(String(_r.body))
+    local r
+    try
+        _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01", ["Metadata"=>"true"])
+        r = JSON.parse(String(_r.body))
+    catch
+        r = Dict()
+    end
     get(r, "name", "")
 end
 
@@ -912,7 +917,12 @@ function preempted(instanceid="")
     @info "getting instanceid"
     isempty(instanceid) && (instanceid = get_instanceid())
     @info "calling scheduledevents..."
-    _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]; redirect=false)
+    try
+        _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]; retry=false)
+    catch
+        @warn "unable to get scheduledevents."
+        return false
+    end
     @info "...called scheduledevents."
     r = JSON.parse(String(_r.body))
     for event in get(r, "Events", [])
@@ -938,7 +948,12 @@ function machine_prempt_loop()
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
         tsk = Threads.@spawn :interactive begin
             @info "inside interactive thread"
-            instanceid = get_instanceid()
+            instanceid = ""
+            while true
+                instanceid = get_instanceid()
+                instanceid == "" || break
+                sleep(1)
+            end
             @info "instanceid=$instanceid"
             while true
                 @info "inside pre-empt loop"
