@@ -909,9 +909,7 @@ Check to see if the machine `id::Int` has received an Azure spot preempt message
 true if a preempt message is received and false otherwise.
 """
 function preempted(instanceid="")
-    io = open(joinpath(homedir(),"tmp.txt"), "r+")
     @info "getting instanceid"
-    write(io, "getting instanceid\n"); flush(io)
     isempty(instanceid) && (instanceid = get_instanceid())
     @info "calling scheduledevents..."
     write(io, "calling scheduledevents...\n"); flush(io)
@@ -944,22 +942,17 @@ end
 function machine_prempt_loop()
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
         tsk = Threads.@spawn :interactive begin
-            io = open(joinpath(homedir(),"tmp.txt"), "w")
             @info "inside interactive thread"
-            write(io, "inside interactive thread\n"); flush(io)
             instanceid = get_instanceid()
             @info "instanceid=$instanceid"
-            write(io, "instanceid=$instanceid\n"); flush(io)
             while true
                 @info "inside pre-empt loop"
-                write(io, "inside pre-empt loop\n"); flush(io)
                 if preempted(instanceid)
                     # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
                     exit()
                     break
                 end
                 @info "after peempt if statement"
-                write(io, "after preempt if statement\n"); flush(io)
                 sleep(1)
             end
             close(io)
@@ -1714,7 +1707,7 @@ function buildstartupscript(manager::AzManager, user::String, disk::AbstractStri
             
             sudo su - $user <<'EOF'
             julia -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$localpreferences_compressed", "$remote_julia_environment_name")'
-            julia -e 'using Pkg, AzManagers; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); pkg"registry up"; Pkg.activate(path); (retry(Pkg.instantiate))(); Pkg.precompile()'
+            julia -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); pkg"registry up"; Pkg.activate(path); (retry(Pkg.instantiate))(); Pkg.precompile()'
             EOF
             """
         catch e
