@@ -950,13 +950,12 @@ function machine_prempt_loop()
                 @info "after peempt if statement"
                 sleep(1)
             end
-            close(io)
-            try
-                wait(tsk)
-            catch e
-                @info "preempt loop failed"
-                logerror(e, Logging.Warn)
-            end
+        end
+        try
+            wait(tsk)
+        catch e
+            @info "preempt loop failed"
+            logerror(e, Logging.Warn)
         end
     else
         @warn "AzManagers is not running the preempt loop for pid=$(myid()) since it requires at least one interactive thread on worker machines."
