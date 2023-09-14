@@ -966,7 +966,7 @@ function machine_prempt_loop()
                     break
                 end
                 @info "after peempt if statement"
-                sleep(1)
+                sleep(5)
             end
         end
         try
