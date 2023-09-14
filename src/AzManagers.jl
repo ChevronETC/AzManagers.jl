@@ -925,9 +925,9 @@ function preempted(instanceid="")
         @warn "unable to get scheduledevents."
         return false
     end
-    @info "...called scheduledevents."
     # r = JSON.parse(String(_r.body))
     r = JSON.parse(_r)
+    @info "events=$(r["Events"])"
     for event in get(r, "Events", [])
         @info "event" event
         if get(event, "EventType", "") == "Preempt" && instanceid ∈ get(event, "Resources", [])
