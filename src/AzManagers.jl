@@ -916,7 +916,7 @@ true if a preempt message is received and false otherwise.
 function preempted(instanceid="")
     @info "getting instanceid"
     isempty(instanceid) && (instanceid = get_instanceid())
-    @info "calling scheduledevents..."
+    @info " $(now()),  calling scheduledevents..."
     local _r
     try
         _r = read(`wget -q -O - --header='Metadata: true' http://169.254.169.254/metadata/scheduledevents'?'api-version=2020-07-01`, String)
