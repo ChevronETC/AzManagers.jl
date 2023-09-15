@@ -913,14 +913,14 @@ end
 Check to see if the machine `id::Int` has received an Azure spot preempt message.  Returns
 true if a preempt message is received and false otherwise.
 """
-function preempted(instanceid="", timeout=5)
+function preempted(instanceid="", readtimeout=5, connect_timeout=5)
     isempty(instanceid) && (instanceid = get_instanceid())
     local _r
     try
         @info "$(now()),  calling scheduledevents..."
         tic = time()
         # _r = read(`wget -q -O - --header='Metadata: true' http://169.254.169.254/metadata/scheduledevents'?'api-version=2020-07-01`, String)
-        _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]; retry=false, readtimeout=timeout, connect_timeout=timeout)
+        _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]; retry=false, readtimeout, connect_timeout)
         @info "$(now()), ...called scheduledevents (elapsed=$(time() - tic))."
     catch
         @warn "unable to get scheduledevents."
@@ -958,7 +958,7 @@ function machine_prempt_loop()
                 sleep(1)
             end
             # the first tim we call the metadata service there seems to be additional latency
-            preempted(instanceid, 60)
+            preempted(instanceid, 0, 30)
             while true
                 if preempted(instanceid)
                     # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
