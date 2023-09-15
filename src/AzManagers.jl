@@ -914,12 +914,13 @@ Check to see if the machine `id::Int` has received an Azure spot preempt message
 true if a preempt message is received and false otherwise.
 """
 function preempted(instanceid="")
-    @info "getting instanceid"
     isempty(instanceid) && (instanceid = get_instanceid())
-    @info " $(now()),  calling scheduledevents..."
     local _r
     try
+        @info "$(now()),  calling scheduledevents..."
+        tic = time()
         _r = read(`wget -q -O - --header='Metadata: true' http://169.254.169.254/metadata/scheduledevents'?'api-version=2020-07-01`, String)
+        @ifo "$(now()), ...called scheduledevents (elapsed=$(time() - tic))."
         # _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]; retry=false)
     catch
         @warn "unable to get scheduledevents."
@@ -950,22 +951,18 @@ end
 function machine_prempt_loop()
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
         tsk = Threads.@spawn :interactive begin
-            @info "inside interactive thread"
             instanceid = ""
             while true
                 instanceid = get_instanceid()
                 instanceid == "" || break
                 sleep(1)
             end
-            @info "instanceid=$instanceid"
             while true
-                @info "inside pre-empt loop"
                 if preempted(instanceid)
                     # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
                     exit()
                     break
                 end
-                @info "after peempt if statement"
                 sleep(5)
             end
         end
