@@ -961,7 +961,7 @@ function machine_prempt_loop()
             while true
                 if preempted(instanceid)
                     # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
-                    @info "self-destruct, sleeping for 10 seconds"
+                    @info "self-destruct, sleeping for 10 seconds, ip=$(getipaddr())"
                     sleep(10)
                     @info "self-destruct, calling exit"
                     exit()
