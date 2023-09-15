@@ -926,8 +926,8 @@ function preempted(instanceid="", timeout=5)
         @warn "unable to get scheduledevents."
         return false
     end
-    # r = JSON.parse(String(_r.body))
-    r = JSON.parse(_r)
+    r = JSON.parse(String(_r.body))
+    # r = JSON.parse(_r)
     @info "events=$(r["Events"])"
     for event in get(r, "Events", [])
         @info "event" event
