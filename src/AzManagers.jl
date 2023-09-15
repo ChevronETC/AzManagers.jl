@@ -920,7 +920,7 @@ function preempted(instanceid="")
         @info "$(now()),  calling scheduledevents..."
         tic = time()
         # _r = read(`wget -q -O - --header='Metadata: true' http://169.254.169.254/metadata/scheduledevents'?'api-version=2020-07-01`, String)
-        _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"])
+        _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"], verbose=2)
         @info "$(now()), ...called scheduledevents (elapsed=$(time() - tic))."
     catch
         @warn "unable to get scheduledevents."
