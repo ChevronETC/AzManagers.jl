@@ -964,7 +964,7 @@ function machine_prempt_loop()
                     exit()
                     break
                 end
-                sleep(5)
+                sleep(1)
             end
         end
         try
