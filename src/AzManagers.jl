@@ -920,8 +920,8 @@ function preempted(instanceid="")
     try
         @info "$(now()),  calling scheduledevents..."
         tic = time()
-        _r = read(`wget -q -O - --header='Metadata: true' http://169.254.169.254/metadata/scheduledevents'?'api-version=2020-07-01`, String)
-        # _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"], verbose=2)
+        # _r = read(`wget -q -O - --header='Metadata: true' http://169.254.169.254/metadata/scheduledevents'?'api-version=2020-07-01`, String)
+        _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"], verbose=2)
         # _r = read(`julia -e 'using HTTP; r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]"); write(stdout, String(r.body))'`, String)
         @info "$(now()), ...called scheduledevents (elapsed=$(time() - tic))."
     catch
@@ -950,35 +950,60 @@ macro spawn_interactive(ex::Expr)
     end
 end
 
+function _machine_preempt_loop(pid)
+    instanceid = ""
+    while true
+        instanceid = get_instanceid()
+        instanceid == "" || break
+        sleep(1)
+    end
+    while true
+        if AzManagers.preempted(instanceid)
+            # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
+            @info "self-destruct, removing machine from cluster"
+            remote_do(rmprocs, 1, myid())
+            @info "self-destruct, sleeping for 10 seconds, ip=$(getipaddr())"
+            sleep(10)
+            @info "self-destruct, calling exit"
+            run(`kill -9 $pid`)
+            exit()
+            break
+        end
+        sleep(1)
+    end
+end
+
 function machine_prempt_loop()
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
-        tsk = Threads.@spawn :interactive begin
-            instanceid = ""
-            while true
-                instanceid = get_instanceid()
-                instanceid == "" || break
-                sleep(1)
-            end
-            while true
-                if preempted(instanceid)
-                    # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
-                    @info "self-destruct, removing machine from cluster"
-                    remote_do(rmprocs, 1, myid())
-                    @info "self-destruct, sleeping for 10 seconds, ip=$(getipaddr())"
-                    sleep(10)
-                    @info "self-destruct, calling exit"
-                    exit()
-                    break
-                end
-                sleep(1)
-            end
-        end
-        try
-            wait(tsk)
-        catch e
-            @info "preempt loop failed"
-            logerror(e, Logging.Warn)
-        end
+        pid = getpid()
+        run(`julia -e 'using AzManagers; AzManagers._machine_preempt_loop($pid)`)
+        # tsk = Threads.@spawn :interactive begin
+        #     instanceid = ""
+        #     while true
+        #         instanceid = get_instanceid()
+        #         instanceid == "" || break
+        #         sleep(1)
+        #     end
+        #     while true
+        #         if preempted(instanceid)
+        #             # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
+        #             @info "self-destruct, removing machine from cluster"
+        #             remote_do(rmprocs, 1, myid())
+        #             @info "self-destruct, sleeping for 10 seconds, ip=$(getipaddr())"
+        #             sleep(10)
+        #             @info "self-destruct, calling exit"
+        #             exit()
+        #             break
+        #         end
+        #         sleep(1)
+        #     end
+        # end
+        # try
+        #     wait(tsk)
+        # catch e
+        #     @info "preempt loop failed"
+        #     logerror(e, Logging.Warn)
+        # end
     else
         @warn "AzManagers is not running the preempt loop for pid=$(myid()) since it requires at least one interactive thread on worker machines."
     end
