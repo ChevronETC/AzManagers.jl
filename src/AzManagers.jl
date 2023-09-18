@@ -928,8 +928,8 @@ function preempted(instanceid="")
         @warn "unable to get scheduledevents."
         return false
     end
-    # r = JSON.parse(String(_r.body))
-    r = JSON.parse(_r)
+    r = JSON.parse(String(_r.body))
+    # r = JSON.parse(_r)
     @info "events=$(r["Events"])"
     for event in get(r, "Events", [])
         @info "event" event
@@ -976,7 +976,7 @@ end
 function machine_prempt_loop()
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
         pid = getpid()
-        run(`julia -e 'using AzManagers; AzManagers._machine_preempt_loop($pid)'`)
+        run(`julia -e "using AzManagers; AzManagers._machine_preempt_loop($pid)"`)
         # tsk = Threads.@spawn :interactive begin
         #     instanceid = ""
         #     while true
