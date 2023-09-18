@@ -957,14 +957,18 @@ function _machine_preempt_loop(pid)
         instanceid == "" || break
         sleep(1)
     end
+    io = open(joinpath(homedir(), "preemptloop.txt"))
     while true
         if AzManagers.preempted(instanceid)
             # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
             @info "self-destruct, removing machine from cluster"
+            write(io, "$(now()), self-destruct, removing machine from cluster\n");flush(io)
             remote_do(rmprocs, 1, myid())
             @info "self-destruct, sleeping for 10 seconds, ip=$(getipaddr())"
+            write(io, "$(now()), self-destruct, sleeping for 10 seconds, ip=$(getipaddr())");flush(io)
             sleep(10)
-            @info "self-destruct, calling exit"
+            @info "self-destruct, killing pid=$pid"
+            write(io, "$(now()), self-destruct, killing pid=$pid");flush(io)
             run(`kill -9 $pid`)
             exit()
             break
