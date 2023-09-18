@@ -939,14 +939,6 @@ function preempted(instanceid::AbstractString="")
 end
 preempted(id::Int) = remotecall_fetch(preempted, id)
 
-macro spawn_interactive(ex::Expr)
-    if VERSION >= v"1.9"
-        :(Threads.@spawn :interactive esc($ex))
-    else
-        :(Threads.@spawn esc($ex))
-    end
-end
-
 function _machine_preempt_loop(pid)
     instanceid = ""
     while true
@@ -957,8 +949,6 @@ function _machine_preempt_loop(pid)
     while true
         if AzManagers.preempted(instanceid)
             # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
-            # @info "self-destruct, removing machine from cluster"
-            # remote_do(rmprocs, 1, myid())
             @info "self-destruct, killing pid=$pid"
             run(`kill -9 $pid`)
             exit()
@@ -969,12 +959,8 @@ function _machine_preempt_loop(pid)
 end
 
 function machine_prempt_loop()
-    if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
-        pid = getpid()
-        open(`julia -e "using AzManagers; AzManagers._machine_preempt_loop($pid)"`)
-    else
-        @warn "AzManagers is not running the preempt loop for pid=$(myid()) since it requires at least one interactive thread on worker machines."
-    end
+    pid = getpid()
+    open(`julia -e "using AzManagers; AzManagers._machine_preempt_loop($pid)"`)
 end
 
 function azure_physical_name(keyval="PhysicalHostName")
