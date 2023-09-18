@@ -1748,19 +1748,6 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
 
     juliaenvstring = remote_julia_environment_name == "" ? "" : """using Pkg; Pkg.activate(joinpath(Pkg.envdir(), "$remote_julia_environment_name")); """
 
-    # if spot is true, then ensure at least one interactive thread on workers so that one can check for spot evictions periodically.
-    if spot && VERSION >= v"1.9"
-        _julia_num_threads = split(julia_num_threads, ',')
-        julia_num_threads_default = length(_julia_num_threads) > 0 ? parse(Int, _julia_num_threads[1]) : 1
-        julia_num_threads_interactive = length(_julia_num_threads) > 1 ? parse(Int, _julia_num_threads[2]) : 0
-
-        if julia_num_threads_interactive == 0
-            @info "Augmenting `julia_num_threads` option with an interactive thread so it can be used on workers for spot-event polling."
-            julia_num_threads_interactive = 1
-        end
-        julia_num_threads = nthreads_filter("$julia_num_threads_default,$julia_num_threads_interactive")
-    end
-
     if mpi_ranks_per_worker == 0
         cmd *= """
 
