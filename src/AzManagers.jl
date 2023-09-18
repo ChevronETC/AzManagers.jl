@@ -914,22 +914,19 @@ end
 Check to see if the machine `id::Int` has received an Azure spot preempt message.  Returns
 true if a preempt message is received and false otherwise.
 """
-function preempted(instanceid="")
+function preempted(instanceid::AbstractString="")
     isempty(instanceid) && (instanceid = get_instanceid())
     local _r
     try
         @info "$(now()),  calling scheduledevents..."
         tic = time()
-        # _r = read(`wget -q -O - --header='Metadata: true' http://169.254.169.254/metadata/scheduledevents'?'api-version=2020-07-01`, String)
         _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"])
-        # _r = read(`julia -e 'using HTTP; r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]"); write(stdout, String(r.body))'`, String)
         @info "$(now()), ...called scheduledevents (elapsed=$(time() - tic))."
     catch
         @warn "unable to get scheduledevents."
         return false
     end
     r = JSON.parse(String(_r.body))
-    # r = JSON.parse(_r)
     @info "events=$(r["Events"])"
     for event in get(r, "Events", [])
         @info "event" event
@@ -940,7 +937,7 @@ function preempted(instanceid="")
     end
     return false
 end
-# preempted(id::Int) = remotecall_fetch(preempted, id)
+preempted(id::Int) = remotecall_fetch(preempted, id)
 
 macro spawn_interactive(ex::Expr)
     if VERSION >= v"1.9"
@@ -957,18 +954,12 @@ function _machine_preempt_loop(pid)
         instanceid == "" || break
         sleep(1)
     end
-    io = open(joinpath(homedir(), "preemptloop.txt"), "w")
     while true
         if AzManagers.preempted(instanceid)
             # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
-            @info "self-destruct, removing machine from cluster"
-            write(io, "$(now()), self-destruct, removing machine from cluster\n");flush(io)
-            remote_do(rmprocs, 1, myid())
-            @info "self-destruct, sleeping for 10 seconds, ip=$(getipaddr())"
-            write(io, "$(now()), self-destruct, sleeping for 10 seconds, ip=$(getipaddr())");flush(io)
-            sleep(10)
+            # @info "self-destruct, removing machine from cluster"
+            # remote_do(rmprocs, 1, myid())
             @info "self-destruct, killing pid=$pid"
-            write(io, "$(now()), self-destruct, killing pid=$pid");flush(io)
             run(`kill -9 $pid`)
             exit()
             break
@@ -981,33 +972,6 @@ function machine_prempt_loop()
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
         pid = getpid()
         open(`julia -e "using AzManagers; AzManagers._machine_preempt_loop($pid)"`)
-        # tsk = Threads.@spawn :interactive begin
-        #     instanceid = ""
-        #     while true
-        #         instanceid = get_instanceid()
-        #         instanceid == "" || break
-        #         sleep(1)
-        #     end
-        #     while true
-        #         if preempted(instanceid)
-        #             # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
-        #             @info "self-destruct, removing machine from cluster"
-        #             remote_do(rmprocs, 1, myid())
-        #             @info "self-destruct, sleeping for 10 seconds, ip=$(getipaddr())"
-        #             sleep(10)
-        #             @info "self-destruct, calling exit"
-        #             exit()
-        #             break
-        #         end
-        #         sleep(1)
-        #     end
-        # end
-        # try
-        #     wait(tsk)
-        # catch e
-        #     @info "preempt loop failed"
-        #     logerror(e, Logging.Warn)
-        # end
     else
         @warn "AzManagers is not running the preempt loop for pid=$(myid()) since it requires at least one interactive thread on worker machines."
     end
