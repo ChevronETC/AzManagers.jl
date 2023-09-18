@@ -976,7 +976,7 @@ end
 function machine_prempt_loop()
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
         pid = getpid()
-        run(`julia -e 'using AzManagers; AzManagers._machine_preempt_loop($pid)`)
+        run(`julia -e 'using AzManagers; AzManagers._machine_preempt_loop($pid)'`)
         # tsk = Threads.@spawn :interactive begin
         #     instanceid = ""
         #     while true
