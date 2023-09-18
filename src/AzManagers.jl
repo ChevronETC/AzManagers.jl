@@ -519,7 +519,8 @@ function process_pending_connections()
                 for pid in pids
                     wrkr = Distributed.map_pid_wrkr[pid]
                     if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata) && lowercase(get(wrkr.config.userdata, "priority", "")) == "spot"
-                        remotecall(machine_prempt_loop, pid) # monitor for Azure spot evictions on each machine
+                        @info "remote call'ing machine_preempt_loop"
+                        remote_do(machine_prempt_loop, pid) # monitor for Azure spot evictions on each machine
                     end
                 end
                 pids
