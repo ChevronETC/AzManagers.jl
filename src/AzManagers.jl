@@ -957,7 +957,7 @@ function _machine_preempt_loop(pid)
         instanceid == "" || break
         sleep(1)
     end
-    io = open(joinpath(homedir(), "preemptloop.txt"))
+    io = open(joinpath(homedir(), "preemptloop.txt"), "w")
     while true
         if AzManagers.preempted(instanceid)
             # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
