@@ -921,7 +921,7 @@ function preempted(instanceid="")
         @info "$(now()),  calling scheduledevents..."
         tic = time()
         # _r = read(`wget -q -O - --header='Metadata: true' http://169.254.169.254/metadata/scheduledevents'?'api-version=2020-07-01`, String)
-        _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"], verbose=2)
+        _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"])
         # _r = read(`julia -e 'using HTTP; r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]"); write(stdout, String(r.body))'`, String)
         @info "$(now()), ...called scheduledevents (elapsed=$(time() - tic))."
     catch
@@ -980,7 +980,7 @@ end
 function machine_prempt_loop()
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
         pid = getpid()
-        run(`julia -e "using AzManagers; AzManagers._machine_preempt_loop($pid)"`)
+        open(`julia -e "using AzManagers; AzManagers._machine_preempt_loop($pid)"`)
         # tsk = Threads.@spawn :interactive begin
         #     instanceid = ""
         #     while true
