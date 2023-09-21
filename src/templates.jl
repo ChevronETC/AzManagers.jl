@@ -50,8 +50,8 @@ to the `~/.azmanagers` folder.
 * `osdisksize=60` Disk size in GB for the operating system disk
 * `skutier = "Standard"` Azure SKU tier.
 * `datadisks=[]` list of data disks to create and attach [1]
-* `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"` cloud-init commands used to mount or link to temporary disk
-# `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
+* `tempdisk = "sudo mkdir -m 777 /mnt/scratch; ln -s /mnt/scratch /scratch"` cloud-init commands used to mount or link to temporary disk
+* `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
 
 # Notes
 [1] Each datadisk is a Dictionary. For example,
