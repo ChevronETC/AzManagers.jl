@@ -1381,7 +1381,8 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
                     "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions?api-version=2022-03-03",
                     ["Authorization"=>"Bearer $(token(manager.session))"])
                 r = JSON.parse(String(_r.body))
-                versions,_r = VersionNumber.(get.(getnextlinks!(manager, _r, get(r, "value", String[]), get(r, "nextLink", ""), manager.nretry, manager.verbose), "name", ""))
+                _versions,_r = getnextlinks!(manager, _r, get(r, "value", String[]), get(r, "nextLink", ""), manager.nretry, manager.verbose)
+                versions = VersionNumber.(get.(_versions, "name", ""))
                 if length(versions) > 0
                     sigimageversion = string(maximum(versions))
                 end
