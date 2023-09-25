@@ -903,17 +903,18 @@ Check to see if the machine `id::Int` has received an Azure spot preempt message
 true if a preempt message is received and false otherwise.
 """
 function preempted()
-    _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false)
-    r = JSON.parse(String(_r.body))
-    instanceid = get(r, "name", "")
-    _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]; redirect=false)
-    r = JSON.parse(String(_r.body))
-    for event in r["Events"]
-        if get(event, "EventType", "") == "Preempt" && instanceid ∈ get(event, "Resources", [])
-            @warn "Machine with id $(myid()) is being pre-empted" now(Dates.UTC) event["NotBefore"] event["EventType"] event["EventSource"]
-            return true
-        end
-    end
+    @info "preempted?"
+    # _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false)
+    # r = JSON.parse(String(_r.body))
+    # instanceid = get(r, "name", "")
+    # _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"]; redirect=false)
+    # r = JSON.parse(String(_r.body))
+    # for event in r["Events"]
+    #     if get(event, "EventType", "") == "Preempt" && instanceid ∈ get(event, "Resources", [])
+    #         @warn "Machine with id $(myid()) is being pre-empted" now(Dates.UTC) event["NotBefore"] event["EventType"] event["EventSource"]
+    #         return true
+    #     end
+    # end
     return false
 end
 preempted(id) = remotecall_fetch(preempted, id)
