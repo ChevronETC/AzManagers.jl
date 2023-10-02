@@ -94,8 +94,12 @@ function retrywarn(i, retries, s, e)
                 end
             end
             @warn "The Azure service is throttling the request, asking to retry after $s seconds.  Quota information:" remaining_resource[2]
+        elseif e.status == 500
+            b = JSON.parse(String(e.response.body))
+            errorcode = get(get(b, "error", Dict()), "code", "")
+            @warn "errorcode: $errorcode, retry $i, retrying in $s seconds"
         else
-            logerror(e, Logging.Debug)
+            @warn "status=$(e.status), retry $i, retrying in $s seconds"
         end
     else
         @warn "warn: $(typeof(e)) -- retry $i, retrying in $s seconds"
@@ -111,19 +115,16 @@ macro retry(retries, ex::Expr)
                 r = $(esc(ex))
                 break
             catch e
-                (i < $(esc(retries)) && isretryable(e)) || rethrow(e)
+                (i < $(esc(retries)) && isretryable(e)) || throw(e)
                 maximum_backoff = 256
-                local s
-                if status(e) == 429
-                    s = min(2.0^(i-1), maximum_backoff) + rand()
+                s = min(2.0^(i-1), maximum_backoff) + rand()
+                if status(e) ∈ (429,500)
                     for header in e.response.headers
-                        if header[1] == "retry-after"
+                        if lowercase(header[1]) == "retry-after"
                             s = parse(Int, header[2]) + rand()
                             break
                         end
                     end
-                else
-                    s = min(2.0^(i-1), maximum_backoff) + rand()
                 end
                 retrywarn(i, $(esc(retries)), s, e)
                 sleep(s)
