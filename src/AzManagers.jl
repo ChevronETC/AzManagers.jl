@@ -673,9 +673,10 @@ function Distributed.addprocs(template::Dict, n::Int;
     julia_num_threads = nthreads_filter(julia_num_threads)
 
     @info "Provisioning $n virtual machines in scale-set $group..."
-    _scalesets[scaleset] = scaleset_create_or_update(manager, user, subscriptionid, resourcegroup, group, sigimagename, sigimageversion, imagename, osdisksize,
-        nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, hyperthreading, julia_num_threads, omp_num_threads,
-        env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base, verbose, customenv, overprovision)
+    _scalesets[scaleset] = scaleset_create_or_update(manager, user, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, sigimagename,
+        sigimageversion, imagename, osdisksize, nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig,
+        hyperthreading, julia_num_threads, omp_num_threads, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base,
+        verbose, customenv, overprovision)
 
     if waitfor
         @info "Initiating cluster..."
