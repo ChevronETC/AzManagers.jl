@@ -594,9 +594,9 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `group="cbox"` The name of the Azure scale set.  If the scale set does not yet exist, it will be created.
 * `overprovision=true` Use Azure scle-set overprovisioning?
 * `ppi=1` The number of Julia processes to start per Azure scale set instance.
-* `exeflags=""` set additional command line start-up flags for Julia workers.  For example, `--heap-size-hint=1G`.
 * `julia_num_threads="\$(Threads.nthreads(),\$(Threads.nthreads(:interactive))"` set the number of julia threads for the detached process.[2]
 * `omp_num_threads=get(ENV, "OMP_NUM_THREADS", 1)` set the number of OpenMP threads to run on each worker
+* `exeflags=""` set additional command line start-up flags for Julia workers.  For example, `--heap-size-hint=1G`.
 * `env=Dict()` each dictionary entry is an environment variable set on the worker before Julia starts. e.g. `env=Dict("OMP_PROC_BIND"=>"close")`
 * `nretry=20` Number of retries for HTTP REST calls to Azure services.
 * `verbose=0` verbose flag used in HTTP requests.
@@ -637,8 +637,8 @@ function Distributed.addprocs(template::Dict, n::Int;
         overprovision = true,
         ppi = 1,
         julia_num_threads = VERSION >= v"1.9" ? "$(Threads.nthreads()),$(Threads.nthreads(:interactive))" : string(Threads.nthreads()),
-        exeflags = "",
         omp_num_threads = parse(Int, get(ENV, "OMP_NUM_THREADS", "1")),
+        exeflags = "",
         env = Dict(),
         nretry = 20,
         verbose = 0,
@@ -678,7 +678,7 @@ function Distributed.addprocs(template::Dict, n::Int;
     @info "Provisioning $n virtual machines in scale-set $group..."
     _scalesets[scaleset] = scaleset_create_or_update(manager, user, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, sigimagename,
         sigimageversion, imagename, osdisksize, nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig,
-        hyperthreading, julia_num_threads, exeflags, omp_num_threads, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base,
+        hyperthreading, julia_num_threads, omp_num_threads, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base,
         verbose, customenv, overprovision)
 
     if waitfor
@@ -745,7 +745,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     wconfig.bind_addr = vm["bind_addr"]
     wconfig.count = vm["ppi"]
     wconfig.exename = "julia"
-    wconfig.exeflags = `--worker`
+    wconfig.exeflags = `$(vm["exeflags"])`
     wconfig.userdata = vm["userdata"]
 
     push!(launched, wconfig)
@@ -980,7 +980,7 @@ function azure_physical_name(keyval="PhysicalHostName")
     physical_hostname
 end
 
-function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
+function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
     c = connect(IPv4(master_address), master_port)
 
     nbytes_written = write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
@@ -990,6 +990,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
     _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false)
     r = JSON.parse(String(_r.body))
     vm = Dict(
+        "exeflags" => exeflags,
         "bind_addr" => string(getipaddr(IPv4)),
         "ppi" => ppi,
         "userdata" => Dict(
@@ -1003,6 +1004,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
             "mpi" => mpi_size > 0,
             "mpi_size" => mpi_size,
             "physical_hostname" => azure_physical_name()))
+
     _vm = base64encode(json(vm))
 
     nbytes_written = write(c, _vm*"\n")
@@ -1088,7 +1090,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     close(sock)
 end
 
-function azure_worker(cookie, master_address, master_port, ppi)
+function azure_worker(cookie, master_address, master_port, ppi, exeflags)
     itry = 0
 
     #=
@@ -1099,7 +1101,7 @@ function azure_worker(cookie, master_address, master_port, ppi)
     while true
         itry += 1
         try
-            c = azure_worker_init(cookie, master_address, master_port, ppi, 0)
+            c = azure_worker_init(cookie, master_address, master_port, ppi, exeflags, 0)
             azure_worker_start(c, cookie)
         catch e
             @error "error starting worker, attempt $itry, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
@@ -1118,7 +1120,7 @@ function Distributed.launch_n_additional_processes(manager::AzManager, frompid, 
     @sync begin
         exename = Distributed.notnothing(fromconfig.exename)
         exeflags = something(fromconfig.exeflags, ``)
-        cmd = `$exename $exeflags`
+        cmd = `$exename $exeflags --worker`
 
         new_addresses = remotecall_fetch(Distributed.launch_additional, frompid, cnt, cmd)
         for (localid,address) in enumerate(new_addresses)
@@ -1153,7 +1155,7 @@ end
 # MPI specific methods --
 # These methods are slightly modified versions of what is in the Julia distributed standard library
 #
-function azure_worker_mpi(cookie, master_address, master_port, ppi)
+function azure_worker_mpi(cookie, master_address, master_port, ppi, exeflags)
     MPI.Initialized() || MPI.Init()
 
     comm = MPI.COMM_WORLD
@@ -1162,7 +1164,7 @@ function azure_worker_mpi(cookie, master_address, master_port, ppi)
 
     local t
     if mpi_rank == 0
-        c = azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
+        c = azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
         t = @async start_worker_mpi_rank0(c, cookie)
     else
         t = @async message_handler_loop_mpi_rankN()
@@ -1728,7 +1730,7 @@ function build_envstring(env::Dict)
     envstring
 end
 
-function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads::String, exeflags::String, omp_num_threads::Int, env::Dict, user::String,
+function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads::String, omp_num_threads::Int, exeflags::String, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool)
     cmd, remote_julia_environment_name = buildstartupscript(manager, user, disk, custom_environment)
 
@@ -1740,6 +1742,8 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
 
     juliaenvstring = remote_julia_environment_name == "" ? "" : """using Pkg; Pkg.activate(joinpath(Pkg.envdir(), "$remote_julia_environment_name")); """
 
+    _exeflags = isempty(exeflags) ? "-t $julia_num_threads" : "$exeflags -t $julia_num_threads"
+
     if mpi_ranks_per_worker == 0
         cmd *= """
 
@@ -1747,7 +1751,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
         export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        julia $exeflags -t $julia_num_threads -e '$(juliaenvstring)using AzManagers; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
+        julia $_exeflags -e '$(juliaenvstring)using AzManagers; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
         EOF
         """
     else
@@ -1758,7 +1762,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
         julia -e '$(juliaenvstring)using AzManagers; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
-        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -t $julia_num_threads -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
+        mpirun -n $mpi_ranks_per_worker $mpi_flags julia $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
         EOF
         """
     end
@@ -2015,8 +2019,8 @@ function scaleset_capacity!(manager::AzManager, subscriptionid, resourcegroup, s
 end
 
 function scaleset_create_or_update(manager::AzManager, user, subscriptionid, resourcegroup, scalesetname, sigimagename, sigimageversion,
-        imagename, osdisksize, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, hyperthreading, julia_num_threads, exeflags,
-        omp_num_threads, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base, verbose, custom_environment, overprovision)
+        imagename, osdisksize, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, hyperthreading, julia_num_threads,
+        omp_num_threads, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base, verbose, custom_environment, overprovision)
     load_manifest()
     ssh_key = _manifest["ssh_public_key_file"]
 
@@ -2053,7 +2057,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
     
-    cmd = buildstartupscript_cluster(manager, spot, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, exeflags, omp_num_threads, env, user, template["tempdisk"], custom_environment)
+    cmd = buildstartupscript_cluster(manager, spot, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, exeflags, env, user, template["tempdisk"], custom_environment)
     _cmd = base64encode(cmd)
 
     if length(_cmd) > 64_000
