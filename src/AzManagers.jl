@@ -1254,7 +1254,8 @@ function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bo
                 msg = MPI.bcast(msg, 0, comm)
                 version = MPI.bcast(version, 0, comm)
             end
-
+            @info "msg on rank 0:"
+            @info "$msg"
             tsk = Distributed.handle_msg(msg, header, r_stream, w_stream, version)
 
             if comm !== nothing
@@ -1322,6 +1323,8 @@ function message_handler_loop_mpi_rankN()
                 if typeof(msg) ∈ (Distributed.CallMsg{:call_fetch}, Distributed.CallWaitMsg)
                     msg = Distributed.CallMsg{:call}(msg.f, msg.args, msg.kwargs)
                 end
+                @info "msg on rank N:"
+                @info "$msg"
                 @info "in handle message area"
                 tsk = Distributed.handle_msg(msg, header, devnull, devnull, version)
                 wait(tsk)
