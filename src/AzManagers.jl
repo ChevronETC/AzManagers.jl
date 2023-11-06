@@ -1258,8 +1258,11 @@ function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bo
             tsk = Distributed.handle_msg(msg, header, r_stream, w_stream, version)
 
             if comm !== nothing
+                @info "waiting on task on rank 0"
                 wait(tsk) # TODO - this seems needed to not cause a race in the MPI logic, but I'm not sure what the side-effects are.
+                @info "entering message handler MPI Barrier on rank 0"
                 MPI.Barrier(comm)
+                @info "past message handler MPI Barrier on rank 0"
             end
         end
     catch e
@@ -1323,8 +1326,9 @@ function message_handler_loop_mpi_rankN()
                 tsk = Distributed.handle_msg(msg, header, devnull, devnull, version)
                 wait(tsk)
             end
-
+            @info "entering message handler MPI Barrier on rank N"
             MPI.Barrier(comm)
+            @info "past message handler MPI Barrier on rank N"
         catch e
             @warn "MPI - message_handler_loop_mpi"
             logerror(e, Logging.Warn)
