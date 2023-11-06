@@ -1198,7 +1198,7 @@ function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bo
     boundary = similar(Distributed.MSG_BOUNDARY)
     @info "in message_handler_loop_mpi_rank0"
     comm = MPI.Initialized() ? MPI.COMM_WORLD : nothing
-
+    return
     try
         version = Distributed.process_hdr(r_stream, incoming)
         serializer = Distributed.ClusterSerializer(r_stream)
@@ -1309,6 +1309,7 @@ end
 function message_handler_loop_mpi_rankN()
     comm = MPI.COMM_WORLD
     header,msg,version = nothing,nothing,nothing
+    return
     while true
         try
             header = MPI.bcast(header, 0, comm)
