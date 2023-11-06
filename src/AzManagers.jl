@@ -981,6 +981,7 @@ function azure_physical_name(keyval="PhysicalHostName")
 end
 
 function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
+    @info "in azure_worker_init"
     c = connect(IPv4(master_address), master_port)
 
     nbytes_written = write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
@@ -1195,7 +1196,7 @@ end
 function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bool)
     wpid=0          # the worker r_stream is connected to.
     boundary = similar(Distributed.MSG_BOUNDARY)
-
+    @info "in message_handler_loop_mpi_rank0"
     comm = MPI.Initialized() ? MPI.COMM_WORLD : nothing
 
     try
@@ -1336,7 +1337,7 @@ end
 start_worker_mpi_rank0(cookie::AbstractString=readline(stdin); kwargs...) = start_worker_mpi_rank0(stdout, cookie; kwargs...)
 function start_worker_mpi_rank0(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
     Distributed.init_multi()
-
+    @info "in start_worker_mpi_rank0"
     close_stdin && close(stdin) # workers will not use it
     stderr_to_stdout && redirect_stderr(stdout)
 
