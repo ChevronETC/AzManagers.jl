@@ -1195,8 +1195,9 @@ function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bo
     wpid=0          # the worker r_stream is connected to.
     boundary = similar(Distributed.MSG_BOUNDARY)
 
-    comm = MPI.Initialized() ? MPI.COMM_WORLD : nothing
-
+    # comm = MPI.Initialized() ? MPI.COMM_WORLD : nothing
+    MPI.Initialized() || MPI.Init()
+    comm = MPI.COMM_WORLD 
     try
         version = Distributed.process_hdr(r_stream, incoming)
         serializer = Distributed.ClusterSerializer(r_stream)
@@ -1249,18 +1250,18 @@ function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bo
             end
             readbytes!(r_stream, boundary, length(Distributed.MSG_BOUNDARY))
 
-            if comm !== nothing
+            # if comm !== nothing
                 header = MPI.bcast(header, 0, comm)
                 msg = MPI.bcast(msg, 0, comm)
                 version = MPI.bcast(version, 0, comm)
-            end
-
+            # end
+            println(stdout,"typeof msg is $(typeof(msg))")
             tsk = Distributed.handle_msg(msg, header, r_stream, w_stream, version)
 
-            if comm !== nothing
+            # if comm !== nothing
                 wait(tsk) # TODO - this seems needed to not cause a race in the MPI logic, but I'm not sure what the side-effects are.
                 MPI.Barrier(comm)
-            end
+            # end
         end
     catch e
         # Check again as it may have been set in a message handler but not propagated to the calling block above
@@ -1305,6 +1306,7 @@ function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bo
 end
 
 function message_handler_loop_mpi_rankN()
+    MPI.Initialized() || MPI.Init()
     comm = MPI.COMM_WORLD
     header,msg,version = nothing,nothing,nothing
     while true
