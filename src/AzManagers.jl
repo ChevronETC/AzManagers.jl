@@ -3079,13 +3079,13 @@ function Base.kill(job::DetachedJob)
         "http://$(job.vm["ip"]):$(job.vm["port"])/cofii/detached/job/$(job.id)/kill")
 end
 
-function myid()
-    if MPI.Initialized()
-        return MPI.bcast([ myid(), 0, MPI.COMM_WORLD])[1]
-    else
-        return Distributed.myid()
-    end
-end
+# function myid()
+#     if MPI.Initialized()
+#         return MPI.bcast([ myid(), 0, MPI.COMM_WORLD])[1]
+#     else
+#         return Distributed.myid()
+#     end
+# end
 
 export AzManager, DetachedJob, addproc, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
 
