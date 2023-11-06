@@ -1161,7 +1161,12 @@ function azure_worker_mpi(cookie, master_address, master_port, ppi, exeflags)
     comm = MPI.COMM_WORLD
     mpi_size = MPI.Comm_size(comm)
     mpi_rank = MPI.Comm_rank(comm)
-
+    @info "Broadcast"
+    myrank = MPI.Comm_rank(comm)
+    mynumber = myrank + 1
+    # send my number from non-main rank
+    mynumber = MPI.bcast([mynumber], 1, MPI.COMM_WORLD)[1]
+    @info "mynumber is $mynumber"
     local t
     if mpi_rank == 0
         c = azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
