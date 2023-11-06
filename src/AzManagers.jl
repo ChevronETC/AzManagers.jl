@@ -1256,6 +1256,12 @@ function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bo
             end
             @info "msg on rank 0:"
             @info "$msg"
+            @info "msg f"
+            @info "$(msg.f)"
+            @info "msg args"
+            @info "$(msg.args)"
+            @info "msg kwargs"
+            @info "$(msg.kwargs)"
             tsk = Distributed.handle_msg(msg, header, r_stream, w_stream, version)
 
             if comm !== nothing
@@ -1325,6 +1331,12 @@ function message_handler_loop_mpi_rankN()
                 end
                 @info "msg on rank N:"
                 @info "$msg"
+                @info "msg f"
+                @info "$(msg.f)"
+                @info "msg args"
+                @info "$(msg.args)"
+                @info "msg kwargs"
+                @info "$(msg.kwargs)"
                 @info "in handle message area"
                 tsk = Distributed.handle_msg(msg, header, devnull, devnull, version)
                 wait(tsk)
