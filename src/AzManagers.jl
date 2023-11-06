@@ -981,7 +981,6 @@ function azure_physical_name(keyval="PhysicalHostName")
 end
 
 function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
-    @info "in azure_worker_init"
     c = connect(IPv4(master_address), master_port)
 
     nbytes_written = write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
@@ -1092,7 +1091,6 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 end
 
 function azure_worker(cookie, master_address, master_port, ppi, exeflags)
-    @info "in azure_worker method"
     itry = 0
 
     #=
@@ -1159,7 +1157,7 @@ end
 #
 function azure_worker_mpi(cookie, master_address, master_port, ppi, exeflags)
     MPI.Initialized() || MPI.Init()
-    @info "in azure_worker_mpi method"
+
     comm = MPI.COMM_WORLD
     mpi_size = MPI.Comm_size(comm)
     mpi_rank = MPI.Comm_rank(comm)
@@ -1196,7 +1194,7 @@ end
 function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bool)
     wpid=0          # the worker r_stream is connected to.
     boundary = similar(Distributed.MSG_BOUNDARY)
-    @info "in message_handler_loop_mpi_rank0"
+
     comm = MPI.Initialized() ? MPI.COMM_WORLD : nothing
 
     try
@@ -1337,10 +1335,9 @@ end
 start_worker_mpi_rank0(cookie::AbstractString=readline(stdin); kwargs...) = start_worker_mpi_rank0(stdout, cookie; kwargs...)
 function start_worker_mpi_rank0(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
     Distributed.init_multi()
+
     close_stdin && close(stdin) # workers will not use it
     stderr_to_stdout && redirect_stderr(stdout)
-    @info "in start_worker_mpi_rank0"
-    println(stderr,"Hellowsies!")
 
     init_worker(cookie)
     interface = IPv4(Distributed.LPROC.bind_addr)
@@ -1748,8 +1745,6 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
     _exeflags = isempty(exeflags) ? "-t $julia_num_threads" : "$exeflags -t $julia_num_threads"
 
     if mpi_ranks_per_worker == 0
-        @show "into non-mpi"
-        @info "into non-MPI"
         cmd *= """
 
         sudo su - $user <<EOF
@@ -1760,8 +1755,6 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
         EOF
         """
     else
-        @show "into mpi"
-        @info "into MPI"
         cmd *= """
 
         sudo su - $user <<EOF
