@@ -1091,6 +1091,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 end
 
 function azure_worker(cookie, master_address, master_port, ppi, exeflags)
+    @info "in azure_worker method"
     itry = 0
 
     #=
@@ -1157,7 +1158,7 @@ end
 #
 function azure_worker_mpi(cookie, master_address, master_port, ppi, exeflags)
     MPI.Initialized() || MPI.Init()
-
+    @info "in azure_worker_mpi method"
     comm = MPI.COMM_WORLD
     mpi_size = MPI.Comm_size(comm)
     mpi_rank = MPI.Comm_rank(comm)
