@@ -1198,7 +1198,7 @@ function message_handler_loop_mpi_rank0(r_stream::IO, w_stream::IO, incoming::Bo
     boundary = similar(Distributed.MSG_BOUNDARY)
     @info "in message_handler_loop_mpi_rank0"
     comm = MPI.Initialized() ? MPI.COMM_WORLD : nothing
-    return
+
     try
         version = Distributed.process_hdr(r_stream, incoming)
         serializer = Distributed.ClusterSerializer(r_stream)
@@ -1309,7 +1309,6 @@ end
 function message_handler_loop_mpi_rankN()
     comm = MPI.COMM_WORLD
     header,msg,version = nothing,nothing,nothing
-    return
     while true
         try
             header = MPI.bcast(header, 0, comm)
@@ -1338,9 +1337,10 @@ end
 start_worker_mpi_rank0(cookie::AbstractString=readline(stdin); kwargs...) = start_worker_mpi_rank0(stdout, cookie; kwargs...)
 function start_worker_mpi_rank0(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
     Distributed.init_multi()
-    @info "in start_worker_mpi_rank0"
     close_stdin && close(stdin) # workers will not use it
     stderr_to_stdout && redirect_stderr(stdout)
+    @info "in start_worker_mpi_rank0"
+    println(stderr,"Hellowsies!")
 
     init_worker(cookie)
     interface = IPv4(Distributed.LPROC.bind_addr)
