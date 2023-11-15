@@ -1083,9 +1083,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     try
         while true
             Distributed.check_master_connect()
-            @info "waiting in azure_worker_start for notification"
             wait()
-            @info "...done waiting in azure_worker_start for notification"
         end
     catch e
         throw(e)
