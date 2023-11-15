@@ -258,6 +258,7 @@ function scaleset_pruning()
             join the cluster.
             =#
             prune_scalesets()
+            prologue_true_up()
         catch e
             @error "scaleset pruning error"
             logerror(e, Logging.Error)
