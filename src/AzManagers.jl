@@ -459,12 +459,12 @@ function prune_scalesets()
 
             doprune = (time_elapsed > worker_timeout || vm_state == "failed") && !is_worker_deleting && !is_vm_deleting && !ispruned_already
             if doprune
-                ipaddress = get_ipaddress_for_scaleset_vm(manager, _vm)
-                @info "Putting machine with instance id $instanceid ($ipaddress) in $(scaleset.scalesetname) onto the deletion queue because it failed to join the Julia cluster after $(round(time_elapsed, Second)), vm_state=$vm_state, copying cloud init output log to '$(pwd())/cloud-init-output-$(instanceid).log'."
+                @info "Putting machine with instance id $instanceid in $(scaleset.scalesetname) onto the deletion queue because it failed to join the Julia cluster after $(round(time_elapsed, Second)), vm_state=$vm_state, copying cloud init output log to '$(pwd())/cloud-init-output-$(instanceid).log'."
                 try
+                    ipaddress = get_ipaddress_for_scaleset_vm(manager, _vm)
                     run(`scp -i $(homedir())/.ssh/azmanagers_rsa $(manager.ssh_user)@$(ipaddress):/var/log/cloud-init-output.log ./cloud-init-output-$(instanceid).log`)
                 catch e
-                    @warn "failed to copy cloud init log from VM $(instanceid) ($ipaddress)."
+                    @warn "failed to copy cloud init log from VM $(instanceid)."
                 end
                 add_instance_to_pruned_list(manager, scaleset, instanceid)
                 add_instance_to_pending_down_list(manager, scaleset, instanceid)
