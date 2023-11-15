@@ -193,9 +193,11 @@ mutable struct AzManager <: ClusterManager
     lock::ReentrantLock
     scaleset_request_counter::Int
 
+    #prologue book keeping
     workers_requested::Int
     isInit::Bool
     runPrologue::Bool
+    spot::Bool
     failed_nodes::Dict{ScaleSet, Any}
 
     AzManager() = new()
@@ -224,10 +226,12 @@ function azmanager!(session, nretry, verbose, show_quota)
     _manager.lock = ReentrantLock()
     _manager.scaleset_request_counter = 0
 
+    _manager.workers_requested = 0
     _manager.isInit = true
     _manager.runPrologue = false
+    _manager.spot = false 
     _manager.failed_nodes = Dict{ScaleSet, Any}()
-    _manager.workers_requested = 0
+
 
     @async scaleset_pruning()
     @async scaleset_cleaning()
@@ -244,7 +248,7 @@ function __init__()
 end
 
 function scaleset_pruning()
-    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "300"))
+    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
 
     while true
         try
@@ -258,6 +262,12 @@ function scaleset_pruning()
             join the cluster.
             =#
             prune_scalesets()
+            #=
+            Additional prologue check, as Distributed.launch runs will mark an instance as "bad"
+            and won't allow that instance to join the cluster.
+            Once records of failed nodes occur, prologue will attempt to backfill a
+            delta of what was originally requested to current workers in the cluster
+            =#
             prologue_true_up()
         catch e
             @error "scaleset pruning error"
@@ -742,6 +752,7 @@ function Distributed.addprocs(template::Dict, n::Int;
 
     manager = azmanager!(session, nretry, verbose, show_quota)
 
+    manager.spot = spot
     if manager.isInit
         manager.workers_requested = n
         manager.isInit = false
@@ -1160,6 +1171,20 @@ function azure_physical_name(keyval="PhysicalHostName")
     physical_hostname
 end
 
+function get_templatename_from_sku(sku_name)
+
+    local cbox_name = nothing
+    _templates = JSON.parse(read(templates_filename_scaleset(), String))
+    for (cb_name, values) in _templates
+        _sku = values["value"]["sku"]["name"]
+        if sku_name === _sku
+            cbox_name = cb_name
+            break
+        end
+    end
+    cbox_name
+end
+
 function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
     c = connect(IPv4(master_address), master_port)
 
@@ -1174,6 +1199,9 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
     prologue_passed = prologue()
     hostname = azure_physical_name()
     stream_result = get_stream_result()
+
+    # for debuging on a node, outputs to /var/log/cloud-init-output.log
+    @info "$hostname $vmSize $prologue_passed"
 
     userdata = Dict(
         "subscriptionid" => lowercase(r["compute"]["subscriptionId"]),
@@ -1200,6 +1228,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
     end
 
     vm = Dict(
+        "exeflags" => exeflags,
         "bind_addr" => string(getipaddr(IPv4)),
         "ppi" => ppi,
         "userdata" => userdata)
