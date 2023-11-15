@@ -192,17 +192,19 @@ mutable struct AzManager <: ClusterManager
     task_process::Task
     lock::ReentrantLock
     scaleset_request_counter::Int
+    ssh_user::String
 
     AzManager() = new()
 end
 
 const _manager = AzManager()
 
-function azmanager!(session, nretry, verbose, show_quota)
+function azmanager!(session, ssh_user, nretry, verbose, show_quota)
     _manager.session = session
     _manager.nretry = nretry
     _manager.verbose = verbose
     _manager.show_quota = show_quota
+    _manager.ssh_user = ssh_user
 
     if isdefined(_manager, :pending_up)
         return _manager
@@ -457,7 +459,13 @@ function prune_scalesets()
 
             doprune = (time_elapsed > worker_timeout || vm_state == "failed") && !is_worker_deleting && !is_vm_deleting && !ispruned_already
             if doprune
-                @info "Putting machine with instance id $instanceid in $(scaleset.scalesetname) onto the deletion queue because it failed to join the Julia cluster after $(round(time_elapsed, Second)), vm_state=$vm_state."
+                ipaddress = get_ipaddress_for_scaleset_vm(manager, _vm)
+                @info "Putting machine with instance id $instanceid ($ipaddress) in $(scaleset.scalesetname) onto the deletion queue because it failed to join the Julia cluster after $(round(time_elapsed, Second)), vm_state=$vm_state, copying cloud init output log to '$(pwd())/cloud-init-output-$(instanceid).log'."
+                try
+                    run(`scp -i $(homedir())/.ssh/azmanagers_rsa $(manager.ssh_user)@$(ipaddress):/var/log/cloud-init-output.log ./cloud-init-output-$(instanceid).log`)
+                catch e
+                    @warn "failed to copy cloud init log from VM $(instanceid) ($ipaddress)."
+                end
                 add_instance_to_pruned_list(manager, scaleset, instanceid)
                 add_instance_to_pending_down_list(manager, scaleset, instanceid)
             end
@@ -661,7 +669,7 @@ function Distributed.addprocs(template::Dict, n::Int;
     resourcegroup == "" && (resourcegroup = get(template, "resourcegroup", _manifest["resourcegroup"]))
     user == "" && (user = _manifest["ssh_user"])
 
-    manager = azmanager!(session, nretry, verbose, show_quota)
+    manager = azmanager!(session, user, nretry, verbose, show_quota)
     sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
@@ -848,6 +856,7 @@ Remove an azure scale-set and all of its virtual machines.
 # Optional keyword arguments
 * `subscriptionid=AzManagers._manifest["subscriptionid"]`
 * `resourcegroup=AzManagers._manifest["resourcegroup"]`
+* `user=AzManagers._manifest["ssh_user"]` ssh user.
 * `session=AzSession(;lazy=true)` The Azure session used for authentication.
 * `nretry=20` Number of retries for HTTP REST calls to Azure services.
 * `verbose=0` verbose flag used in HTTP requests.
@@ -856,6 +865,7 @@ Remove an azure scale-set and all of its virtual machines.
 function rmgroup(groupname;
         subscriptionid = "",
         resourcegroup = "",
+        user = "",
         session = AzSession(;lazy=true),
         nretry = 20,
         verbose = 0,
@@ -863,8 +873,9 @@ function rmgroup(groupname;
     load_manifest()
     subscriptionid == "" && (subscriptionid = AzManagers._manifest["subscriptionid"])
     resourcegroup == "" && (resourcegroup = AzManagers._manifest["resourcegroup"])
+    user == "" && (user = AzManagers._manifest["ssh_user"])
 
-    manager = azmanager!(session, nretry, verbose, show_quota)
+    manager = azmanager!(session, user, nretry, verbose, show_quota)
     rmgroup(manager, subscriptionid, resourcegroup, groupname, nretry, verbose, show_quota)
 end
 
@@ -2225,6 +2236,20 @@ function simulate_spot_eviction(pid)
     nothing
 end
 
+function get_ipaddress_for_scaleset_vm(manager, vm)
+    id = vm["properties"]["networkProfile"]["networkInterfaces"][1]["id"]
+
+    _r = @retry manager.nretry azrequest(
+        "GET",
+        manager.verbose,
+        "https://management.azure.com/$id?api-version=2023-09-01",
+        ["Authorization"=>"Bearer $(token(manager.session))"])
+
+    r = JSON.parse(String(_r.body))
+    properties = r["properties"]["ipConfigurations"][1]["properties"]
+    get(properties, "publicIPAddress", get(properties, "privateIPAddress", ""))
+end
+
 #
 # detached service and REST API
 #
@@ -2593,7 +2618,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         nic_template = nic_templates[nic_template]
     end
 
-    manager = azmanager!(session, nretry, verbose, show_quota)
+    manager = azmanager!(session, user, nretry, verbose, show_quota)
 
     vm_template["value"]["properties"]["osProfile"]["computerName"] = vmname
 
