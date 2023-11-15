@@ -111,7 +111,7 @@ macro retry(retries, ex::Expr)
     quote
         r = nothing
         for i = 0:$(esc(retries))
-            try
+            try 
                 r = $(esc(ex))
                 break
             catch e
@@ -193,6 +193,16 @@ mutable struct AzManager <: ClusterManager
     lock::ReentrantLock
     scaleset_request_counter::Int
 
+    # prologue book keeping 
+    workers_requested::Int 
+    isInit::Bool
+    runPrologue::Bool
+    # failed node record keeping:
+    # {ScaleSet: {hostname: {userdata dict}, hostname: {userdata dict}, ..}, ..}
+    failed_nodes::Dict{ScaleSet, Any}
+
+
+
     AzManager() = new()
 end
 
@@ -219,6 +229,11 @@ function azmanager!(session, nretry, verbose, show_quota)
     _manager.lock = ReentrantLock()
     _manager.scaleset_request_counter = 0
 
+    _manager.isInit = true
+    _manager.runPrologue = false
+    _manager.failed_nodes = Dict{ScaleSet,Any}()
+    _manager.workers_requested = 0
+
     @async scaleset_pruning()
     @async scaleset_cleaning()
 
@@ -234,7 +249,7 @@ function __init__()
 end
 
 function scaleset_pruning()
-    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
+    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "300")) # changed to 300 for testing
 
     while true
         try
@@ -248,6 +263,13 @@ function scaleset_pruning()
             join the cluster.
             =#
             prune_scalesets()
+            #=
+            Additional prologue check, as Distributed.launch runs will mark an instance as "bad"
+            and won't allow that instance to join the cluster.
+            Once records of failed nodes occur, prologue will attempt to backfill a
+            delta of what was originally requested to current workers in the cluster
+            =#
+            prologue_true_up()
         catch e
             @error "scaleset pruning error"
             logerror(e, Logging.Error)
@@ -465,6 +487,74 @@ function prune_scalesets()
     end
 end
 
+function prologue_true_up()
+
+    manager = azmanager()
+    _scalesets = scalesets(manager)
+    _failed_nodes = manager.failed_nodes
+    current_workers = (nprocs() - 1)
+    requested_workers = manager.workers_requested
+
+    δn = requested_workers - current_workers
+
+    # assumes inital loop as the prune loop runs ahead of manager.scalesets being populated 
+    if length(_scalesets) == 0 && length(_failed_nodes) == 0 && length(manager.deleted) == 0
+        return 
+    end
+
+    # the scaleset needs to have instances, current workers lower than requested, and has failed nodes and can run prologue
+    if length(_scalesets) > 0 && current_workers <= requested_workers && length(_failed_nodes) > 0 && manager.runPrologue
+        for ss in keys(_scalesets)
+            
+            if haskey(_failed_nodes, ss)
+                _userdata = nothing
+
+                # iterate failed nodes marked from Distributed.launch 
+                for (hostname, userdata) in _failed_nodes[ss]
+
+                    _userdata = userdata
+
+                    # if the record hasn't been removed yet, go ahead add remove it from the scaleset
+                    if !userdata["removed"]
+                        @info "Prologue marking for deletion: $hostname from scaleset $(_userdata["scalesetname"])"
+                        instanceid = _userdata["instanceid"]
+
+                        try
+
+                            # add_instance_to_pruned_list(manager, ss, instanceid)
+                            add_instance_to_pending_down_list(manager, ss, instanceid)
+                            _userdata["removed"] = true 
+                        catch e
+                            @warn "$e"
+                        end 
+                        
+                        # update record keeping as removed 
+                        try
+                            merge!(manager.failed_nodes[ss], Dict(hostname => _userdata))
+                        catch e
+                            @warn "$e"
+                        end
+                    end
+                end
+                # take the current delta of existing workers from requested and update the scaleset capacity 
+                if !isnothing(_userdata) && δn > 0
+                    @info "Prologue attempting to add $δn workers.. "
+                    template = get_templatename_from_sku(_userdata["vmSize"])
+                    addprocs(template, δn; group=ss.scalesetname)
+                end
+            end
+        end
+    #=
+    TODO: 
+    case 1) where rmprocs(workers()) is called, to reset isInit=True and workers_requested=0 while retaining records of failed nodes incase they come backfill
+    case 2) where an entire scaleset fails prologue, build a new one as there's a race condition from trying to add workers to when delete_empty_scaleset is executed
+    Note that any instances not immediatelly cleaned up that were deemed ineligable to join the cluster will be removed by scale set pruning via timeout. This
+      is a fall back as we'd like to remove bad nodes immediately and not burn cpu time waiting for them to be removed. 
+    =#
+    end
+
+end
+
 function delete_scalesets()
     manager = azmanager()
     @sync for scaleset in keys(scalesets(manager))
@@ -596,7 +686,6 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `ppi=1` The number of Julia processes to start per Azure scale set instance.
 * `julia_num_threads="\$(Threads.nthreads(),\$(Threads.nthreads(:interactive))"` set the number of julia threads for the detached process.[2]
 * `omp_num_threads=get(ENV, "OMP_NUM_THREADS", 1)` set the number of OpenMP threads to run on each worker
-* `exeflags=""` set additional command line start-up flags for Julia workers.  For example, `--heap-size-hint=1G`.
 * `env=Dict()` each dictionary entry is an environment variable set on the worker before Julia starts. e.g. `env=Dict("OMP_PROC_BIND"=>"close")`
 * `nretry=20` Number of retries for HTTP REST calls to Azure services.
 * `verbose=0` verbose flag used in HTTP requests.
@@ -638,7 +727,6 @@ function Distributed.addprocs(template::Dict, n::Int;
         ppi = 1,
         julia_num_threads = VERSION >= v"1.9" ? "$(Threads.nthreads()),$(Threads.nthreads(:interactive))" : string(Threads.nthreads()),
         omp_num_threads = parse(Int, get(ENV, "OMP_NUM_THREADS", "1")),
-        exeflags = "",
         env = Dict(),
         nretry = 20,
         verbose = 0,
@@ -662,6 +750,13 @@ function Distributed.addprocs(template::Dict, n::Int;
     user == "" && (user = _manifest["ssh_user"])
 
     manager = azmanager!(session, nretry, verbose, show_quota)
+
+    if manager.isInit
+        manager.workers_requested = n
+        manager.isInit = false
+        manager.runPrologue = true
+    end
+
     sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
@@ -678,7 +773,7 @@ function Distributed.addprocs(template::Dict, n::Int;
     @info "Provisioning $n virtual machines in scale-set $group..."
     _scalesets[scaleset] = scaleset_create_or_update(manager, user, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, sigimagename,
         sigimageversion, imagename, osdisksize, nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig,
-        hyperthreading, julia_num_threads, omp_num_threads, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base,
+        hyperthreading, julia_num_threads, omp_num_threads, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base,
         verbose, customenv, overprovision)
 
     if waitfor
@@ -740,12 +835,44 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
         return
     end
 
+    userdata = vm["userdata"]
+    userdata["removed"] = false
+    hostname = vm["userdata"]["physical_hostname"]
+    ss = ScaleSet(userdata["subscriptionid"], userdata["resourcegroup"], userdata["scalesetname"])
+
+    if (nprocs() - 1) >= manager.workers_requested
+        @info "Prologue over privisioned workers, not adding new workers to cluster"
+        return 
+    end
+
+    # since adding instances via @async addprocs as well as adding to pruned lists 
+    # causes throttling issues at scale, we will just keep the worker from joining the cluster 
+    # and tagging it with "removed"=false for removal actions later in the prune loop 
+    if !userdata["prologue_passed"]
+
+        @warn "$hostname FAILED prolgoue, adding to failed_nodes"
+
+        if !haskey(manager.failed_nodes, ss)
+            manager.failed_nodes = Dict(ss => Dict(hostname => userdata))
+        else
+            merge!(manager.failed_nodes[ss], Dict(hostname => userdata))
+        end
+
+        # keep the worker from joining the cluster
+        return
+    else
+        if haskey(manager.failed_nodes, ss) && haskey(manager.failed_nodes[ss], hostname)
+            @info "$hostname previously failed has PASSED prologue"
+            pop!(manager.failed_nodes[ss], hostname, nothing)
+        end
+    end
+
     wconfig = WorkerConfig()
     wconfig.io = params[:socket]
     wconfig.bind_addr = vm["bind_addr"]
     wconfig.count = vm["ppi"]
     wconfig.exename = "julia"
-    wconfig.exeflags = `$(vm["exeflags"])`
+    wconfig.exeflags = `--worker`
     wconfig.userdata = vm["userdata"]
 
     push!(launched, wconfig)
@@ -755,6 +882,7 @@ end
 function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSet, instanceid)
     if haskey(manager.pending_down, scaleset)
         @debug "pushing worker with id=$instanceid onto pending_down"
+        @info "pushing worker with id=$instanceid onto pending_down"
         push!(manager.pending_down[scaleset], string(instanceid))
     else
         @debug "creating pending_down vector for id=$instanceid"
@@ -766,6 +894,7 @@ end
 function add_instance_to_pruned_list(manager::AzManager, scaleset::ScaleSet, instanceid)
     if haskey(manager.pruned, scaleset)
         @debug "pushing worker with id=$instanceid onto pruned"
+        @info "pushing worker with id=$instanceid onto pruned"
         push!(manager.pruned[scaleset], string(instanceid))
     else
         @debug "creating pruned vector for id=$instanceid"
@@ -787,6 +916,7 @@ end
 
 function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     @debug "kill for id=$id"
+    @info "Distributed.kill for id $id"
     try
         remote_do(exit, id)
     catch
@@ -800,6 +930,17 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
 
     add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
     add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
+
+    if manager.workers_requested > 0
+        manager.workers_requested -= 1
+    end
+    # assuming something like rmprocs(workers()) is called
+    # we do not want prologue to spin up additional instances
+    if manager.workers_requested == 0
+        manager.isInit = true
+        manager.runPrologue = false
+    end
+
 
     @debug "...kill, pushed."
     nothing
@@ -968,6 +1109,57 @@ function machine_prempt_loop()
     open(`julia --project=$project -e "using AzManagers; AzManagers._machine_preempt_loop($pid, $id)"`)
 end
 
+# begin test prologue in azmanagers
+# TODO: remote function passed through addprocs to init before worker joins a cluster 
+function get_stream_test()
+    f_path = tempdir()*"/stream"
+    cfile_path = tempdir()*"/stream.c"
+
+    if !isfile(f_path)
+
+        try
+            resp = HTTP.request("GET",  "https://www.cs.virginia.edu/stream/FTP/Code/stream.c")
+            if resp.status == 200
+                _file = String(resp.body)
+                open(cfile_path, "w") do file
+                    write(file, _file)
+                end
+                if isfile(cfile_path)
+                    run(`gcc -O $(cfile_path) -o $(f_path)`)
+                end
+            end
+        catch e
+            raise(e)
+        end
+    end
+    return f_path
+end
+
+function get_stream_result()
+    f_path = get_stream_test()
+    local result = 0
+    if isfile(f_path)
+        try
+            io = open(`$f_path`)
+            for line in readlines(io)
+                if startswith(line, "Copy")
+                    result = parse(Float64, split(line, " ", keepempty=false)[2])
+                end
+            end
+        catch e
+            #logerror(e)
+            throw(e) # ==ish raise Exception 
+        end
+    end
+    return result
+end
+
+function prologue(expected=32000)
+    result = get_stream_result()
+    return result >= expected
+end
+# end test prologue in azmanagers
+
 function azure_physical_name(keyval="PhysicalHostName")
     local physical_hostname
     try
@@ -980,7 +1172,21 @@ function azure_physical_name(keyval="PhysicalHostName")
     physical_hostname
 end
 
-function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
+function get_templatename_from_sku(sku_name)
+
+    local cbox_name = nothing
+    _templates = JSON.parse(read(templates_filename_scaleset(), String))
+    for (cb_name, values) in _templates
+        _sku = values["value"]["sku"]["name"]
+        if sku_name === _sku
+            cbox_name = cb_name
+            break
+        end
+    end
+    cbox_name
+end
+
+function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
     c = connect(IPv4(master_address), master_port)
 
     nbytes_written = write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
@@ -989,23 +1195,45 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
 
     _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false)
     r = JSON.parse(String(_r.body))
+
+    vmSize = r["compute"]["vmSize"]
+    prologue_passed = prologue()
+    hostname = azure_physical_name()
+    stream_result = get_stream_result()
+
+    @info "$hostname $vmSize $prologue_passed"
+
+    userdata = Dict(
+        "subscriptionid" => lowercase(r["compute"]["subscriptionId"]),
+        "resourcegroup" => lowercase(r["compute"]["resourceGroupName"]),
+        "scalesetname" => lowercase(r["compute"]["vmScaleSetName"]),
+        "instanceid" => split(r["compute"]["resourceId"], '/')[end],
+        "priority" => get(r["compute"], "priority", ""),
+        "localid" => 1,
+        "name" => r["compute"]["name"],
+        "mpi" => mpi_size > 0,
+        "mpi_size" => mpi_size,
+    )
+    if !isnothing(hostname)
+        userdata["physical_hostname"] = hostname
+    end
+    if !isnothing(prologue_passed)
+        userdata["prologue_passed"] = prologue_passed
+    end
+    if !isnothing(vmSize)
+        userdata["vmSize"] = vmSize
+    end
+    if !isnothing(stream_result)
+        userdata["stream_result"] = stream_result
+    end
+
     vm = Dict(
-        "exeflags" => exeflags,
         "bind_addr" => string(getipaddr(IPv4)),
         "ppi" => ppi,
-        "userdata" => Dict(
-            "subscriptionid" => lowercase(r["compute"]["subscriptionId"]),
-            "resourcegroup" => lowercase(r["compute"]["resourceGroupName"]),
-            "scalesetname" => lowercase(r["compute"]["vmScaleSetName"]),
-            "instanceid" => split(r["compute"]["resourceId"], '/')[end],
-            "priority" => get(r["compute"], "priority", ""),
-            "localid" => 1,
-            "name" => r["compute"]["name"],
-            "mpi" => mpi_size > 0,
-            "mpi_size" => mpi_size,
-            "physical_hostname" => azure_physical_name()))
-
+        "userdata" => userdata)
     _vm = base64encode(json(vm))
+
+    @info "$vm"
 
     nbytes_written = write(c, _vm*"\n")
     nbytes_written == length(_vm)+1 || error("wrote wrong number of bytes")
@@ -1090,7 +1318,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     close(sock)
 end
 
-function azure_worker(cookie, master_address, master_port, ppi, exeflags)
+function azure_worker(cookie, master_address, master_port, ppi)
     itry = 0
 
     #=
@@ -1101,7 +1329,7 @@ function azure_worker(cookie, master_address, master_port, ppi, exeflags)
     while true
         itry += 1
         try
-            c = azure_worker_init(cookie, master_address, master_port, ppi, exeflags, 0)
+            c = azure_worker_init(cookie, master_address, master_port, ppi, 0)
             azure_worker_start(c, cookie)
         catch e
             @error "error starting worker, attempt $itry, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
@@ -1120,7 +1348,7 @@ function Distributed.launch_n_additional_processes(manager::AzManager, frompid, 
     @sync begin
         exename = Distributed.notnothing(fromconfig.exename)
         exeflags = something(fromconfig.exeflags, ``)
-        cmd = `$exename $exeflags --worker`
+        cmd = `$exename $exeflags`
 
         new_addresses = remotecall_fetch(Distributed.launch_additional, frompid, cnt, cmd)
         for (localid,address) in enumerate(new_addresses)
@@ -1155,7 +1383,7 @@ end
 # MPI specific methods --
 # These methods are slightly modified versions of what is in the Julia distributed standard library
 #
-function azure_worker_mpi(cookie, master_address, master_port, ppi, exeflags)
+function azure_worker_mpi(cookie, master_address, master_port, ppi)
     MPI.Initialized() || MPI.Init()
 
     comm = MPI.COMM_WORLD
@@ -1164,7 +1392,7 @@ function azure_worker_mpi(cookie, master_address, master_port, ppi, exeflags)
 
     local t
     if mpi_rank == 0
-        c = azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
+        c = azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
         t = @async start_worker_mpi_rank0(c, cookie)
     else
         t = @async message_handler_loop_mpi_rankN()
@@ -1730,7 +1958,7 @@ function build_envstring(env::Dict)
     envstring
 end
 
-function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads::String, omp_num_threads::Int, exeflags::String, env::Dict, user::String,
+function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads::String, omp_num_threads::Int, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool)
     cmd, remote_julia_environment_name = buildstartupscript(manager, user, disk, custom_environment)
 
@@ -1742,8 +1970,6 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
 
     juliaenvstring = remote_julia_environment_name == "" ? "" : """using Pkg; Pkg.activate(joinpath(Pkg.envdir(), "$remote_julia_environment_name")); """
 
-    _exeflags = isempty(exeflags) ? "-t $julia_num_threads" : "$exeflags -t $julia_num_threads"
-
     if mpi_ranks_per_worker == 0
         cmd *= """
 
@@ -1751,7 +1977,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
         export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        julia $_exeflags -e '$(juliaenvstring)using AzManagers; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+        julia -t $julia_num_threads -e '$(juliaenvstring)using AzManagers; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     else
@@ -1762,7 +1988,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
         julia -e '$(juliaenvstring)using AzManagers; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
-        mpirun -n $mpi_ranks_per_worker $mpi_flags julia $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+        mpirun -n $mpi_ranks_per_worker $mpi_flags julia -t $julia_num_threads -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi)'
         EOF
         """
     end
@@ -2020,7 +2246,7 @@ end
 
 function scaleset_create_or_update(manager::AzManager, user, subscriptionid, resourcegroup, scalesetname, sigimagename, sigimageversion,
         imagename, osdisksize, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, hyperthreading, julia_num_threads,
-        omp_num_threads, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base, verbose, custom_environment, overprovision)
+        omp_num_threads, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base, verbose, custom_environment, overprovision)
     load_manifest()
     ssh_key = _manifest["ssh_public_key_file"]
 
@@ -2057,7 +2283,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
     
-    cmd = buildstartupscript_cluster(manager, spot, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, exeflags, env, user, template["tempdisk"], custom_environment)
+    cmd = buildstartupscript_cluster(manager, spot, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, env, user, template["tempdisk"], custom_environment)
     _cmd = base64encode(cmd)
 
     if length(_cmd) > 64_000
@@ -2098,17 +2324,18 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         _template["tags"]["platformsettings.host_environment.disablehyperthreading"] = hyperthreading ? "False" : "True"
     end
 
-    n = 0
-    scalesets = get(r, "value", [])
-    scaleset_exists = false
-    for scaleset in scalesets
-        if scaleset["name"] == scalesetname
-            n = scaleset_capacity(manager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
-            scaleset_exists = true
-            break
-        end
-    end
-    n += δn
+    # n = 0
+    # scalesets = get(r, "value", [])
+    # scaleset_exists = false
+    # for scaleset in scalesets
+    #     if scaleset["name"] == scalesetname
+    #         n = scaleset_capacity(manager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
+    #         scaleset_exists = true
+    #         break
+    #     end
+    # end
+    # n += δn
+    n = δn
 
     @debug "about to check quota"
 
