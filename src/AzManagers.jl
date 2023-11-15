@@ -1044,7 +1044,10 @@ end
 function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
     Distributed.init_multi()
 
-    close_stdin && close(stdin) # workers will not use it
+    if close_stdin # workers will not use it
+        redirect_stdin(devnull)
+        close(stdin)
+    end
     stderr_to_stdout && redirect_stderr(stdout)
 
     Distributed.init_worker(cookie)
@@ -1057,11 +1060,10 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         sock = listen(interface, Distributed.LPROC.bind_port)
     end
 
-    tsk_messages = nothing
-    @async while isopen(sock)
+    Distributed.error_monitor(@async while isopen(sock)
         client = accept(sock)
-        tsk_messages = Distributed.process_messages(client, client, true)
-    end
+        Distributed.process_messages(client, client, true)
+    end)
     print(out, "julia_worker:")  # print header
     print(out, "$(string(Distributed.LPROC.bind_port))#") # print port
     print(out, Distributed.LPROC.bind_addr)
@@ -1078,27 +1080,18 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     manager = azmanager()
     manager.worker_socket = out
 
-    while true
-        if tsk_messages != nothing
-            try
-                wait(tsk_messages)
-
-                #=
-                We throw an error regardless of whether the tsk_messages task completes
-                or throws an error.  We throw when it complete due to the complex error
-                handling in the Distributed.process_messages method.  We can be a bit
-                messy about process clean-up here since when we remove a worker from the
-                cluster, we delete the corresponding Azure VM.
-                =#
-                error("")
-            catch e
-                close(sock)
-                throw(e)
-            end
+    try
+        while true
+            Distributed.check_master_connect()
+            @info "waiting in azure_worker_start for notification"
+            wait()
+            @info "...done waiting in azure_worker_start for notification"
         end
-        sleep(10)
+    catch e
+        throw(e)
+    finally
+        close(sock)
     end
-    close(sock)
 end
 
 function azure_worker(cookie, master_address, master_port, ppi, exeflags)
