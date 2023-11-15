@@ -1060,7 +1060,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         sock = listen(interface, Distributed.LPROC.bind_port)
     end
 
-    Distributed.error_monitor(@async while isopen(sock)
+    errormonitor(@async while isopen(sock)
         client = accept(sock)
         Distributed.process_messages(client, client, true)
     end)
