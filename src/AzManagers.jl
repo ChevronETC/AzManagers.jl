@@ -1067,7 +1067,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
                 Distributed.process_messages(client, client, true)
                 break
             catch e
-                if i == 1
+                if i == 10
                     throw(e)
                 end
                 logerror(e)
