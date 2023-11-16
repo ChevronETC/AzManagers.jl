@@ -1062,18 +1062,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
     errormonitor(@async while isopen(sock)
         client = accept(sock)
-        for i = 1:10
-            try
-                Distributed.process_messages(client, client, false)
-                break
-            catch e
-                if i == 10
-                    throw(e)
-                end
-                logerror(e)
-                @info "retry $i, cookie is $cookie"
-            end
-        end
+        Distributed.process_messages(client, client, false)
     end)
     print(out, "julia_worker:")  # print header
     print(out, "$(string(Distributed.LPROC.bind_port))#") # print port
