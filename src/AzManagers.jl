@@ -1063,7 +1063,16 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     errormonitor(@async while isopen(sock)
         client = accept(sock)
         cookie_from_master = String(read(client, Distributed.HDR_COOKIE_LEN))
-        @info "cookie_from_master=$cookie_from_master"
+        # for i = 1:10
+        #     if isempty(cookie_from_master)
+        #         i == 10 && error("problem fetching cookie from master")
+        #         @warn "empty cookie, retrying"
+        #         sleep(1)
+        #         continue
+        #     end
+        #     break
+        # end
+        @info "cookie_from_master=$cookie_from_master, length(cookie_from_master)=$(length(cookie_from_master))"
         Distributed.process_messages(client, client, false)
     end)
     print(out, "julia_worker:")  # print header
