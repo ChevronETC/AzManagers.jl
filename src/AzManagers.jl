@@ -1064,7 +1064,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         client = accept(sock)
         for i = 1:10
             try
-                Distributed.process_messages(client, client, true)
+                Distributed.process_messages(client, client, false)
                 break
             catch e
                 if i == 10
