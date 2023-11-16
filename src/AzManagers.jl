@@ -2328,18 +2328,18 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         _template["tags"]["platformsettings.host_environment.disablehyperthreading"] = hyperthreading ? "False" : "True"
     end
 
-    # n = 0
-    # scalesets = get(r, "value", [])
-    # scaleset_exists = false
-    # for scaleset in scalesets
-    #     if scaleset["name"] == scalesetname
-    #         n = scaleset_capacity(manager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
-    #         scaleset_exists = true
-    #         break
-    #     end
-    # end
-    # n += δn
-    n = δn
+    n = 0
+    scalesets = get(r, "value", [])
+    scaleset_exists = false
+    for scaleset in scalesets
+        if scaleset["name"] == scalesetname
+            n = scaleset_capacity(manager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
+            scaleset_exists = true
+            break
+        end
+    end
+    n += δn
+    # n = δn
 
     @debug "about to check quota"
 
