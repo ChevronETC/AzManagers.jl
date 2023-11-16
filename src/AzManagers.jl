@@ -1062,6 +1062,8 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
     errormonitor(@async while isopen(sock)
         client = accept(sock)
+        cookie_from_master = String(read(sock, Distributed.HDR_COOKIE_LEN))
+        @info "cookie_from_master=$cookie_from_master"
         Distributed.process_messages(client, client, false)
     end)
     print(out, "julia_worker:")  # print header
