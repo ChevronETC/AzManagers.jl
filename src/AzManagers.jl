@@ -539,7 +539,7 @@ function prologue_true_up()
                 if !isnothing(_userdata) && δn > 0
                     @info "Prologue attempting to add $δn workers.. "
                     template = get_templatename_from_sku(_userdata["vmSize"])
-                    addprocs(template, δn; group=ss.scalesetname, sigimagename="cbox-v2-baredevitocuda_prologue", sigimageversion="0.0.3")
+                    addprocs(template, δn; group=ss.scalesetname, spot=manager.spot)
                 end
             end
         end
@@ -1226,6 +1226,8 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
     if !isnothing(stream_result)
         userdata["stream_result"] = stream_result
     end
+
+    @info "$userdata"
 
     vm = Dict(
         "exeflags" => exeflags,
