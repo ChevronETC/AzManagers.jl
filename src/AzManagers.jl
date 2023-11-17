@@ -762,12 +762,12 @@ end
 
 ###
 
-function ___send_connection_hdr(w::Worker, cookie=true)
+function ___send_connection_hdr(w::Distributed.Worker, cookie=true)
     # For a connection initiated from the remote side to us, we only send the version,
     # else when we initiate a connection we first send the cookie followed by our version.
     # The remote side validates the cookie.
     if cookie
-        @info "w.id=$(w.id) , LPROC.cookie=$LPROC.cookie, $(String(LPROC.cookie))"
+        @info "w.id=$(w.id) , LPROC.cookie=$(Distributed.LPROC.cookie), $(String(Distributed.LPROC.cookie))"
         write(w.w_stream, LPROC.cookie)
     end
     write(w.w_stream, rpad(VERSION_STRING, HDR_VERSION_LEN)[1:HDR_VERSION_LEN])
