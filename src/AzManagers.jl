@@ -1062,7 +1062,10 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
     errormonitor(@async while isopen(sock)
         client = accept(sock)
-        cookie_from_master = String(read(client, Distributed.HDR_COOKIE_LEN))
+        cookie_from_master = read(client, Distributed.HDR_COOKIE_LEN)
+        if cookie_from_master[1] == '\0'
+            @info "got null character in cookie"
+        end
         # for i = 1:10
         #     if isempty(cookie_from_master)
         #         i == 10 && error("problem fetching cookie from master")
