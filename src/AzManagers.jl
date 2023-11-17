@@ -771,19 +771,15 @@ function ___send_connection_hdr(w::Distributed.Worker, cookie=true)
         write(w.w_stream, Distributed.LPROC.cookie)
         @info "line $(@__LINE__) in $(@__FILE__)"
     end
-    @info "line $(@__LINE__) in $(@__FILE__)"
     write(w.w_stream, rpad(Distributed.VERSION_STRING, Distributed.HDR_VERSION_LEN)[1:Distributed.HDR_VERSION_LEN])
-    @info "line $(@__LINE__) in $(@__FILE__)"
 end
 
 function Distributed.create_worker(manager::AzManager, wconfig)
-    @info "inside AzManager.create_worker"
     # only node 1 can add new nodes, since nobody else has the full list of address:port
     @assert Distributed.LPROC.id == 1
     timeout = Distributed.worker_timeout()
 
     # initiate a connect. Does not wait for connection completion in case of TCP.
-    @info "line $(@__LINE__) in $(@__FILE__)"
     w = Distributed.Worker()
     local r_s, w_s
     try
@@ -830,8 +826,6 @@ function Distributed.create_worker(manager::AzManager, wconfig)
 
     join_list = []
     if Distributed.PGRP.topology === :all_to_all
-        @info "line $(@__LINE__) in $(@__FILE__), Distributed.PGRP.lazy=$(Distributed.PGRP.lazy)"
-
         # need to wait for lower worker pids to have completed connecting, since the numerical value
         # of pids is relevant to the connection process, i.e., higher pids connect to lower pids and they
         # require the value of config.connect_at which is set only upon connection completion
@@ -843,8 +837,6 @@ function Distributed.create_worker(manager::AzManager, wconfig)
         end
 
     elseif Distributed.PGRP.topology === :custom
-        @info "line $(@__LINE__) in $(@__FILE__)"
-
         # wait for requested workers to be up before connecting to them.
         filterfunc(x) = (x.id != 1) && isdefined(x, :config) &&
             (Distributed.notnothing(x.config.ident) in something(wconfig.connect_idents, []))
@@ -871,12 +863,9 @@ function Distributed.create_worker(manager::AzManager, wconfig)
                       (something(x.config.connect_at, ()), x.id) :
                       ((), x.id, true),
                       join_list)
-    @info "line $(@__LINE__) in $(@__FILE__)"
     ___send_connection_hdr(w, true)
-    @info "line $(@__LINE__) in $(@__FILE__)"
     enable_threaded_blas = something(wconfig.enable_threaded_blas, false)
     join_message = Distributed.JoinPGRPMsg(w.id, all_locs, Distributed.PGRP.topology, enable_threaded_blas, Distributed.isclusterlazy())
-    @info "w=$w"
     Distributed.send_msg_now(w, Distributed.MsgHeader(Distributed.RRID(0,0), ntfy_oid), join_message)
 
     @async Distributed.manage(w.manager, w.id, w.config, :register)
