@@ -768,9 +768,12 @@ function ___send_connection_hdr(w::Distributed.Worker, cookie=true)
     # The remote side validates the cookie.
     if cookie
         @info "w.id=$(w.id) , LPROC.cookie=$(Distributed.LPROC.cookie), $(String(Distributed.LPROC.cookie))"
-        write(w.w_stream, LPROC.cookie)
+        write(w.w_stream, Distributed.LPROC.cookie)
+        @info "line $(@__LINE__) in $(@__FILE__)"
     end
+    @info "line $(@__LINE__) in $(@__FILE__)"
     write(w.w_stream, rpad(Distributed.VERSION_STRING, Distributed.HDR_VERSION_LEN)[1:Distributed.HDR_VERSION_LEN])
+    @info "line $(@__LINE__) in $(@__FILE__)"
 end
 
 function Distributed.create_worker(manager::AzManager, wconfig)
