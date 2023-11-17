@@ -784,6 +784,7 @@ function Distributed.create_worker(manager::AzManager, wconfig)
     local r_s, w_s
     try
         (r_s, w_s) = connect(manager, w.id, wconfig)
+        @info "wconfig.host=$(wconfig.host), wconfig.port=$(wconfig.port), w.id=$(w.id)"
     catch ex
         try
             Distributed.deregister_worker(w.id)
@@ -1186,10 +1187,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
     errormonitor(@async while isopen(sock)
         client = accept(sock)
-        while peek(client, 1) == 0x00
-            @info "got leading null character in cookie"
-            read(client, 1)
-        end
+        ipaddr,port = getpeername(client)
         cookie_from_master = read(client, Distributed.HDR_COOKIE_LEN)
         # for i = 1:10
         #     if isempty(cookie_from_master)
@@ -1200,7 +1198,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         #     end
         #     break
         # end
-        @info "cookie_from_master=$cookie_from_master, length(cookie_from_master)=$(length(cookie_from_master))"
+        @info "cookie_from_master=$cookie_from_master, length(cookie_from_master)=$(length(cookie_from_master)), ip=$ipaddr, port=$port"
         Distributed.process_messages(client, client, false)
     end)
     print(out, "julia_worker:")  # print header
