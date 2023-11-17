@@ -886,7 +886,7 @@ function Distributed.create_worker(manager::AzManager, wconfig)
     if timedout
         error("worker did not connect within $timeout seconds")
     end
-    lock(client_refs) do
+    lock(Distributed.client_refs) do
         delete!(Distributed.PGRP.refs, ntfy_oid)
     end
 
@@ -1197,7 +1197,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     errormonitor(@async while isopen(sock)
         client = accept(sock)
         cookie_from_master = read(client, Distributed.HDR_COOKIE_LEN)
-        if cookie_from_master[1] == '\0'
+        if cookie_from_master[1] == 0x00
             @info "got null character in cookie"
         end
         # for i = 1:10
