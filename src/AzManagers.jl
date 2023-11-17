@@ -770,7 +770,7 @@ function ___send_connection_hdr(w::Distributed.Worker, cookie=true)
         @info "w.id=$(w.id) , LPROC.cookie=$(Distributed.LPROC.cookie), $(String(Distributed.LPROC.cookie))"
         write(w.w_stream, LPROC.cookie)
     end
-    write(w.w_stream, rpad(VERSION_STRING, HDR_VERSION_LEN)[1:HDR_VERSION_LEN])
+    write(w.w_stream, rpad(Distributed.VERSION_STRING, Distributed.HDR_VERSION_LEN)[1:Distributed.HDR_VERSION_LEN])
 end
 
 function Distributed.create_worker(manager::AzManager, wconfig)
@@ -793,7 +793,6 @@ function Distributed.create_worker(manager::AzManager, wconfig)
             rethrow(ex)
         end
     end
-    @info "line $(@__LINE__) in $(@__FILE__)"
 
     w = Distributed.Worker(w.id, r_s, w_s, manager; config=wconfig)
     # install a finalizer to perform cleanup if necessary
@@ -802,19 +801,15 @@ function Distributed.create_worker(manager::AzManager, wconfig)
             manage(w.manager, w.id, w.config, :finalize)
         end
     end
-    @info "line $(@__LINE__) in $(@__FILE__)"
 
     # set when the new worker has finished connections with all other workers
     ntfy_oid = Distributed.RRID()
     rr_ntfy_join = Distributed.lookup_ref(ntfy_oid)
     rr_ntfy_join.waitingfor = myid()
-    @info "line $(@__LINE__) in $(@__FILE__)"
 
     # Start a new task to handle inbound messages from connected worker in master.
     # Also calls `wait_connected` on TCP streams.
-    @info "line $(@__LINE__) in $(@__FILE__)"
     process_messages(w.r_stream, w.w_stream, false)
-    @info "line $(@__LINE__) in $(@__FILE__)"
 
     # send address information of all workers to the new worker.
     # Cluster managers set the address of each worker in `WorkerConfig.connect_at`.
@@ -830,10 +825,9 @@ function Distributed.create_worker(manager::AzManager, wconfig)
     #   - Workers with incoming connection requests write back their Version and an IdentifySocketAckMsg message
     # - On master, receiving a JoinCompleteMsg triggers rr_ntfy_join (signifies that worker setup is complete)
 
-    @info "line $(@__LINE__) in $(@__FILE__)"
     join_list = []
     if Distributed.PGRP.topology === :all_to_all
-        @info "line $(@__LINE__) in $(@__FILE__)"
+        @info "line $(@__LINE__) in $(@__FILE__), Distributed.PGRP.lazy=$(Distributed.PGRP.lazy)"
 
         # need to wait for lower worker pids to have completed connecting, since the numerical value
         # of pids is relevant to the connection process, i.e., higher pids connect to lower pids and they
@@ -869,7 +863,6 @@ function Distributed.create_worker(manager::AzManager, wconfig)
             push!(join_list, wl)
         end
     end
-    @info "line $(@__LINE__) in $(@__FILE__)"
 
     all_locs = Base.mapany(x -> isa(x, Distributed.Worker) ?
                       (something(x.config.connect_at, ()), x.id) :
