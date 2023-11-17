@@ -842,7 +842,7 @@ function Distributed.create_worker(manager::AzManager, wconfig)
             end
         end
 
-    elseif PGRP.topology === :custom
+    elseif Distributed.PGRP.topology === :custom
         @info "line $(@__LINE__) in $(@__FILE__)"
 
         # wait for requested workers to be up before connecting to them.
@@ -876,7 +876,8 @@ function Distributed.create_worker(manager::AzManager, wconfig)
     @info "line $(@__LINE__) in $(@__FILE__)"
     enable_threaded_blas = something(wconfig.enable_threaded_blas, false)
     join_message = Distributed.JoinPGRPMsg(w.id, all_locs, Distributed.PGRP.topology, enable_threaded_blas, Distributed.isclusterlazy())
-    Distributed.send_msg_now(w, Distributed.MsgHeader(RRID(0,0), ntfy_oid), join_message)
+    @info "w=$w"
+    Distributed.send_msg_now(w, Distributed.MsgHeader(Distributed.RRID(0,0), ntfy_oid), join_message)
 
     @async Distributed.manage(w.manager, w.id, w.config, :register)
     # wait for rr_ntfy_join with timeout
