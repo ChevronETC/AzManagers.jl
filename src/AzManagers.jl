@@ -832,18 +832,22 @@ function Distributed.create_worker(manager::AzManager, wconfig)
 
     @info "line $(@__LINE__) in $(@__FILE__)"
     join_list = []
-    if PGRP.topology === :all_to_all
+    if Distributed.PGRP.topology === :all_to_all
+        @info "line $(@__LINE__) in $(@__FILE__)"
+
         # need to wait for lower worker pids to have completed connecting, since the numerical value
         # of pids is relevant to the connection process, i.e., higher pids connect to lower pids and they
         # require the value of config.connect_at which is set only upon connection completion
-        for jw in PGRP.workers
+        for jw in Distributed.PGRP.workers
             if (jw.id != 1) && (jw.id < w.id)
-                (jw.state === W_CREATED) && wait(jw.c_state)
+                (jw.state === Distributed.W_CREATED) && wait(jw.c_state)
                 push!(join_list, jw)
             end
         end
 
     elseif PGRP.topology === :custom
+        @info "line $(@__LINE__) in $(@__FILE__)"
+
         # wait for requested workers to be up before connecting to them.
         filterfunc(x) = (x.id != 1) && isdefined(x, :config) &&
             (Distributed.notnothing(x.config.ident) in something(wconfig.connect_idents, []))
