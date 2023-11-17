@@ -871,7 +871,7 @@ function Distributed.create_worker(manager::AzManager, wconfig)
     end
     @info "line $(@__LINE__) in $(@__FILE__)"
 
-    all_locs = mapany(x -> isa(x, Worker) ?
+    all_locs = Base.mapany(x -> isa(x, Worker) ?
                       (something(x.config.connect_at, ()), x.id) :
                       ((), x.id, true),
                       join_list)
