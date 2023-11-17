@@ -805,8 +805,8 @@ function Distributed.create_worker(manager::AzManager, wconfig)
     @info "line $(@__LINE__) in $(@__FILE__)"
 
     # set when the new worker has finished connections with all other workers
-    ntfy_oid = RRID()
-    rr_ntfy_join = lookup_ref(ntfy_oid)
+    ntfy_oid = Distributed.RRID()
+    rr_ntfy_join = Distributed.lookup_ref(ntfy_oid)
     rr_ntfy_join.waitingfor = myid()
     @info "line $(@__LINE__) in $(@__FILE__)"
 
