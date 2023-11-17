@@ -760,7 +760,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     notify(c)
 end
 
-###
+######
 
 function ___send_connection_hdr(w::Distributed.Worker, cookie=true)
     # For a connection initiated from the remote side to us, we only send the version,
@@ -784,7 +784,13 @@ function Distributed.create_worker(manager::AzManager, wconfig)
     local r_s, w_s
     try
         (r_s, w_s) = connect(manager, w.id, wconfig)
-        @info "wconfig.host=$(wconfig.host), wconfig.port=$(wconfig.port), w.id=$(w.id)"
+        @info "wconfig.host=$(wconfig.host), wconfig.port=$(wconfig.port), w.id=$(w.id), wconfig.connect_at=$(wconfig.connect_at), wconfig.io=$(wconfig.io)"
+        if wconfig.io === nothing
+            @info "wconfig.io is nothing"
+        end
+        if wconfig.connect_at === nothing
+            @info "wconfig.connect_at is nothing"
+        end
     catch ex
         try
             Distributed.deregister_worker(w.id)
@@ -1198,7 +1204,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         #     end
         #     break
         # end
-        @info "cookie_from_master=$cookie_from_master, length(cookie_from_master)=$(length(cookie_from_master)), ip=$ipaddr, port=$port"
+        @info "cookie_from_master=$cookie_from_master, length(cookie_from_master)=$(length(cookie_from_master)), master_ip=$ipaddr, worker_ip=$(getipaddr()), worker_port=$port"
         Distributed.process_messages(client, client, false)
     end)
     print(out, "julia_worker:")  # print header
