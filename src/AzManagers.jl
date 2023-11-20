@@ -1256,7 +1256,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
             i += 1
             x = read(client, 1)
             @info "i=$i, x=$x"
-            if x != 0x00
+            if x[1] != 0x00
                 break
             end
             @warn "got leading 0x00 rather than cookie, discarding..."
@@ -1267,7 +1267,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         end
 
         cookie_from_master = zeros(UInt8, Distributed.HDR_COOKIE_LEN)
-        cookie_from_master[1] = x
+        cookie_from_master[1] = x[1]
 
         y = read(client, Distributed.HDR_COOKIE_LEN - 1)
         cookie_from_master[2:end] = y
