@@ -774,6 +774,63 @@ function ___send_connection_hdr(w::Distributed.Worker, cookie=true)
     write(w.w_stream, rpad(Distributed.VERSION_STRING, Distributed.HDR_VERSION_LEN)[1:Distributed.HDR_VERSION_LEN])
 end
 
+#=
+TODO - inside this method we call "connect" with "wconfig".  The host and port found by connect are used in the constuction
+of the worker.
+* Is it possible, that we get the wrong connection information?
+* The connection information can come via a stream, or via fields in wconfig
+* It looks like we write the connection information from the azure_worker_start method, so this mechanism should be picked up by the Master
+* via the wconfig.io thing.  But, it is not clear where wconfig.io gets made.
+=#
+
+function Distributed.connect(manager::AzManager, pid::Int, config::WorkerConfig)
+    if config.connect_at !== nothing
+        @info "worker-to-worker setup"
+        return Distributed.connect_w2w(pid, config)
+    end
+
+    if config.io !== nothing
+        @info "using config.io"
+        (bind_addr, port::Int) = Distributed.read_worker_host_port(config.io)
+        pubhost = something(config.host, bind_addr)
+        config.host = pubhost
+        config.port = port
+    else
+        @info "using cofig.host,config.port"
+        pubhost = Base.notnothing(cofig.host)
+        port = Base.notnothing(config.port)
+        bind_addr = something(config.bind_addr, pubhost)
+    end
+
+    s = split(pubhost,'@')
+    user = ""
+    if length(s) > 1
+        user = s[1]
+        pubhost = s[2]
+    else
+        if haskey(ENV, "USER")
+            user = ENV["USER"]
+        elseif tunnel
+            error("USER must be specified either in the environment ",
+                  "or as part of the hostname when tunnel option is used")
+        end
+    end
+
+    (s, bind_addr) = connect_to_worker(bind_addr, port)
+
+    config.bind_addr = bind_addr
+
+    config.connect_at = (bind_addr, port)
+
+    if config.io !== nothing
+        let pid = pid
+            Distributed.redirect_worker_output(pid, Base.notnothing(config.io))
+        end
+    end
+
+    (s, s)
+end
+
 function Distributed.create_worker(manager::AzManager, wconfig)
     # only node 1 can add new nodes, since nobody else has the full list of address:port
     @assert Distributed.LPROC.id == 1
@@ -784,13 +841,7 @@ function Distributed.create_worker(manager::AzManager, wconfig)
     local r_s, w_s
     try
         (r_s, w_s) = connect(manager, w.id, wconfig)
-        @info "wconfig.host=$(wconfig.host), wconfig.port=$(wconfig.port), w.id=$(w.id), wconfig.connect_at=$(wconfig.connect_at), wconfig.io=$(wconfig.io)"
-        if wconfig.io === nothing
-            @info "wconfig.io is nothing"
-        end
-        if wconfig.connect_at === nothing
-            @info "wconfig.connect_at is nothing"
-        end
+        @info "wconfig.host=$(wconfig.host), wconfig.bind_addr=$(wconfig.bind_addr), wconfig.port=$(wconfig.port), w.id=$(w.id), wconfig.connect_at=$(wconfig.connect_at), wconfig.io=$(wconfig.io)"
     catch ex
         try
             Distributed.deregister_worker(w.id)
