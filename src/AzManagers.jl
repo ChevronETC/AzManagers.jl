@@ -922,8 +922,10 @@ function Distributed.create_worker(manager::AzManager, wconfig)
                       ((), x.id, true),
                       join_list)
     ___send_connection_hdr(w, true)
+    sleep(15) # TODO -- avoid race on socket???
     enable_threaded_blas = something(wconfig.enable_threaded_blas, false)
     join_message = Distributed.JoinPGRPMsg(w.id, all_locs, Distributed.PGRP.topology, enable_threaded_blas, Distributed.isclusterlazy())
+    sleep(15) # TODO -- avoid race on socket???
     Distributed.send_msg_now(w, Distributed.MsgHeader(Distributed.RRID(0,0), ntfy_oid), join_message)
 
     @async Distributed.manage(w.manager, w.id, w.config, :register)
