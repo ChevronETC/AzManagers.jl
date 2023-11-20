@@ -1266,11 +1266,11 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
             end
         end
 
-        cookie_from_master = Vector(UInt8, Distributed.HDR_COOKIE_LEN)
+        cookie_from_master = zeros(UInt8, Distributed.HDR_COOKIE_LEN)
         cookie_from_master[1] = x
 
         y = read(client, Distributed.HDR_COOKIE_LEN - 1)
-        x[2:end] = y
+        cookie_from_master[2:end] = y
 
         # cookie_from_master = read(client, Distributed.HDR_COOKIE_LEN)
         # for i = 1:10
