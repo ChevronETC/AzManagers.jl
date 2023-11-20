@@ -1255,7 +1255,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         #     end
         #     break
         # end
-        @info "cookie_from_master=$cookie_from_master, length(cookie_from_master)=$(length(cookie_from_master)), master_ip=$ipaddr, worker_ip=$(getipaddr()), worker_port=$(Distributed.LPROC.bind_port), bind_addr=$(Distributed.LPROC.bind_addr), __port=$__port"
+        @info "cookie_from_master=$cookie_from_master, length(cookie_from_master)=$(length(cookie_from_master)), master_ip=$ipaddr, master_port=$__port, worker_ip=$(getipaddr()), worker_port=$(Distributed.LPROC.bind_port), bind_addr=$(Distributed.LPROC.bind_addr)"
         Distributed.process_messages(client, client, false)
     end)
     print(out, "julia_worker:")  # print header
