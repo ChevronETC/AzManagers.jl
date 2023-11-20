@@ -1153,7 +1153,7 @@ function get_stream_result()
     return result
 end
 
-function prologue(expected=32000)
+function prologue(expected=35000)
     result = get_stream_result()
     return result >= expected
 end
