@@ -536,11 +536,11 @@ function prologue_true_up()
                     end
                 end
                 # take the current delta of existing workers from requested and update the scaleset capacity 
-                if !isnothing(_userdata) && δn > 0
-                    @info "Prologue attempting to add $δn workers.. "
-                    template = get_templatename_from_sku(_userdata["vmSize"])
-                    addprocs(template, δn; group=ss.scalesetname, spot=manager.spot)
-                end
+                # if !isnothing(_userdata) && δn > 0
+                #     @info "Prologue attempting to add $δn workers.. "
+                #     template = get_templatename_from_sku(_userdata["vmSize"])
+                #     addprocs(template, δn; group=ss.scalesetname, spot=manager.spot)
+                # end
             end
         end
     #=
@@ -842,10 +842,10 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     hostname = vm["userdata"]["physical_hostname"]
     ss = ScaleSet(userdata["subscriptionid"], userdata["resourcegroup"], userdata["scalesetname"])
 
-    if (nprocs() - 1) >= manager.workers_requested
-        @info "Prologue over privisioned workers, not adding new workers to cluster"
-        return 
-    end
+    # if (nprocs() - 1) >= manager.workers_requested
+    #     @info "Prologue over privisioned workers, not adding new workers to cluster"
+    #     return 
+    # end
 
     # since adding instances via @async addprocs as well as adding to pruned lists 
     # causes throttling issues at scale, we will just keep the worker from joining the cluster 
