@@ -816,7 +816,7 @@ function Distributed.connect(manager::AzManager, pid::Int, config::WorkerConfig)
         end
     end
 
-    (s, bind_addr) = connect_to_worker(bind_addr, port)
+    (s, bind_addr) = Distributed.connect_to_worker(bind_addr, port)
 
     config.bind_addr = bind_addr
 
