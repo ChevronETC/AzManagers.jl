@@ -1257,28 +1257,35 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
         timeout = Distributed.worker_timeout()
 
-        tic = time()
-        while true
-            i += 1
-            x = read(client, 1)
-            @info "i=$i, x=$x"
-            if x[1] != 0x00
-                break
-            end
-            @warn "got leading 0x00 rather than cookie, discarding..."
-            if time() - tic > timeout
-                @warn "only see 0x00 for $timeout seconds"
-                break
-            end
+        # tic = time()
+        # while true
+        #     i += 1
+        #     x = read(client, 1)
+        #     @info "i=$i, x=$x"
+        #     if x[1] != 0x00
+        #         break
+        #     end
+        #     @warn "got leading 0x00 rather than cookie, discarding..."
+        #     if time() - tic > timeout
+        #         @warn "only see 0x00 for $timeout seconds"
+        #         break
+        #     end
+        # end
+
+        # cookie_from_master = zeros(UInt8, Distributed.HDR_COOKIE_LEN)
+        # cookie_from_master[1] = x[1]
+
+        # y = read(client, Distributed.HDR_COOKIE_LEN - 1)
+        # cookie_from_master[2:end] = y
+
+        cookie_from_master = read(client, Distributed.HDR_COOKIE_LEN)
+
+        # throwing an error here should trigger the re-try logic in azure_worker.
+        if cookie_from_master[1] == 0x00
+            error("received invalid cookie")
+            close(sock)
         end
 
-        cookie_from_master = zeros(UInt8, Distributed.HDR_COOKIE_LEN)
-        cookie_from_master[1] = x[1]
-
-        y = read(client, Distributed.HDR_COOKIE_LEN - 1)
-        cookie_from_master[2:end] = y
-
-        # cookie_from_master = read(client, Distributed.HDR_COOKIE_LEN)
         # for i = 1:10
         #     if isempty(cookie_from_master)
         #         i == 10 && error("problem fetching cookie from master")
