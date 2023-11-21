@@ -1248,7 +1248,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         sock = listen(interface, Distributed.LPROC.bind_port)
     end
 
-    errormonitor(@async while isopen(sock)
+    t = errormonitor(@async while isopen(sock)
         client = accept(sock)
         ipaddr,__port = getpeername(client)
 
@@ -1282,7 +1282,6 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
         # throwing an error here should trigger the re-try logic in azure_worker.
         if cookie_from_master[1] == 0x00
-            close(sock)
             error("received invalid cookie")
         end
 
@@ -1298,6 +1297,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         @info "cookie_from_master=$cookie_from_master, length(cookie_from_master)=$(length(cookie_from_master)), master_ip=$ipaddr, master_port=$__port, worker_ip=$(getipaddr()), worker_port=$(Distributed.LPROC.bind_port), bind_addr=$(Distributed.LPROC.bind_addr)"
         Distributed.process_messages(client, client, false)
     end)
+
     print(out, "julia_worker:")  # print header
     print(out, "$(string(Distributed.LPROC.bind_port))#") # print port
     print(out, Distributed.LPROC.bind_addr)
@@ -1317,7 +1317,10 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     try
         while true
             Distributed.check_master_connect()
-            wait()
+            @info "waiting on process_messages task"
+            wait(t)
+            @info "done waiting on process_messages task"
+            istaskfailed(t) && fetch(t)
         end
     catch e
         throw(e)
