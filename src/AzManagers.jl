@@ -1282,8 +1282,8 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
         # throwing an error here should trigger the re-try logic in azure_worker.
         if cookie_from_master[1] == 0x00
-            error("received invalid cookie")
             close(sock)
+            error("received invalid cookie")
         end
 
         # for i = 1:10
