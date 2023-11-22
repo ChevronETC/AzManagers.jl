@@ -1250,54 +1250,32 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
     t = errormonitor(@async while isopen(sock)
         client = accept(sock)
-        ipaddr,__port = getpeername(client)
 
-        x = 0x00
-        i = 0
+        #=
+        We observe that a valid machine often receive UInt(0)'s instead
+        of the cookie.  We do not know he cuase of this, but here we throw
+        an error which will be handled and rethrown, below, in the 'while true'
+        loop.  This results in this function to throw, causing the 'azure_worker'
+        method to re-try joining the cluster.
 
-        timeout = Distributed.worker_timeout()
-
-        # tic = time()
-        # while true
-        #     i += 1
-        #     x = read(client, 1)
-        #     @info "i=$i, x=$x"
-        #     if x[1] != 0x00
-        #         break
-        #     end
-        #     @warn "got leading 0x00 rather than cookie, discarding..."
-        #     if time() - tic > timeout
-        #         @warn "only see 0x00 for $timeout seconds"
-        #         break
-        #     end
-        # end
-
-        # cookie_from_master = zeros(UInt8, Distributed.HDR_COOKIE_LEN)
-        # cookie_from_master[1] = x[1]
-
-        # y = read(client, Distributed.HDR_COOKIE_LEN - 1)
-        # cookie_from_master[2:end] = y
+        The error handling is a little complicated here due to how the error
+        handling in 'Distributed.process_messages' works.  In particular, we
+        read the cookie ourselves and, subsequently, pass 'false' as the
+        third argument to 'Distributed.process_messages'.  This, in turn,
+        lets 'process_messages' skip its cookie read/check.
+        =#
 
         cookie_from_master = read(client, Distributed.HDR_COOKIE_LEN)
-
-        # throwing an error here should trigger the re-try logic in azure_worker.
         if cookie_from_master[1] == 0x00
-            error("received invalid cookie")
+            error("received cookie with at least one null character")
         end
 
-        # for i = 1:10
-        #     if isempty(cookie_from_master)
-        #         i == 10 && error("problem fetching cookie from master")
-        #         @warn "empty cookie, retrying"
-        #         sleep(1)
-        #         continue
-        #     end
-        #     break
-        # end
-        @info "cookie_from_master=$cookie_from_master, length(cookie_from_master)=$(length(cookie_from_master)), master_ip=$ipaddr, master_port=$__port, worker_ip=$(getipaddr()), worker_port=$(Distributed.LPROC.bind_port), bind_addr=$(Distributed.LPROC.bind_addr)"
+        if String(cookie_from_master) != cookie
+            error("received invalid cookie.")
+        end
+
         Distributed.process_messages(client, client, false)
     end)
-
     print(out, "julia_worker:")  # print header
     print(out, "$(string(Distributed.LPROC.bind_port))#") # print port
     print(out, Distributed.LPROC.bind_addr)
@@ -1317,9 +1295,8 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     try
         while true
             Distributed.check_master_connect()
-            @info "waiting on process_messages task"
+            @info "message loop..."
             wait(t)
-            @info "done waiting on process_messages task"
             istaskfailed(t) && fetch(t)
         end
     catch e
