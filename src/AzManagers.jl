@@ -209,7 +209,7 @@ function azmanager!(session, nretry, verbose, show_quota)
     end
 
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
-    _manager.pending_up = Channel{TCPSocket}(32)
+    _manager.pending_up = Channel{TCPSocket}(64)
     _manager.pending_down = Dict{ScaleSet,Set{String}}()
     _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
     _manager.pruned = Dict{ScaleSet,Set{String}}()
@@ -486,27 +486,49 @@ function add_pending_connections()
     end
 end
 
-function Distributed.addprocs(manager::AzManager; socket)
+function Distributed.addprocs(manager::AzManager; sockets)
     try
         Distributed.init_multi()
         Distributed.cluster_mgmt_from_master_check()
-        Distributed.addprocs_locked(manager; socket)
+        lock(Distributed.worker_lock)
+        Distributed.addprocs_locked(manager; sockets)
     catch
         if manager.verbose > 0
             @error "AzManagers, error processing pending connection"
             logerror(e, Logging.Error)
         end
+    finally
+        unlock(Distributed.worker_lock)
     end
 end
 
 function process_pending_connections()
     manager = azmanager()
+    sockets = TCPSocket[]
+
+    max_sockets = manager.pending_up.sz_max
+    min_instances_per_second = parse(Float64, get(ENV, "JULIA_AZMANAGERS_MIN_INSTANCES_PER_MINUTE", "10")) / 60 # if we drop below N new instances per minute, then we trigger addprocs
+    min_cadence = parse(Int, get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "60"))
+    tic = time()
     while true
-        local _socket
         try
-            _socket = take!(manager.pending_up)
-            @debug "adding new vm to cluster"
-        catch
+            if isempty(sockets)
+                push!(sockets, take!(manager.pending_up))
+            elseif isready(manager.pending_up)
+                push!(sockets, take!(manager.pending_up))
+            else
+                sleep(0.1)
+            end
+
+            elapsedtime = time() - tic
+            instances_per_second = length(sockets)/elapsedtime
+            if length(sockets) == 0 || (elapsedtime < min_cadence && instances_per_second > min_instances_per_second && length(sockets) < max_sockets)
+                continue
+            else
+                tic = time()
+                @debug "triggered adding machines" elapsedtime min_cadence instances_per_second min_instances_per_second length(sockets) max_sockets nworkers_provisioned()
+            end
+        catch e
             if manager.verbose > 0
                 @error "AzManagers, error retrieving pending connection"
                 logerror(e, Logging.Error)
@@ -514,18 +536,18 @@ function process_pending_connections()
             return
         end
 
-        let socket = _socket
+        pids = addprocs(manager; sockets)
+        empty!(sockets)
+
+        @sync for pid in pids
             @async begin
-                pids = addprocs(manager; socket)
-                for pid in pids
-                    wrkr = Distributed.map_pid_wrkr[pid]
-                    if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata) && lowercase(get(wrkr.config.userdata, "priority", "")) == "spot"
-                        remote_do(machine_prempt_loop, pid) # monitor for Azure spot evictions on each machine
-                    end
+                wrkr = Distributed.map_pid_wrkr[pid]
+                if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata) && lowercase(get(wrkr.config.userdata, "priority", "")) == "spot"
+                    remote_do(machine_prempt_loop, pid) # monitor for Azure spot evictions on each machine
                 end
-                pids
             end
         end
+        pids
     end
 end
 
@@ -700,13 +722,24 @@ function Distributed.addprocs(template::AbstractString, n::Int; kwargs...)
 end
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)
-    socket = params[:socket]
+    sockets = params[:sockets]
 
+    @sync for socket in sockets
+        @async try
+            Distributed.launch_on_machine(manager, launched, c, socket)
+        catch e
+            @error "failed to launch on machine for socket=$socket"
+            logerror(e, Logging.Error)
+        end
+    end
+end
+
+function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
     local _cookie
     try
-        _cookie = read(params[:socket], Distributed.HDR_COOKIE_LEN)
-    catch
-        if manger.verbose > 0
+        _cookie = read(socket, Distributed.HDR_COOKIE_LEN)
+    catch e
+        if manager.verbose > 0
             @error "unable to read cookie from socket"
             logerror(e, Logging.Error)
         end
@@ -741,7 +774,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     end
 
     wconfig = WorkerConfig()
-    wconfig.io = params[:socket]
+    wconfig.io = socket
     wconfig.bind_addr = vm["bind_addr"]
     wconfig.count = vm["ppi"]
     wconfig.exename = "julia"
