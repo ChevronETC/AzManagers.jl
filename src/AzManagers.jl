@@ -875,7 +875,7 @@ function rmgroup(manager::AzManager, subscriptionid, resourcegroup, groupname, n
         r = @retry nretry azrequest(
             "DELETE",
             verbose,
-            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$groupname?api-version=2023-03-01",
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$groupname?forceDeletion=True&api-version=2023-07-01",
             ["Authorization" => "Bearer $(token(manager.session))"])
 
         if show_quota
@@ -2206,7 +2206,7 @@ function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetn
     _r = @retry nretry azrequest(
         "POST",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/delete?api-version=2023-03-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/delete?forceDeletion=True&api-version=2023-07-01",
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
         json(body))
 
