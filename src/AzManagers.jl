@@ -539,14 +539,14 @@ function process_pending_connections()
         pids = addprocs(manager; sockets)
         empty!(sockets)
 
-        @sync for pid in pids
-            @async begin
-                wrkr = Distributed.map_pid_wrkr[pid]
-                if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata) && lowercase(get(wrkr.config.userdata, "priority", "")) == "spot"
-                    remote_do(machine_prempt_loop, pid) # monitor for Azure spot evictions on each machine
-                end
-            end
-        end
+        # @sync for pid in pids
+        #     @async begin
+        #         wrkr = Distributed.map_pid_wrkr[pid]
+        #         if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata) && lowercase(get(wrkr.config.userdata, "priority", "")) == "spot"
+        #             remote_do(machine_prempt_loop, pid) # monitor for Azure spot evictions on each machine
+        #         end
+        #     end
+        # end
         pids
     end
 end
