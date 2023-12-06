@@ -289,7 +289,7 @@ end
 
 function delete_empty_scalesets()
     manager = azmanager()
-    lock(manager.lock)
+    # lock(manager.lock)
     _scalesets = scalesets(manager)
     for (scaleset, capacity) in _scalesets
         if capacity == 0
@@ -300,12 +300,12 @@ function delete_empty_scalesets()
             delete_scaleset(manager, scaleset)
         end
     end
-    unlock(manager.lock)
+    # unlock(manager.lock)
 end
 
 function delete_pending_down_vms()
     manager = azmanager()
-    lock(manager.lock)
+    # lock(manager.lock)
 
     for (scaleset, ids) in pending_down(manager)
         @debug "deleting pending down vms $ids in $scaleset"
@@ -323,14 +323,14 @@ function delete_pending_down_vms()
             end
         end
     end
-    unlock(manager.lock)
+    # unlock(manager.lock)
     nothing
 end
 
 # sync server and client side views of the resources
 function scaleset_sync()
     manager = azmanager()
-    lock(manager.lock)
+    # lock(manager.lock)
     try
         _pending_down = pending_down(manager)
         pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
@@ -345,7 +345,7 @@ function scaleset_sync()
         @error "scaleset syncing error"
         logerror(e)
     end
-    unlock(manager.lock)
+    # unlock(manager.lock)
 end
 
 function prune_cluster()
