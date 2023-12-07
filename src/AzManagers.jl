@@ -1051,7 +1051,7 @@ function get_stream_test()
     cfile_path = tempdir()*"/stream.c"
     
     if !isfile(cfile_path)
-        try:
+        try
             resp = HTTP.request("GET", "https://www.cs.virginia.edu/stream/FTP/Code/stream.c")
             if resp.status == 200
                 _file = String(resp.body)
