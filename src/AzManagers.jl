@@ -1075,7 +1075,7 @@ function get_stream_result()
     local result = 0
     if isfile(f_path)   
         try
-            io = open(`f_path`)
+            io = open(`$f_path`)
             for line in readlines(io)
                 if startwrite(line, "Copy")
                     result = parse(Float64, split(line, " ", keepempty=false)[2])
