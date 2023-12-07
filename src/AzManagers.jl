@@ -1105,7 +1105,7 @@ function azure_physical_name(keyval="PhysicalHostName")
     physical_hostname
 end
 
-function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
+function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
     c = connect(IPv4(master_address), master_port)
 
     nbytes_written = write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
@@ -1147,6 +1147,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
     end
 
     vm = Dict(
+        "exeflags" => exeflags,
         "bind_addr" => string(getipaddr(IPv4)),
         "ppi" => ppi,
         "userdata" => userdata)
