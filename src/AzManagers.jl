@@ -1077,7 +1077,7 @@ function get_stream_result()
         try
             io = open(`$f_path`)
             for line in readlines(io)
-                if startwrite(line, "Copy")
+                if startswith(line, "Copy")
                     result = parse(Float64, split(line, " ", keepempty=false)[2])
                 end
             end
