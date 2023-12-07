@@ -193,11 +193,6 @@ mutable struct AzManager <: ClusterManager
     lock::ReentrantLock
     scaleset_request_counter::Int
 
-    #prologue book keeping
-    workers_requested::Int
-    isInit::Bool
-    runPrologue::Bool
-    spot::Bool
     failed_nodes::Dict{ScaleSet, Any}
 
     AzManager() = new()
@@ -216,7 +211,7 @@ function azmanager!(session, nretry, verbose, show_quota)
     end
 
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
-    _manager.pending_up = Channel{TCPSocket}(32)
+    _manager.pending_up = Channel{TCPSocket}(64)
     _manager.pending_down = Dict{ScaleSet,Set{String}}()
     _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
     _manager.pruned = Dict{ScaleSet,Set{String}}()
@@ -226,12 +221,7 @@ function azmanager!(session, nretry, verbose, show_quota)
     _manager.lock = ReentrantLock()
     _manager.scaleset_request_counter = 0
 
-    _manager.workers_requested = 0
-    _manager.isInit = true
-    _manager.runPrologue = false
-    _manager.spot = false 
     _manager.failed_nodes = Dict{ScaleSet, Any}()
-
 
     @async scaleset_pruning()
     @async scaleset_cleaning()
@@ -262,13 +252,7 @@ function scaleset_pruning()
             join the cluster.
             =#
             prune_scalesets()
-            #=
-            Additional prologue check, as Distributed.launch runs will mark an instance as "bad"
-            and won't allow that instance to join the cluster.
-            Once records of failed nodes occur, prologue will attempt to backfill a
-            delta of what was originally requested to current workers in the cluster
-            =#
-            prologue_true_up()
+
         catch e
             @error "scaleset pruning error"
             logerror(e, Logging.Error)
@@ -279,7 +263,9 @@ function scaleset_pruning()
 end
 
 function scaleset_cleaning()
-    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_CLEAN_POLL_INTERVAL", "60"))
+    # increased polling time for cleaning/delete loop from 60 to 180 as Distributed.launch will push VM's to pending down 
+    # this will remove the need for a seperate prologue function 
+    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_CLEAN_POLL_INTERVAL", "180"))
 
     while true
         try
@@ -297,6 +283,9 @@ end
 scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : Dict{ScaleSet,Int}()
 scalesets() = scalesets(azmanager())
 pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Set{String}}()
+
+failed_nodes(manager::AzManager) = isdefined(manager, :failed_nodes) ? manager.failed_nodes : Dict{ScaleSet, Any}()
+failed_nodes() = failed_nodes(azmanager())
 
 function delete_scaleset(manager, scaleset)
     @debug "deleting scaleset, $scaleset"
@@ -486,74 +475,6 @@ function prune_scalesets()
     end
 end
 
-function prologue_true_up()
-
-    manager = azmanager()
-    _scalesets = scalesets(manager)
-    _failed_nodes = manager.failed_nodes
-    current_workers = (nprocs() - 1)
-    requested_workers = manager.workers_requested
-
-    δn = requested_workers - current_workers
-
-    # assumes inital loop as the prune loop runs ahead of manager.scalesets being populated 
-    if length(_scalesets) == 0 && length(_failed_nodes) == 0 && length(manager.deleted) == 0
-        return 
-    end
-
-    # the scaleset needs to have instances, current workers lower than requested, and has failed nodes and can run prologue
-    if length(_scalesets) > 0 && current_workers <= requested_workers && length(_failed_nodes) > 0 && manager.runPrologue
-        for ss in keys(_scalesets)
-            
-            if haskey(_failed_nodes, ss)
-                _userdata = nothing
-
-                # iterate failed nodes marked from Distributed.launch 
-                for (hostname, userdata) in _failed_nodes[ss]
-
-                    _userdata = userdata
-
-                    # if the record hasn't been removed yet, go ahead add remove it from the scaleset
-                    if !userdata["removed"]
-                        @info "Prologue marking for deletion: $hostname from scaleset $(_userdata["scalesetname"])"
-                        instanceid = _userdata["instanceid"]
-
-                        try
-
-                            # add_instance_to_pruned_list(manager, ss, instanceid)
-                            add_instance_to_pending_down_list(manager, ss, instanceid)
-                            _userdata["removed"] = true 
-                        catch e
-                            @warn "$e"
-                        end 
-                        
-                        # update record keeping as removed 
-                        try
-                            merge!(manager.failed_nodes[ss], Dict(hostname => _userdata))
-                        catch e
-                            @warn "$e"
-                        end
-                    end
-                end
-                # take the current delta of existing workers from requested and update the scaleset capacity 
-                # if !isnothing(_userdata) && δn > 0
-                #     @info "Prologue attempting to add $δn workers.. "
-                #     template = get_templatename_from_sku(_userdata["vmSize"])
-                #     addprocs(template, δn; group=ss.scalesetname, spot=manager.spot)
-                # end
-            end
-        end
-    #=
-    TODO: 
-    case 1) where rmprocs(workers()) is called, to reset isInit=True and workers_requested=0 while retaining records of failed nodes incase they come backfill
-    case 2) where an entire scaleset fails prologue, build a new one as there's a race condition from trying to add workers to when delete_empty_scaleset is executed
-    Note that any instances not immediatelly cleaned up that were deemed ineligable to join the cluster will be removed by scale set pruning via timeout. This
-      is a fall back as we'd like to remove bad nodes immediately and not burn cpu time waiting for them to be removed. 
-    =#
-    end
-
-end
-
 function delete_scalesets()
     manager = azmanager()
     @sync for scaleset in keys(scalesets(manager))
@@ -575,27 +496,49 @@ function add_pending_connections()
     end
 end
 
-function Distributed.addprocs(manager::AzManager; socket)
+function Distributed.addprocs(manager::AzManager; sockets)
     try
         Distributed.init_multi()
         Distributed.cluster_mgmt_from_master_check()
-        Distributed.addprocs_locked(manager; socket)
+        lock(Distributed.worker_lock)
+        Distributed.addprocs_locked(manager; sockets)
     catch
         if manager.verbose > 0
             @error "AzManagers, error processing pending connection"
             logerror(e, Logging.Error)
         end
+    finally
+        unlock(Distributed.worker_lock)
     end
 end
 
 function process_pending_connections()
     manager = azmanager()
+    sockets = TCPSocket[]
+
+    max_sockets = manager.pending_up.sz_max
+    min_instances_per_second = parse(Float64, get(ENV, "JULIA_AZMANAGERS_MIN_INSTANCES_PER_MINUTE", "10")) / 60 # if we drop below N new instances per minute, then we trigger addprocs
+    min_cadence = parse(Int, get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "60"))
+    tic = time()
     while true
-        local _socket
         try
-            _socket = take!(manager.pending_up)
-            @debug "adding new vm to cluster"
-        catch
+            if isempty(sockets)
+                push!(sockets, take!(manager.pending_up))
+            elseif isready(manager.pending_up)
+                push!(sockets, take!(manager.pending_up))
+            else
+                sleep(0.1)
+            end
+
+            elapsedtime = time() - tic
+            instances_per_second = length(sockets)/elapsedtime
+            if length(sockets) == 0 || (elapsedtime < min_cadence && instances_per_second > min_instances_per_second && length(sockets) < max_sockets)
+                continue
+            else
+                tic = time()
+                @debug "triggered adding machines" elapsedtime min_cadence instances_per_second min_instances_per_second length(sockets) max_sockets nworkers_provisioned()
+            end
+        catch e
             if manager.verbose > 0
                 @error "AzManagers, error retrieving pending connection"
                 logerror(e, Logging.Error)
@@ -603,18 +546,18 @@ function process_pending_connections()
             return
         end
 
-        let socket = _socket
+        pids = addprocs(manager; sockets)
+        empty!(sockets)
+
+        @sync for pid in pids
             @async begin
-                pids = addprocs(manager; socket)
-                for pid in pids
-                    wrkr = Distributed.map_pid_wrkr[pid]
-                    if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata) && lowercase(get(wrkr.config.userdata, "priority", "")) == "spot"
-                        remote_do(machine_prempt_loop, pid) # monitor for Azure spot evictions on each machine
-                    end
+                wrkr = Distributed.map_pid_wrkr[pid]
+                if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata) && lowercase(get(wrkr.config.userdata, "priority", "")) == "spot"
+                    remote_do(machine_prempt_loop, pid) # monitor for Azure spot evictions on each machine
                 end
-                pids
             end
         end
+        pids
     end
 end
 
@@ -751,14 +694,6 @@ function Distributed.addprocs(template::Dict, n::Int;
     user == "" && (user = _manifest["ssh_user"])
 
     manager = azmanager!(session, nretry, verbose, show_quota)
-
-    manager.spot = spot
-    if manager.isInit
-        manager.workers_requested = n
-        manager.isInit = false
-        manager.runPrologue = true
-    end
-
     sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
@@ -797,13 +732,24 @@ function Distributed.addprocs(template::AbstractString, n::Int; kwargs...)
 end
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)
-    socket = params[:socket]
+    sockets = params[:sockets]
 
+    @sync for socket in sockets
+        @async try
+            Distributed.launch_on_machine(manager, launched, c, socket)
+        catch e
+            @error "failed to launch on machine for socket=$socket"
+            logerror(e, Logging.Error)
+        end
+    end
+end
+
+function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
     local _cookie
     try
-        _cookie = read(params[:socket], Distributed.HDR_COOKIE_LEN)
-    catch
-        if manger.verbose > 0
+        _cookie = read(socket, Distributed.HDR_COOKIE_LEN)
+    catch e
+        if manager.verbose > 0
             @error "unable to read cookie from socket"
             logerror(e, Logging.Error)
         end
@@ -838,30 +784,19 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     end
 
     userdata = vm["userdata"]
-    userdata["removed"] = false
     hostname = vm["userdata"]["physical_hostname"]
     ss = ScaleSet(userdata["subscriptionid"], userdata["resourcegroup"], userdata["scalesetname"])
 
-    # if (nprocs() - 1) >= manager.workers_requested
-    #     @info "Prologue over privisioned workers, not adding new workers to cluster"
-    #     return 
-    # end
-
-    # since adding instances via @async addprocs as well as adding to pruned lists 
-    # causes throttling issues at scale, we will just keep the worker from joining the cluster 
-    # and tagging it with "removed"=false for removal actions later in the prune loop 
     if !userdata["prologue_passed"]
-
-        @warn "$hostname FAILED prolgoue, adding to failed_nodes"
-
+        @warn "$hostname FAILED prologue, adding to failed_nodes"
         if !haskey(manager.failed_nodes, ss)
-            manager.failed_nodes = Dict(ss => Dict(hostname => userdata))
+            manager.failed_nodes = Dict(ss=>Dict(hostanme => userdata))
         else
             merge!(manager.failed_nodes[ss], Dict(hostname => userdata))
         end
-
-        # keep the worker from joining the cluster
-        return
+        @info "Adding $hostname to pending_down_list"
+        add_instance_to_pending_down_list(manager, ss, userdata["instanceid"])
+        return 
     else
         if haskey(manager.failed_nodes, ss) && haskey(manager.failed_nodes[ss], hostname)
             @info "$hostname previously failed has PASSED prologue"
@@ -870,7 +805,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     end
 
     wconfig = WorkerConfig()
-    wconfig.io = params[:socket]
+    wconfig.io = socket
     wconfig.bind_addr = vm["bind_addr"]
     wconfig.count = vm["ppi"]
     wconfig.exename = "julia"
@@ -916,7 +851,6 @@ end
 
 function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     @debug "kill for id=$id"
-    @info "Distributed.kill for id $id"
     try
         remote_do(exit, id)
     catch
@@ -930,16 +864,6 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
 
     add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
     add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
-
-    if manager.workers_requested > 0
-        manager.workers_requested -= 1
-    end
-    # assuming something like rmprocs(workers()) is called
-    # we do not want prologue to spin up additional instances
-    if manager.workers_requested == 0
-        manager.isInit = true
-        manager.runPrologue = false
-    end
 
     @debug "...kill, pushed."
     nothing
@@ -1015,7 +939,7 @@ function rmgroup(manager::AzManager, subscriptionid, resourcegroup, groupname, n
         r = @retry nretry azrequest(
             "DELETE",
             verbose,
-            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$groupname?api-version=2023-03-01",
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$groupname?forceDeletion=True&api-version=2023-07-01",
             ["Authorization" => "Bearer $(token(manager.session))"])
 
         if show_quota
@@ -1108,46 +1032,57 @@ function machine_prempt_loop()
     open(`julia --project=$project -e "using AzManagers; AzManagers._machine_preempt_loop($pid, $id)"`)
 end
 
-# begin test prologue in azmanagers
-# TODO: remote function passed through addprocs to init before worker joins a cluster 
+function get_templatename_from_sku(sku_name)
+    local cbox_name = nothing
+    _templates = JSON.parse(read(templates_filename_scaleset(), String))
+    for (cb_name, values) in _templates
+        _sku = values["value"]["sku"]["name"]
+        if sku_name === _sku
+            cbox_name = cb_name
+            break
+        end
+    end
+    cbox_name
+end
+
 function get_stream_test()
+
     f_path = tempdir()*"/stream"
     cfile_path = tempdir()*"/stream.c"
-
-    if !isfile(f_path)
-
-        try
-            resp = HTTP.request("GET",  "https://www.cs.virginia.edu/stream/FTP/Code/stream.c")
+    
+    if !isfile(cfile_path)
+        try:
+            resp = HTTP.request("GET", "https://www.cs.virginia.edu/stream/FTP/Code/stream.c")
             if resp.status == 200
                 _file = String(resp.body)
-                open(cfile_path, "w") do file
+                open(cfile_path, "w") do file 
                     write(file, _file)
                 end
                 if isfile(cfile_path)
                     run(`gcc -O $(cfile_path) -o $(f_path)`)
                 end
             end
-        catch e
-            raise(e)
+        catch e 
+            throw(e)
         end
     end
     return f_path
 end
 
 function get_stream_result()
+
     f_path = get_stream_test()
     local result = 0
-    if isfile(f_path)
+    if isfile(f_path)   
         try
-            io = open(`$f_path`)
+            io = open(`f_path`)
             for line in readlines(io)
-                if startswith(line, "Copy")
+                if startwrite(line, "Copy")
                     result = parse(Float64, split(line, " ", keepempty=false)[2])
                 end
             end
         catch e
-            #logerror(e)
-            throw(e) # ==ish raise Exception 
+            throw(e)
         end
     end
     return result
@@ -1157,7 +1092,6 @@ function prologue(expected=35000)
     result = get_stream_result()
     return result >= expected
 end
-# end test prologue in azmanagers
 
 function azure_physical_name(keyval="PhysicalHostName")
     local physical_hostname
@@ -1171,21 +1105,7 @@ function azure_physical_name(keyval="PhysicalHostName")
     physical_hostname
 end
 
-function get_templatename_from_sku(sku_name)
-
-    local cbox_name = nothing
-    _templates = JSON.parse(read(templates_filename_scaleset(), String))
-    for (cb_name, values) in _templates
-        _sku = values["value"]["sku"]["name"]
-        if sku_name === _sku
-            cbox_name = cb_name
-            break
-        end
-    end
-    cbox_name
-end
-
-function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
+function azure_worker_init(cookie, master_address, master_port, ppi, mpi_size)
     c = connect(IPv4(master_address), master_port)
 
     nbytes_written = write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
@@ -1200,7 +1120,6 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
     hostname = azure_physical_name()
     stream_result = get_stream_result()
 
-    # for debuging on a node, outputs to /var/log/cloud-init-output.log
     @info "$hostname $vmSize $prologue_passed"
 
     userdata = Dict(
@@ -1227,15 +1146,13 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
         userdata["stream_result"] = stream_result
     end
 
-    @info "$userdata"
-
     vm = Dict(
-        "exeflags" => exeflags,
         "bind_addr" => string(getipaddr(IPv4)),
         "ppi" => ppi,
         "userdata" => userdata)
-
     _vm = base64encode(json(vm))
+
+    @info "$vm"
 
     nbytes_written = write(c, _vm*"\n")
     nbytes_written == length(_vm)+1 || error("wrote wrong number of bytes")
@@ -1260,10 +1177,17 @@ function logging()
     nothing
 end
 
+if VERSION < v"1.7"
+    errormonitor = identity
+end
+
 function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
     Distributed.init_multi()
 
-    close_stdin && close(stdin) # workers will not use it
+    if close_stdin # workers will not use it
+        redirect_stdin(devnull)
+        close(stdin)
+    end
     stderr_to_stdout && redirect_stderr(stdout)
 
     Distributed.init_worker(cookie)
@@ -1276,11 +1200,34 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         sock = listen(interface, Distributed.LPROC.bind_port)
     end
 
-    tsk_messages = nothing
-    @async while isopen(sock)
+    t = errormonitor(@async while isopen(sock)
         client = accept(sock)
-        tsk_messages = Distributed.process_messages(client, client, true)
-    end
+
+        #=
+        We observe that a valid machine often receive UInt(0)'s instead
+        of the cookie.  We do not know he cuase of this, but here we throw
+        an error which will be handled and rethrown, below, in the 'while true'
+        loop.  This results in this function to throw, causing the 'azure_worker'
+        method to re-try joining the cluster.
+
+        The error handling is a little complicated here due to how the error
+        handling in 'Distributed.process_messages' works.  In particular, we
+        read the cookie ourselves and, subsequently, pass 'false' as the
+        third argument to 'Distributed.process_messages'.  This, in turn,
+        lets 'process_messages' skip its cookie read/check.
+        =#
+
+        cookie_from_master = read(client, Distributed.HDR_COOKIE_LEN)
+        if cookie_from_master[1] == 0x00
+            error("received cookie with at least one null character")
+        end
+
+        if String(cookie_from_master) != cookie
+            error("received invalid cookie.")
+        end
+
+        Distributed.process_messages(client, client, false)
+    end)
     print(out, "julia_worker:")  # print header
     print(out, "$(string(Distributed.LPROC.bind_port))#") # print port
     print(out, Distributed.LPROC.bind_addr)
@@ -1297,27 +1244,19 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     manager = azmanager()
     manager.worker_socket = out
 
-    while true
-        if tsk_messages != nothing
-            try
-                wait(tsk_messages)
-
-                #=
-                We throw an error regardless of whether the tsk_messages task completes
-                or throws an error.  We throw when it complete due to the complex error
-                handling in the Distributed.process_messages method.  We can be a bit
-                messy about process clean-up here since when we remove a worker from the
-                cluster, we delete the corresponding Azure VM.
-                =#
-                error("")
-            catch e
-                close(sock)
-                throw(e)
-            end
+    try
+        while true
+            Distributed.check_master_connect()
+            @info "message loop..."
+            wait(t)
+            istaskfailed(t) && fetch(t)
+            sleep(10)
         end
-        sleep(10)
+    catch e
+        throw(e)
+    finally
+        close(sock)
     end
-    close(sock)
 end
 
 function azure_worker(cookie, master_address, master_port, ppi, exeflags)
@@ -1330,6 +1269,7 @@ function azure_worker(cookie, master_address, master_port, ppi, exeflags)
     =#
     while true
         itry += 1
+        local c
         try
             c = azure_worker_init(cookie, master_address, master_port, ppi, exeflags, 0)
             azure_worker_start(c, cookie)
@@ -1338,6 +1278,12 @@ function azure_worker(cookie, master_address, master_port, ppi, exeflags)
             logerror(e, Logging.Error)
             if itry > 10
                 throw(e)
+            end
+            if @isdefined c
+                try
+                    close(c)
+                catch
+                end
             end
         end
         sleep(60)
@@ -1386,23 +1332,43 @@ end
 # These methods are slightly modified versions of what is in the Julia distributed standard library
 #
 function azure_worker_mpi(cookie, master_address, master_port, ppi, exeflags)
-    MPI.Initialized() || MPI.Init()
+    itry = 0
+    while true
+        itry += 1
+        local c
+        try
+            MPI.Initialized() || MPI.Init()
 
-    comm = MPI.COMM_WORLD
-    mpi_size = MPI.Comm_size(comm)
-    mpi_rank = MPI.Comm_rank(comm)
+            comm = MPI.COMM_WORLD
+            mpi_size = MPI.Comm_size(comm)
+            mpi_rank = MPI.Comm_rank(comm)
 
-    local t
-    if mpi_rank == 0
-        c = azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
-        t = @async start_worker_mpi_rank0(c, cookie)
-    else
-        t = @async message_handler_loop_mpi_rankN()
+            local t
+            if mpi_rank == 0
+                c = azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
+                t = @async start_worker_mpi_rank0(c, cookie)
+            else
+                t = @async message_handler_loop_mpi_rankN()
+            end
+
+            MPI.Barrier(comm)
+            fetch(t)
+            MPI.Barrier(comm)
+        catch e
+            @error "error starting worker, attempt $itry, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
+            logerror(e, Logging.Error)
+            if itry > 10
+                throw(e)
+            end
+            if @isdefined c
+                try
+                    close(c)
+                catch
+                end
+            end
+        end
+        sleep(60)
     end
-
-    MPI.Barrier(comm)
-    fetch(t)
-    MPI.Barrier(comm)
 end
 
 function process_messages_mpi_rank0(r_stream::TCPSocket, w_stream::TCPSocket, incoming::Bool=true)
@@ -1566,10 +1532,13 @@ start_worker_mpi_rank0(cookie::AbstractString=readline(stdin); kwargs...) = star
 function start_worker_mpi_rank0(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
     Distributed.init_multi()
 
-    close_stdin && close(stdin) # workers will not use it
+    if close_stdin # workers will not use it
+        redirect_stdin(devnull)
+        close(stdin)
+    end
     stderr_to_stdout && redirect_stderr(stdout)
 
-    init_worker(cookie)
+    Distributed.init_worker(cookie)
     interface = IPv4(Distributed.LPROC.bind_addr)
     if Distributed.LPROC.bind_port == 0
         port_hint = 9000 + (getpid() % 1000)
@@ -1579,11 +1548,20 @@ function start_worker_mpi_rank0(out::IO, cookie::AbstractString=readline(stdin);
         sock = listen(interface, Distributed.LPROC.bind_port)
     end
 
-    tsk_messages = nothing
-    @async while isopen(sock)
+    t = errormonitor(@async while isopen(sock)
         client = accept(sock)
-        tsk_messages = process_messages_mpi_rank0(client, client, true)
-    end
+
+        cookie_from_master = read(client, Distributed.HDR_COOKIE_LEN)
+        if cookie_from_master[1] == 0x00
+            error("received cookie with at least one null character")
+        end
+
+        if String(cookie_from_master) != cookie
+            error("received invalid cookie.")
+        end
+
+        process_messages_mpi_rank0(client, client, false)
+    end)
     print(out, "julia_worker:")  # print header
     print(out, "$(string(Distributed.LPROC.bind_port))#") # print port
     print(out, Distributed.LPROC.bind_addr)
@@ -1600,27 +1578,19 @@ function start_worker_mpi_rank0(out::IO, cookie::AbstractString=readline(stdin);
     manager = azmanager()
     manager.worker_socket = out
 
-    while true
-        if tsk_messages != nothing
-            try
-                wait(tsk_messages)
-
-                #=
-                We throw an error regardless of whether the tsk_messages task completes
-                or throws an error.  We throw when it complete due to the complex error
-                handling in the Distributed.process_messages method.  We can be a bit
-                messy about process clean-up here since when we remove a worker from the
-                cluster, we delete the corresponding Azure VM.
-                =#
-                error("")
-            catch e
-                close(sock)
-                throw(e)
-            end
+    try
+        while true
+            Distributed.check_master_connect()
+            @info "message loop..."
+            wait(t)
+            istaskfailed(t) && fetch(t)
+            sleep(10)
         end
-        sleep(10)
+    catch e
+        throw(e)
+    finally
+        close(sock)
     end
-    close(sock)
 end
 
 #
@@ -2339,7 +2309,6 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         end
     end
     n += δn
-    # n = δn
 
     @debug "about to check quota"
 
@@ -2384,7 +2353,7 @@ function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetn
     _r = @retry nretry azrequest(
         "POST",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/delete?api-version=2023-03-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/delete?forceDeletion=True&api-version=2023-07-01",
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
         json(body))
 
@@ -3306,6 +3275,6 @@ function Base.kill(job::DetachedJob)
         "http://$(job.vm["ip"]):$(job.vm["port"])/cofii/detached/job/$(job.id)/kill")
 end
 
-export AzManager, DetachedJob, addproc, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
+export AzManager, DetachedJob, addproc, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, failed_nodes, @detach, @detachat
 
 end
