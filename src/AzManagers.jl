@@ -790,7 +790,7 @@ function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
     if !userdata["prologue_passed"]
         @warn "$hostname FAILED prologue, adding to failed_nodes"
         if !haskey(manager.failed_nodes, ss)
-            manager.failed_nodes = Dict(ss=>Dict(hostanme => userdata))
+            manager.failed_nodes = Dict(ss=>Dict(hostname => userdata))
         else
             merge!(manager.failed_nodes[ss], Dict(hostname => userdata))
         end
