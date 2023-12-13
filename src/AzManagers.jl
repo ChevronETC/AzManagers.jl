@@ -2798,7 +2798,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
 
     vm = Dict("name"=>vmname, "ip"=>string(r["properties"]["ipConfigurations"][1]["properties"]["privateIPAddress"]),
         "subscriptionid"=>string(subscriptionid), "resourcegroup"=>string(resourcegroup), "port"=>string(detached_port()),
-        "julia_num_threads"=>julia_num_threads, "omp_num_threads"=>omp_num_threads)
+        "julia_num_threads"=>string(julia_num_threads), "omp_num_threads"=>string(omp_num_threads))
 
     if detachedservice
         detached_service_wait(vm, customenv)
