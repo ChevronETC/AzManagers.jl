@@ -193,7 +193,8 @@ mutable struct AzManager <: ClusterManager
     lock::ReentrantLock
     scaleset_request_counter::Int
 
-    failed_nodes::Dict{ScaleSet, Any}
+    # failed_nodes::Dict{ScaleSet, Any}
+    failed_nodes::Dict{String, Any}
 
     AzManager() = new()
 end
@@ -221,7 +222,8 @@ function azmanager!(session, nretry, verbose, show_quota)
     _manager.lock = ReentrantLock()
     _manager.scaleset_request_counter = 0
 
-    _manager.failed_nodes = Dict{ScaleSet, Any}()
+    # _manager.failed_nodes = Dict{ScaleSet, Any}()
+    _manager.failed_nodes = Dict{String, Any}()
 
     @async scaleset_pruning()
     @async scaleset_cleaning()
@@ -789,18 +791,22 @@ function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
 
     if !userdata["prologue_passed"]
         @warn "$hostname FAILED prologue, adding to failed_nodes"
-        if !haskey(manager.failed_nodes, ss)
-            manager.failed_nodes = Dict(ss=>Dict(hostname => userdata))
+        if !haskey(manager.failed_nodes, hostname)
+            # manager.failed_nodes = Dict(ss=>Dict(hostname => userdata))
+        manager.failed_nodes = Dict(hostname => userdata)
         else
-            merge!(manager.failed_nodes[ss], Dict(hostname => userdata))
+            # merge!(manager.failed_nodes[ss], Dict(hostname => userdata))
+            merge!(manager.failed_nodes[hostname], userdata)
         end
         @info "Adding $hostname to pending_down_list"
         add_instance_to_pending_down_list(manager, ss, userdata["instanceid"])
         return 
     else
-        if haskey(manager.failed_nodes, ss) && haskey(manager.failed_nodes[ss], hostname)
+        # if haskey(manager.failed_nodes, ss) && haskey(manager.failed_nodes[ss], hostname)
+        if haskey(manager.failed_nodes, hostname)
             @info "$hostname previously failed has PASSED prologue"
-            pop!(manager.failed_nodes[ss], hostname, nothing)
+            # pop!(manager.failed_nodes[ss], hostname, nothing)
+            pop!(manager.failed_nodes, hostname, nothing)
         end
     end
 
