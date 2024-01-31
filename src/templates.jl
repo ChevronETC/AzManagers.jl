@@ -126,7 +126,7 @@ function build_sstemplate(name;
                         "osDisk" => Dict(
                             "caching" => "ReadWrite",
                             "managedDisk" => Dict(
-                                "storageAccountType" => "Standard_LRS"
+                                "storageAccountType" => "Premium_LRS"
                             ),
                             "createOption" => "FromImage",
                             "diskSizeGB" => osdisksize
