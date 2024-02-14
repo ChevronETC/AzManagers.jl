@@ -508,7 +508,7 @@ function Distributed.addprocs(manager::AzManager; sockets)
         Distributed.cluster_mgmt_from_master_check()
         lock(Distributed.worker_lock)
         Distributed.addprocs_locked(manager; sockets)
-    catch
+    catch e
         if manager.verbose > 0
             @error "AzManagers, error processing pending connection"
             logerror(e, Logging.Error)
