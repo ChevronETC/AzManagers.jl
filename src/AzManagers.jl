@@ -179,6 +179,7 @@ mutable struct AzManager <: ClusterManager
     session::AzSessionAbstract
     nretry::Int
     verbose::Int
+    save_cloud_init_failures::Bool
     show_quota::Bool
     scalesets::Dict{ScaleSet,Int}
     pending_up::Channel{TCPSocket}
@@ -199,10 +200,11 @@ end
 
 const _manager = AzManager()
 
-function azmanager!(session, ssh_user, nretry, verbose, show_quota)
+function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures, show_quota)
     _manager.session = session
     _manager.nretry = nretry
     _manager.verbose = verbose
+    _manager.save_cloud_init_failures = save_cloud_init_failures
     _manager.show_quota = show_quota
     _manager.ssh_user = ssh_user
 
@@ -459,12 +461,16 @@ function prune_scalesets()
 
             doprune = (time_elapsed > worker_timeout || vm_state == "failed") && !is_worker_deleting && !is_vm_deleting && !ispruned_already
             if doprune
-                @info "Putting machine with instance id $instanceid in $(scaleset.scalesetname) onto the deletion queue because it failed to join the Julia cluster after $(round(time_elapsed, Second)), vm_state=$vm_state, copying cloud init output log to '$(pwd())/cloud-init-output-$(instanceid).log'."
-                try
-                    ipaddress = get_ipaddress_for_scaleset_vm(manager, _vm)
-                    run(`scp -i $(homedir())/.ssh/azmanagers_rsa $(manager.ssh_user)@$(ipaddress):/var/log/cloud-init-output.log ./cloud-init-output-$(instanceid).log`)
-                catch e
-                    @warn "failed to copy cloud init log from VM $(instanceid)."
+                @info "Putting machine with instance id $instanceid in $(scaleset.scalesetname) onto the deletion queue because it failed to join the Julia cluster after $(round(time_elapsed, Second)), vm_state=$vm_state."
+                if manager.save_cloud_init_failures
+                    @info "copying cloud init output log to '$(pwd())/cloud-init-output-$(instanceid).log'."
+                    try
+                        ipaddress = get_ipaddress_for_scaleset_vm(manager, _vm)
+                        run(`scp -i $(homedir())/.ssh/azmanagers_rsa $(manager.ssh_user)@$(ipaddress):/var/log/cloud-init-output.log ./cloud-init-output-$(instanceid).log`)
+                    catch e
+                        @warn "failed to copy cloud init log from VM $(instanceid)."
+                        logerror(e, Logging.Warn)
+                    end
                 end
                 add_instance_to_pruned_list(manager, scaleset, instanceid)
                 add_instance_to_pending_down_list(manager, scaleset, instanceid)
@@ -630,6 +636,7 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `env=Dict()` each dictionary entry is an environment variable set on the worker before Julia starts. e.g. `env=Dict("OMP_PROC_BIND"=>"close")`
 * `nretry=20` Number of retries for HTTP REST calls to Azure services.
 * `verbose=0` verbose flag used in HTTP requests.
+* `save_cloud_init_failures=false` set to true to copy cloud init logs (/var/log/clout-init-output.log) from workers that fail to join the cluster.
 * `show_quota=false` after various operation, show the "x-ms-rate-remaining-resource" response header.  Useful for debugging/understanding Azure quota's.
 * `user=AzManagers._manifest["ssh_user"]` ssh user.
 * `spot=false` use Azure SPOT VMs for the scale-set
@@ -672,6 +679,7 @@ function Distributed.addprocs(template::Dict, n::Int;
         env = Dict(),
         nretry = 20,
         verbose = 0,
+        save_cloud_init_failures = false,
         show_quota = false,
         user = "",
         spot = false,
@@ -691,7 +699,7 @@ function Distributed.addprocs(template::Dict, n::Int;
     resourcegroup == "" && (resourcegroup = get(template, "resourcegroup", _manifest["resourcegroup"]))
     user == "" && (user = _manifest["ssh_user"])
 
-    manager = azmanager!(session, user, nretry, verbose, show_quota)
+    manager = azmanager!(session, user, nretry, verbose, save_cloud_init_failures, show_quota)
     sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
@@ -908,7 +916,7 @@ function rmgroup(groupname;
     resourcegroup == "" && (resourcegroup = AzManagers._manifest["resourcegroup"])
     user == "" && (user = AzManagers._manifest["ssh_user"])
 
-    manager = azmanager!(session, user, nretry, verbose, show_quota)
+    manager = azmanager!(session, user, nretry, verbose, false, show_quota)
     rmgroup(manager, subscriptionid, resourcegroup, groupname, nretry, verbose, show_quota)
 end
 
@@ -2704,7 +2712,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         nic_template = nic_templates[nic_template]
     end
 
-    manager = azmanager!(session, user, nretry, verbose, show_quota)
+    manager = azmanager!(session, user, nretry, verbose, false, show_quota)
 
     vm_template["value"]["properties"]["osProfile"]["computerName"] = vmname
 
@@ -2864,7 +2872,7 @@ function rmproc(vm;
     subscriptionid = vm["subscriptionid"]
     vmname = vm["name"]
 
-    manager = azmanager!(session, nretry, verbose, show_quota)
+    manager = azmanager!(session, nretry, verbose, false, show_quota)
 
     _r = @retry nretry azrequest(
         "GET",
