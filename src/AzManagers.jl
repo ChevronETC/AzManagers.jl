@@ -1,6 +1,6 @@
 module AzManagers
 
-using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, JSON, JSONWebTokens, LibGit2, Logging, MPI, Pkg, Printf, Random, Serialization, Sockets, TOML
+using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, JSON, JSONWebTokens, LibCURL, LibGit2, Logging, MPI, Pkg, Printf, Random, Serialization, Sockets, TOML
 
 function logerror(e, loglevel=Logging.Info)
     io = IOBuffer()
@@ -186,6 +186,7 @@ mutable struct AzManager <: ClusterManager
     pending_down::Dict{ScaleSet,Set{String}}
     deleted::Dict{ScaleSet,Dict{String,DateTime}}
     pruned::Dict{ScaleSet,Set{String}}
+    preempted::Dict{ScaleSet,Set{String}}
     port::UInt16
     server::Sockets.TCPServer
     worker_socket::TCPSocket
@@ -217,6 +218,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.pending_down = Dict{ScaleSet,Set{String}}()
     _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
     _manager.pruned = Dict{ScaleSet,Set{String}}()
+    _manager.preempted = Dict{ScaleSet,Set{String}}()
     _manager.scalesets = Dict{ScaleSet,Int}()
     _manager.task_add = @async add_pending_connections()
     _manager.task_process = @async process_pending_connections()
@@ -506,7 +508,7 @@ function Distributed.addprocs(manager::AzManager; sockets)
         Distributed.cluster_mgmt_from_master_check()
         lock(Distributed.worker_lock)
         Distributed.addprocs_locked(manager; sockets)
-    catch
+    catch e
         if manager.verbose > 0
             @error "AzManagers, error processing pending connection"
             logerror(e, Logging.Error)
@@ -553,11 +555,41 @@ function process_pending_connections()
         pids = addprocs(manager; sockets)
         empty!(sockets)
 
-        @sync for pid in pids
+        for pid in pids
             @async begin
                 wrkr = Distributed.map_pid_wrkr[pid]
                 if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata) && lowercase(get(wrkr.config.userdata, "priority", "")) == "spot"
-                    remote_do(machine_prempt_loop, pid) # monitor for Azure spot evictions on each machine
+                    try
+                        remotecall_fetch(machine_preempt_loop, pid)
+                    catch e
+                        if isa(e, RemoteException) && isa(e.captured.ex, TaskFailedException) && isa(e.captured.ex.task.result.ex, SpotPreemptException)
+                            ex = e.captured.ex.task.result.ex
+                            notbefore = DateTime(ex.notbefore, dateformat"e, dd u yyyy HH:MM:SS \G\M\T")
+                            @info "caught preempt exception for $(ex.clusterid), removing not before $notbefore UTC"
+                            _now = now(UTC)
+                            if notbefore > _now
+                                @info "sleeping for $(notbefore - _now)"
+                                sleep(notbefore - _now)
+                            end
+                            u = wrkr.config.userdata
+                            try
+                                scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
+                                add_instance_to_preempted_list(manager, scaleset, u["instanceid"])
+                            catch e
+                                @info "error adding instance to preempted list"
+                            end
+
+                            try
+                                @info "Removing preempted worker $pid from the Julia cluster"
+                                # We can't use rmprocs here since the worker process might already be gone due to preemption.  The
+                                # worker process would usually do the following two lines (see the Distributed.message_handler_loop function)
+                                Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
+                                Distributed.deregister_worker(pid)
+                            catch
+                                @warn "unable to remove $pid"
+                            end
+                        end
+                    end
                 end
             end
         end
@@ -823,6 +855,22 @@ function add_instance_to_pruned_list(manager::AzManager, scaleset::ScaleSet, ins
     nothing
 end
 
+function add_instance_to_preempted_list(manager::AzManager, scaleset::ScaleSet, instanceid)
+    if haskey(manager.preempted, scaleset)
+        @debug "pushing worker with id=$instanceid onto preempted"
+        push!(manager.preempted[scaleset], string(instanceid))
+    else
+        @debug "creating preempted vector for id=$instanceid"
+        manager.preempted[scaleset] = Set{String}([string(instanceid)])
+    end
+end
+
+function ispreempted(manager::AzManager, config::WorkerConfig)
+    u = config.userdata
+    scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
+    string(u["instanceid"])  ∈ get(manager.preempted, scaleset, Set{String}())
+end
+
 function add_instance_to_deleted_list(manager::AzManager, scaleset::ScaleSet, instanceid)
     if haskey(manager.deleted, scaleset)
         @debug "pushing worker with id=$instanceid onto deleted"
@@ -836,6 +884,12 @@ end
 
 function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     @debug "kill for id=$id"
+
+    if ispreempted(manager, config)
+        @debug "kill on id=$id because it was preempted"
+        return nothing
+    end
+
     try
         remote_do(exit, id)
     catch
@@ -952,10 +1006,58 @@ function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfi
     end
 end
 
+#=
+Use libCURL because HTTP forces the request to run, partially, on a thread in the default thread-pool
+where-as, we would like to run requests to the scaleset metadata server on the interactive thrad-pool.
+=#
+mutable struct CurlDataStruct
+    body::Vector{UInt8}
+    currentsize::Csize_t
+end
+
+function curl_get_write_callback(curlbuf::Ptr{Cchar}, size::Csize_t, nmemb::Csize_t, datavoid::Ptr{Cvoid})
+    datastruct = unsafe_pointer_to_objref(datavoid)::CurlDataStruct
+
+    n = size*nmemb
+    newsize = datastruct.currentsize + n
+    resize!(datastruct.body, newsize)
+
+    _data = pointer(datastruct.body, datastruct.currentsize+1)
+    @ccall memcpy(_data::Ptr{Cvoid}, curlbuf::Ptr{Cvoid}, n::Csize_t)::Ptr{Cvoid}
+    datastruct.currentsize = newsize
+    return n
+end
+
+function curl_get_metadata(url)
+    datastruct = CurlDataStruct(UInt8[], 0)
+
+    headers = C_NULL
+    headers = curl_slist_append(headers, "Metadata: true")
+
+    curl = curl_easy_init()
+    curl_easy_setopt(curl, CURLOPT_URL, url)
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers)
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, @cfunction(curl_get_write_callback, Csize_t, (Ptr{Cchar}, Csize_t, Csize_t, Ptr{Cvoid})))
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, pointer_from_objref(datastruct))
+
+    curl_easy_perform(curl)
+
+    http_code = Array{Clong}(undef, 1)
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, http_code)
+    if http_code[1] > 200
+        error("Azure metaadata service return $(http_code[1]) response.")
+    end
+
+    curl_easy_cleanup(curl)
+
+    datastruct
+end
+
 function get_instanceid()
     local r
     try
-        _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01", ["Metadata"=>"true"])
+        # _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01", ["Metadata"=>"true"])
+        _r = curl_get_metadata("http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01")
         r = JSON.parse(String(_r.body))
     catch
         r = Dict()
@@ -964,60 +1066,72 @@ function get_instanceid()
 end
 
 """
-    preempted([id=myid()|id="instanceid"])
+    ispreempted,notbefore = preempted([id=myid()|id="instanceid"])
 
 Check to see if the machine `id::Int` has received an Azure spot preempt message.  Returns
-true if a preempt message is received and false otherwise.
+(true, notbefore) if a preempt message is received and (false,"") otherwise.  `notbefore`
+is the date/time before which the machine is guaranteed to still exist.
 """
-function preempted(instanceid::AbstractString="", clusterid::Int=0)
+function preempted(instanceid::AbstractString, clusterid::Int)
     isempty(instanceid) && (instanceid = get_instanceid())
     clusterid == 0 && (clusterid = myid())
     local _r
     try
         tic = time()
-        _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"])
+        # _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"])
+        _r = curl_get_metadata("http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01")
         if time() - tic > 55 # 55 seconds, simply because it is less that 60, and 60 seconds is the eviction notice.
-            @warn "$(now()), took longer than 55 seconds to query the meta-data server for scheduled events (elapsed time=$(time() - tic))."
+            @debug "$(now()), took longer than 55 seconds to query the meta-data server for scheduled events (elapsed time=$(time() - tic))."
         end
     catch
         @warn "unable to get scheduledevents."
-        return false
+        return false, ""
     end
     r = JSON.parse(String(_r.body))
     for event in get(r, "Events", [])
         if get(event, "EventType", "") == "Preempt" && instanceid ∈ get(event, "Resources", [])
             @warn "Machine with id $clusterid ($instanceid) is being pre-empted" now(Dates.UTC) event["NotBefore"] event["EventType"] event["EventSource"]
-            return true
+            return true, event["NotBefore"]
         end
     end
-    return false
+    return false, ""
 end
-preempted(id::Int) = remotecall_fetch(preempted, id)
 
-function _machine_preempt_loop(pid, clusterid)
-    instanceid = ""
-    while true
-        instanceid = get_instanceid()
-        instanceid == "" || break
-        sleep(1)
-    end
-    while true
-        if AzManagers.preempted(instanceid, clusterid)
-            # self-destruct button, Distributed should see that the process is exited and update the cluster book-keeping.
-            @info "self-destruct, killing pid=$pid"
-            run(`kill -9 $pid`)
-            exit()
-            break
-        end
-        sleep(1)
+macro spawn_interactive(ex::Expr)
+    if VERSION > v"1.9"
+        esc(:(Threads.@spawn :interactive $ex))
+    else
+        esc(:(Threads.@spawn $ex))
     end
 end
 
-function machine_prempt_loop()
-    project = dirname(Pkg.project().path)
-    pid = getpid()
-    id = myid()
-    open(`julia --project=$project -e "using AzManagers; AzManagers._machine_preempt_loop($pid, $id)"`)
+struct SpotPreemptException <: Exception
+    instanceid::String
+    clusterid::Int
+    notbefore::String
+end
+Base.showerror(io::IO, e::SpotPreemptException) = print(io, "spot preemption on process '$(e.clusterid)' ($(e.instanceid)), not before '$(e.notbefore)'")
+
+function machine_preempt_loop()
+    if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
+        tsk = @spawn_interactive begin
+            instanceid = get_instanceid()
+            clusterid = myid()
+            @debug "starting preempt loop on $clusterid, $instanceid"
+
+            while true
+                ispreempted, notbefore = preempted(instanceid, clusterid)
+                if ispreempted
+                    # pid=1 will catch this exception, and remove the worker from the Julia cluster.
+                    throw(SpotPreemptException(instanceid, clusterid, notbefore))
+                end
+                sleep(1)
+            end
+        end
+        fetch(tsk)
+    else
+        @warn "AzManagers is not running the preempt loop for pid=$(myid()) since it requires at least one interactive thread on worker machines."
+    end
 end
 
 function azure_physical_name(keyval="PhysicalHostName")
@@ -1846,6 +1960,19 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
     envstring = build_envstring(env)
 
     juliaenvstring = remote_julia_environment_name == "" ? "" : """using Pkg; Pkg.activate(joinpath(Pkg.envdir(), "$remote_julia_environment_name")); """
+
+    # if spot is true, then ensure at least one interactive thread on workers so that one can check for spot evictions periodically.
+    if spot && VERSION >= v"1.9"
+        _julia_num_threads = split(julia_num_threads, ',')
+        julia_num_threads_default = length(_julia_num_threads) > 0 ? parse(Int, _julia_num_threads[1]) : 1
+        julia_num_threads_interactive = length(_julia_num_threads) > 1 ? parse(Int, _julia_num_threads[2]) : 0
+
+        if julia_num_threads_interactive == 0
+            @debug "Augmenting 'julia_num_threads' option with an interactive thread so it can be used on workers for spot-event polling."
+            julia_num_threads_interactive = 1
+        end
+        julia_num_threads = nthreads_filter("$julia_num_threads_default,$julia_num_threads_interactive")
+    end
 
     _exeflags = isempty(exeflags) ? "-t $julia_num_threads" : "$exeflags -t $julia_num_threads"
 
