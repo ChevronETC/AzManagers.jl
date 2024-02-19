@@ -466,6 +466,7 @@ function prune_scalesets()
                 @info "Putting machine with instance id $instanceid in $(scaleset.scalesetname) onto the deletion queue because it failed to join the Julia cluster after $(round(time_elapsed, Second)), vm_state=$vm_state."
                 if manager.save_cloud_init_failures
                     @info "copying cloud init output log to '$(pwd())/cloud-init-output-$(instanceid).log'."
+                    @info "Distributed lock" islocked(Distributed.worker_lock) Distributed.worker_lock
                     try
                         ipaddress = get_ipaddress_for_scaleset_vm(manager, _vm)
                         run(`scp -i $(homedir())/.ssh/azmanagers_rsa $(manager.ssh_user)@$(ipaddress):/var/log/cloud-init-output.log ./cloud-init-output-$(instanceid).log`)
@@ -506,6 +507,10 @@ function Distributed.addprocs(manager::AzManager; sockets)
     try
         Distributed.init_multi()
         Distributed.cluster_mgmt_from_master_check()
+        while islocked(Distributed.worker_lock)
+            @info "hit the worker lock"
+            sleep(1)
+        end
         lock(Distributed.worker_lock)
         Distributed.addprocs_locked(manager; sockets)
     catch e
@@ -545,11 +550,8 @@ function process_pending_connections()
                 @debug "triggered adding machines" elapsedtime min_cadence instances_per_second min_instances_per_second length(sockets) max_sockets nworkers_provisioned()
             end
         catch e
-            if manager.verbose > 0
-                @error "AzManagers, error retrieving pending connection"
-                logerror(e, Logging.Error)
-            end
-            return
+            @error "AzManagers, error retrieving pending connection"
+            logerror(e, Logging.Error)
         end
 
         pids = addprocs(manager; sockets)
