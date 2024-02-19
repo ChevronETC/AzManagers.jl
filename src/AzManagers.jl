@@ -535,7 +535,7 @@ function process_pending_connections()
         try
             if isempty(sockets)
                 push!(sockets, take!(manager.pending_up))
-            elseif isready(manager.pending_up)
+            elseif isready(manager.pending_up) && length(sockets) < max_sockets
                 push!(sockets, take!(manager.pending_up))
             else
                 sleep(0.1)
@@ -552,6 +552,7 @@ function process_pending_connections()
         catch e
             @error "AzManagers, error retrieving pending connection"
             logerror(e, Logging.Error)
+            continue
         end
 
         pids = addprocs(manager; sockets)
