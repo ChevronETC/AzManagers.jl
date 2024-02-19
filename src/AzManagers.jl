@@ -2999,7 +2999,7 @@ function rmproc(vm;
     subscriptionid = vm["subscriptionid"]
     vmname = vm["name"]
 
-    manager = azmanager!(session, nretry, verbose, false, show_quota)
+    manager = azmanager!(session, "", nretry, verbose, false, show_quota)
 
     _r = @retry nretry azrequest(
         "GET",
