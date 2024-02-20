@@ -562,7 +562,23 @@ function process_pending_connections()
         end
 
         @debug "calling addprocs from withing process_pending_connections"
-        pids = addprocs(manager; sockets)
+        tsk_addprocs = @async addprocs(manager; sockets)
+        tic = time()
+        pids = []
+        while true
+            if time() - tic > 30
+                @async Base.throwto(tsk_addprocs, InterruptException())
+            end
+            if istaskdone(tsk_addprocs) && istaskfailed(tsk_addprocs)
+                @warn "AzManagers failed to process pending connections"
+                break
+            end
+            if istaskdone(tsk_addprocs) && !istaskfailed(tsk_addprocs)
+                pids = fetch(tsk_addprocs)
+                break
+            end
+            sleep(1)
+        end
         @debug "done calling addprocs from withing process_pending_connections"
         empty!(sockets)
 
@@ -606,7 +622,6 @@ function process_pending_connections()
             end
         end
         @debug "done starting preempt loops"
-        pids
     end
 end
 
