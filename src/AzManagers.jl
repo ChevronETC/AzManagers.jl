@@ -516,10 +516,9 @@ function Distributed.addprocs(manager::AzManager; sockets)
         lock(Distributed.worker_lock)
         Distributed.addprocs_locked(manager; sockets)
     catch e
-        if manager.verbose > 0
-            @error "AzManagers, error processing pending connection"
-            logerror(e, Logging.Error)
-        end
+        @error "AzManagers, error processing pending connection"
+        logerror(e, Logging.Error)
+        throw(e)
     finally
         unlock(Distributed.worker_lock)
     end
@@ -567,6 +566,7 @@ function process_pending_connections()
         pids = []
         while true
             if time() - tic > 30
+                @warn "AzManagers, interupting hung addproc"
                 @async Base.throwto(tsk_addprocs, InterruptException())
             end
             if istaskdone(tsk_addprocs) && istaskfailed(tsk_addprocs)
