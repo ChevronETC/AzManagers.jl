@@ -494,9 +494,11 @@ function add_pending_connections()
     while true
         try
             let s = accept(manager.server)
+                @debug "pushing new socket onto manger.pending_up" length(manager.pending_up.data)
                 push!(manager.pending_up, s)
+                @debug "done pushing new socket onto manger.pending_up" length(manager.pending_up.data)
             end
-        catch
+        catch e
             @error "AzManagers, error adding pending connection"
             logerror(e, Logging.Error)
         end
@@ -534,9 +536,13 @@ function process_pending_connections()
     while true
         try
             if isempty(sockets)
+                @debug "taking from manager.pending_up" length(manager.pending_up.data)
                 push!(sockets, take!(manager.pending_up))
+                @debug "done taking from manager.pending_up" length(manager.pending_up.data)
             elseif isready(manager.pending_up) && length(sockets) < max_sockets
+                @debug "taking from manager.pending_up" length(manager.pending_up.data)
                 push!(sockets, take!(manager.pending_up))
+                @debug "done taking from manager.pending_up" length(manager.pending_up.data)
             else
                 sleep(0.1)
             end
@@ -555,7 +561,9 @@ function process_pending_connections()
             continue
         end
 
+        @debug "calling addprocs from withing process_pending_connections"
         pids = addprocs(manager; sockets)
+        @debug "done calling addprocs from withing process_pending_connections"
         empty!(sockets)
 
         for pid in pids
@@ -783,6 +791,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
             logerror(e, Logging.Error)
         end
     end
+    notify(c)
 end
 
 function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
@@ -803,12 +812,9 @@ function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
     local _connection_string
     try
         _connection_string = readline(socket)
-    catch
-        if manager.verbose > 0
-            @error "unable to read connection string from socket"
-            logerror(e, Logging.Error)
-        end
-        return
+    catch e
+        @error "unable to read connection string from socket"
+        throw(e)
     end
 
     connection_string = String(base64decode(_connection_string))
@@ -816,12 +822,9 @@ function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
     local vm
     try
         vm = JSON.parse(connection_string)
-    catch
-        if manager.verbose > 0
-            @error "unable to parse connection string, string=$connection_string, cookie=$cookie"
-            logerror(e, Logging.Error)
-        end
-        return
+    catch e
+        @error "unable to parse connection string, string=$connection_string, cookie=$cookie"
+        throw(e)
     end
 
     wconfig = WorkerConfig()
