@@ -566,6 +566,7 @@ function process_pending_connections()
         @debug "done calling addprocs from withing process_pending_connections"
         empty!(sockets)
 
+        @debug "starting preempt loops" pids
         for pid in pids
             @async begin
                 wrkr = Distributed.map_pid_wrkr[pid]
@@ -604,6 +605,7 @@ function process_pending_connections()
                 end
             end
         end
+        @debug "done starting preempt loops"
         pids
     end
 end
