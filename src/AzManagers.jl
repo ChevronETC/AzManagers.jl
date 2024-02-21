@@ -518,9 +518,9 @@ function Distributed.addprocs(manager::AzManager; sockets)
     catch e
         @error "AzManagers, error processing pending connection"
         logerror(e, Logging.Error)
+        throw(e)
     finally
         unlock(Distributed.worker_lock)
-        throw(e)
     end
 end
 
@@ -755,7 +755,7 @@ function Distributed.create_worker(manager::AzManager, wconfig)
     end
     @info "AzManagers, create_worker, done client_refs"
 
-    @info "AzManagers, end of create_worker" wconfig
+    @info "AzManagers, end of create_worker" wconfig w.id
     return w.id
 end
 
