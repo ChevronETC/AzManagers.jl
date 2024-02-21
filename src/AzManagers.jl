@@ -561,6 +561,7 @@ function process_pending_connections()
         end
 
         @debug "calling addprocs from withing process_pending_connections"
+        #=
         tsk_addprocs = @async addprocs(manager; sockets)
         tic = time()
         pids = []
@@ -581,6 +582,8 @@ function process_pending_connections()
         end
         @debug "done calling addprocs from withing process_pending_connections"
         empty!(sockets)
+        =#
+        addprocs(manager; sockets)
 
         @debug "starting preempt loops" pids
         for pid in pids
