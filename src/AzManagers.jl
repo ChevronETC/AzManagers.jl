@@ -581,9 +581,11 @@ function process_pending_connections()
             sleep(1)
         end
         @debug "done calling addprocs from withing process_pending_connections"
-        empty!(sockets)
         =#
         pids = addprocs(manager; sockets)
+
+        ##
+        empty!(sockets)
 
         @debug "starting preempt loops" pids
         for pid in pids
