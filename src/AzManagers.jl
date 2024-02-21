@@ -518,7 +518,7 @@ function Distributed.addprocs(manager::AzManager; sockets)
     catch e
         @error "AzManagers, error processing pending connection"
         logerror(e, Logging.Error)
-        throw(e)
+        # throw(e)
     finally
         unlock(Distributed.worker_lock)
     end
