@@ -634,7 +634,7 @@ function process_pending_connections()
 end
 
 function Distributed.create_worker(manager::AzManager, wconfig)
-    @info "AzManagers, start of create_worker" wconfig
+    @debug "AzManagers, start of create_worker" wconfig
     # only node 1 can add new nodes, since nobody else has the full list of address:port
     @assert Distributed.LPROC.id == 1
     timeout = Distributed.worker_timeout()
@@ -642,7 +642,7 @@ function Distributed.create_worker(manager::AzManager, wconfig)
     # initiate a connect. Does not wait for connection completion in case of TCP.
     w = Distributed.Worker()
     local r_s, w_s
-    @info "w.id=$(w.id), AzManagers, create_worker, connect"
+    @debug "w.id=$(w.id), AzManagers, create_worker, connect"
     try
         (r_s, w_s) = connect(manager, w.id, wconfig)
     catch ex
@@ -653,31 +653,31 @@ function Distributed.create_worker(manager::AzManager, wconfig)
             rethrow(ex)
         end
     end
-    @info "w.id=$(w.id), AzManagers, create_worker, done connect"
+    @debug "w.id=$(w.id), AzManagers, create_worker, done connect"
 
     w = Distributed.Worker(w.id, r_s, w_s, manager; config=wconfig)
     # install a finalizer to perform cleanup if necessary
 
-    @info "w.id=$(w.id), AzManagers, create_worker, manage"
+    @debug "w.id=$(w.id), AzManagers, create_worker, manage"
     finalizer(w) do w
         if myid() == 1
             manage(w.manager, w.id, w.config, :finalize)
         end
     end
-    @info "w.id=$(w.id), AzManagers, create_worker, done manage"
+    @debug "w.id=$(w.id), AzManagers, create_worker, done manage"
 
     # set when the new worker has finished connections with all other workers
-    @info "AzManagers, create_worker, ntfy_oid"
+    @debug "AzManagers, create_worker, ntfy_oid"
     ntfy_oid = Distributed.RRID()
     rr_ntfy_join = Distributed.lookup_ref(ntfy_oid)
     rr_ntfy_join.waitingfor = myid()
-    @info "w.id=$(w.id), AzManagers, create_worker, done ntfy_oid"
+    @debug "w.id=$(w.id), AzManagers, create_worker, done ntfy_oid"
 
     # Start a new task to handle inbound messages from connected worker in master.
     # Also calls `wait_connected` on TCP streams.
-    @info "w.id=$(w.id), AzManagers, create_worker, process_messages"
+    @debug "w.id=$(w.id), AzManagers, create_worker, process_messages"
     Distributed.process_messages(w.r_stream, w.w_stream, false)
-    @info "w.id=$(w.id), AzManagers, create_worker, done process_messages"
+    @debug "w.id=$(w.id), AzManagers, create_worker, done process_messages"
 
     # send address information of all workers to the new worker.
     # Cluster managers set the address of each worker in `WorkerConfig.connect_at`.
@@ -693,7 +693,7 @@ function Distributed.create_worker(manager::AzManager, wconfig)
     #   - Workers with incoming connection requests write back their Version and an IdentifySocketAckMsg message
     # - On master, receiving a JoinCompleteMsg triggers rr_ntfy_join (signifies that worker setup is complete)
 
-    @info "w.id=$(w.id), AzManagers, create_worker, join wait"
+    @debug "w.id=$(w.id), AzManagers, create_worker, join wait"
     join_list = []
     if Distributed.PGRP.topology === :all_to_all
         # need to wait for lower worker pids to have completed connecting, since the numerical value
@@ -728,39 +728,39 @@ function Distributed.create_worker(manager::AzManager, wconfig)
             push!(join_list, wl)
         end
     end
-    @info "w.id=$(w.id), AzManagers, create_worker, done join wait"
+    @debug "w.id=$(w.id), AzManagers, create_worker, done join wait"
 
     all_locs = Base.mapany(x -> isa(x, Distributed.Worker) ?
                     (something(x.config.connect_at, ()), x.id) :
                     ((), x.id, true),
                     join_list)
 
-    @info "w.id=$(w.id), AzManagers, create_worker, connection"
+    @debug "w.id=$(w.id), AzManagers, create_worker, connection"
     Distributed.send_connection_hdr(w, true)
     enable_threaded_blas = something(wconfig.enable_threaded_blas, false)
     join_message = Distributed.JoinPGRPMsg(w.id, all_locs, Distributed.PGRP.topology, enable_threaded_blas, Distributed.isclusterlazy())
     Distributed.send_msg_now(w, Distributed.MsgHeader(Distributed.RRID(0,0), ntfy_oid), join_message)
-    @info "w.id=$(w.id), AzManagers, create_worker, done connection"
+    @debug "w.id=$(w.id), AzManagers, create_worker, done connection"
 
-    @info "w.id=$(w.id), AzManagers, create_worker, manage"
+    @debug "w.id=$(w.id), AzManagers, create_worker, manage"
     @async manage(w.manager, w.id, w.config, :register)
-    @info "w.id=$(w.id), AzManagers, create_worker, done manage"
+    @debug "w.id=$(w.id), AzManagers, create_worker, done manage"
     # wait for rr_ntfy_join with timeout
     timedout = false
     @async (sleep($timeout); timedout = true; put!(rr_ntfy_join, 1))
-    @info "w.id=$(w.id), AzManagers, create_worker, rr_ntfy_join, timeout=$timeout"
+    @debug "w.id=$(w.id), AzManagers, create_worker, rr_ntfy_join, timeout=$timeout"
     wait(rr_ntfy_join)
     if timedout
         error("worker did not connect within $timeout seconds")
     end
-    @info "w.id=$(w.id), AzManagers, create_worker, done rr_ntfy_join"
-    @info "w.id=$(w.id), AzManagers, create_worker, client_refs"
+    @debug "w.id=$(w.id), AzManagers, create_worker, done rr_ntfy_join"
+    @debug "w.id=$(w.id), AzManagers, create_worker, client_refs"
     lock(Distributed.client_refs) do
         delete!(Distributed.PGRP.refs, ntfy_oid)
     end
-    @info "w.id=$(w.id), AzManagers, create_worker, done client_refs"
+    @debug "w.id=$(w.id), AzManagers, create_worker, done client_refs"
 
-    @info "w.id=$(w.id), AzManagers, end of create_worker" wconfig w.id
+    @debug "w.id=$(w.id), AzManagers, end of create_worker" wconfig w.id
     return w.id
 end
 
