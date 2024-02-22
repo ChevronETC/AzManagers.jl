@@ -561,17 +561,21 @@ function process_pending_connections()
         end
 
         @debug "calling addprocs from withing process_pending_connections"
-        #=
         tsk_addprocs = @async addprocs(manager; sockets)
         tic = time()
         pids = []
         while true
-            if time() - tic > 30
+            if time() - tic > 300
                 @warn "AzManagers, interupting hung addproc"
                 @async Base.throwto(tsk_addprocs, InterruptException())
             end
             if istaskdone(tsk_addprocs) && istaskfailed(tsk_addprocs)
                 @warn "AzManagers failed to process pending connections"
+                try
+                    fetch(tsk_addprocs)
+                catch e
+                    logerror(e, Logging.Warn)
+                end
                 break
             end
             if istaskdone(tsk_addprocs) && !istaskfailed(tsk_addprocs)
@@ -581,8 +585,7 @@ function process_pending_connections()
             sleep(1)
         end
         @debug "done calling addprocs from withing process_pending_connections"
-        =#
-        pids = addprocs(manager; sockets)
+        # pids = addprocs(manager; sockets)
 
         ##
         empty!(sockets)
