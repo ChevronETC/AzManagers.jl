@@ -214,7 +214,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     end
 
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
-    _manager.pending_up = Channel{TCPSocket}(256)
+    _manager.pending_up = Channel{TCPSocket}(64)
     _manager.pending_down = Dict{ScaleSet,Set{String}}()
     _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
     _manager.pruned = Dict{ScaleSet,Set{String}}()
