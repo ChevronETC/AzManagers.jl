@@ -648,6 +648,7 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
         while true
             if istaskdone(tsk_create_worker)
                 pid = fetch(tsk_create_worker)
+                break
             end
             if time() - tic > timeout
                 @async Base.throwto(tsk_create_worker, InterruptException())
