@@ -665,6 +665,7 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
         pid = Distributed.create_worker(manager, wconfig)
     catch e
         @warn "unable to create worker within $(timeout+10) seconds, adding vm to pending down list"
+        logerror(e, Logging.Warn)
         u = wconfig.userdata
         scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
         add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
