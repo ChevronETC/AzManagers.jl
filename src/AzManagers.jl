@@ -517,8 +517,8 @@ function Distributed.addprocs(manager::AzManager; sockets)
         lock(Distributed.worker_lock)
         pids = Distributed.addprocs_locked(manager; sockets)
     catch e
-        @error "AzManagers, error processing pending connection"
-        logerror(e, Logging.Error)
+        @debug "AzManagers, error processing pending connection"
+        logerror(e, Logging.Debug)
     finally
         unlock(Distributed.worker_lock)
     end
@@ -543,8 +543,9 @@ function addprocs_with_timeout(manager; sockets)
                 fetch(tsk_addprocs)
             catch e
                 logerror(e, Logging.Warn)
+            finally
+                break
             end
-            break
         end
         if istaskdone(tsk_addprocs) && !istaskfailed(tsk_addprocs)
             pids = fetch(tsk_addprocs)
@@ -591,9 +592,9 @@ function process_pending_connections()
             continue
         end
 
-        @debug "calling addprocs from withing process_pending_connections"
+        @debug "calling addprocs_with_timeout from process_pending_connections"
         pids = addprocs_with_timeout(manager; sockets)
-        @debug "done calling addprocs from withing process_pending_connections"
+        @debug "done calling addprocs_with_timeout from process_pending_connections"
         empty!(sockets)
 
         @debug "starting preempt loops" pids
@@ -654,6 +655,7 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
             end
             if time() - tic > timeout
                 @async Base.throwto(tsk_create_worker, InterruptException())
+                tic = time()
             end
             sleep(1)
         end
