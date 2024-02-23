@@ -633,11 +633,40 @@ function process_pending_connections()
     end
 end
 
+function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched_q)
+    local pid
+    try
+        pid = Distributed.create_worker(manager, wconfig)
+    catch e
+        @warn "unable to create worker, adding vm to pending down list"
+        u = wconfig.userdata
+        scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
+        add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
+        add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
+        throw(e)
+    end
+    push!(launched_q, pid)
+
+    # When starting workers on remote multi-core hosts, `launch` can (optionally) start only one
+    # process on the remote machine, with a request to start additional workers of the
+    # same type. This is done by setting an appropriate value to `WorkerConfig.cnt`.
+    cnt = something(wconfig.count, 1)
+    if cnt === :auto
+        cnt = wconfig.environ[:cpu_threads]
+    end
+    cnt = cnt - 1   # Removing self from the requested number
+
+    if cnt > 0
+        launch_n_additional_processes(manager, pid, wconfig, cnt, launched_q)
+    end
+end
+
 function Distributed.create_worker(manager::AzManager, wconfig)
     @debug "AzManagers, start of create_worker" wconfig
     # only node 1 can add new nodes, since nobody else has the full list of address:port
     @assert Distributed.LPROC.id == 1
-    timeout = Distributed.worker_timeout()
+    # timeout = Distributed.worker_timeout()
+    timeout = 60
 
     # initiate a connect. Does not wait for connection completion in case of TCP.
     w = Distributed.Worker()
