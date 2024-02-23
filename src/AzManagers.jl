@@ -662,7 +662,6 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
             end
             sleep(1)
         end
-        pid = Distributed.create_worker(manager, wconfig)
     catch e
         @warn "unable to create worker within $(timeout+10) seconds, adding vm to pending down list"
         logerror(e, Logging.Warn)
