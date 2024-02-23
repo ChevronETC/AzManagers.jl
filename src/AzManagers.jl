@@ -532,10 +532,12 @@ function addprocs_with_timeout(manager; sockets)
     tsk_addprocs = @async addprocs(manager; sockets)
     tic = time()
     pids = []
+    interrupted = false
     while true
-        if time() - tic > timeout
+        if time() - tic > timeout && !interrupted
             @warn "AzManagers, interrupting addprocs due to a timeout"
             @async Base.throwto(tsk_addprocs, InterruptException())
+            interrupted = true
         end
         if istaskdone(tsk_addprocs) && istaskfailed(tsk_addprocs)
             @warn "AzManagers, failed to process pending connections"
@@ -644,6 +646,7 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
     # Distributed.create_worker also uses Distributed.worker_timeout, so we add a grace period
     # to allow for the Distributed.create_worker to hit its timeout.
     timeout = Distributed.worker_timeout() + 10
+    interrupted = false
     local pid
     try
         tsk_create_worker = @async Distributed.create_worker(manager, wconfig)
@@ -653,9 +656,9 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
                 pid = fetch(tsk_create_worker)
                 break
             end
-            if time() - tic > timeout
+            if time() - tic > timeout && !interrupted
                 @async Base.throwto(tsk_create_worker, InterruptException())
-                tic = time()
+                interrupted = true
             end
             sleep(1)
         end
