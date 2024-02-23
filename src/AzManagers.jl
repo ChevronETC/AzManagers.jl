@@ -214,7 +214,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     end
 
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
-    _manager.pending_up = Channel{TCPSocket}(64)
+    _manager.pending_up = Channel{TCPSocket}(256)
     _manager.pending_down = Dict{ScaleSet,Set{String}}()
     _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
     _manager.pruned = Dict{ScaleSet,Set{String}}()
@@ -418,7 +418,7 @@ function prune_cluster()
 end
 
 function prune_scalesets()
-    worker_timeout = Second(parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "720")))
+    worker_timeout = Second(parse(Int, get(ENV, "JULIA_AZMANAGERS_VM_JOIN_TIMEOUT", "720")))
     manager = azmanager()
 
     _scalesets = scalesets(manager)
@@ -518,10 +518,39 @@ function Distributed.addprocs(manager::AzManager; sockets)
     catch e
         @error "AzManagers, error processing pending connection"
         logerror(e, Logging.Error)
-        # throw(e)
     finally
         unlock(Distributed.worker_lock)
     end
+end
+
+function addprocs_with_timeout(manager; sockets)
+    # Distributed.setup_launched_worker also uses Distributed.worker_timeout, so we add a grace period
+    # to allow for the Distributed.setup_launched_worker to hit its timeout.
+    timeout = Distributed.worker_timeout() + 30
+    tsk_addprocs = @async addprocs(manager; sockets)
+    tic = time()
+    pids = []
+    while true
+        if time() - tic > timeout
+            @warn "AzManagers, interrupting addprocs due to a timeout"
+            @async Base.throwto(tsk_addprocs, InterruptException())
+        end
+        if istaskdone(tsk_addprocs) && istaskfailed(tsk_addprocs)
+            @warn "AzManagers failed to process pending connections"
+            try
+                fetch(tsk_addprocs)
+            catch e
+                logerror(e, Logging.Warn)
+            end
+            break
+        end
+        if istaskdone(tsk_addprocs) && !istaskfailed(tsk_addprocs)
+            pids = fetch(tsk_addprocs)
+            break
+        end
+        sleep(1)
+    end
+    pids
 end
 
 function process_pending_connections()
@@ -561,33 +590,8 @@ function process_pending_connections()
         end
 
         @debug "calling addprocs from withing process_pending_connections"
-        tsk_addprocs = @async addprocs(manager; sockets)
-        tic = time()
-        pids = []
-        while true
-            if time() - tic > 300
-                @warn "AzManagers, interupting hung addproc"
-                @async Base.throwto(tsk_addprocs, InterruptException())
-            end
-            if istaskdone(tsk_addprocs) && istaskfailed(tsk_addprocs)
-                @warn "AzManagers failed to process pending connections"
-                try
-                    fetch(tsk_addprocs)
-                catch e
-                    logerror(e, Logging.Warn)
-                end
-                break
-            end
-            if istaskdone(tsk_addprocs) && !istaskfailed(tsk_addprocs)
-                pids = fetch(tsk_addprocs)
-                break
-            end
-            sleep(1)
-        end
+        pids = addprocs_with_timeout(manager; sockets)
         @debug "done calling addprocs from withing process_pending_connections"
-        # pids = addprocs(manager; sockets)
-
-        ##
         empty!(sockets)
 
         @debug "starting preempt loops" pids
@@ -634,11 +638,25 @@ function process_pending_connections()
 end
 
 function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched_q)
+    # Distributed.create_worker also uses Distributed.worker_timeout, so we add a grace period
+    # to allow for the Distributed.create_worker to hit its timeout.
+    timeout = Distributed.worker_timeout() + 10
     local pid
     try
+        tsk_create_worker = @async Distributed.create_worker(manager, wconfig)
+        tic = time()
+        while true
+            if istaskdone(tsk_create_worker)
+                pid = fetch(tsk_create_worker)
+            end
+            if time() - tic > timeout
+                @async Base.throwto(tsk_create_worker, InterruptException())
+            end
+            sleep(1)
+        end
         pid = Distributed.create_worker(manager, wconfig)
     catch e
-        @warn "unable to create worker, adding vm to pending down list"
+        @warn "unable to create worker within $(timeout+10) seconds, adding vm to pending down list"
         u = wconfig.userdata
         scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
         add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
@@ -661,6 +679,7 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
     end
 end
 
+#=
 function Distributed.create_worker(manager::AzManager, wconfig)
     @debug "AzManagers, start of create_worker" wconfig
     # only node 1 can add new nodes, since nobody else has the full list of address:port
@@ -792,6 +811,7 @@ function Distributed.create_worker(manager::AzManager, wconfig)
     @debug "w.id=$(w.id), AzManagers, end of create_worker" wconfig w.id
     return w.id
 end
+=#
 
 include("templates.jl")
 
