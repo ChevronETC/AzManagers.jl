@@ -506,6 +506,7 @@ function add_pending_connections()
 end
 
 function Distributed.addprocs(manager::AzManager; sockets)
+    pids = []
     try
         Distributed.init_multi()
         Distributed.cluster_mgmt_from_master_check()
@@ -514,13 +515,14 @@ function Distributed.addprocs(manager::AzManager; sockets)
             sleep(1)
         end
         lock(Distributed.worker_lock)
-        Distributed.addprocs_locked(manager; sockets)
+        pids = Distributed.addprocs_locked(manager; sockets)
     catch e
         @error "AzManagers, error processing pending connection"
         logerror(e, Logging.Error)
     finally
         unlock(Distributed.worker_lock)
     end
+    pids
 end
 
 function addprocs_with_timeout(manager; sockets)
@@ -536,7 +538,7 @@ function addprocs_with_timeout(manager; sockets)
             @async Base.throwto(tsk_addprocs, InterruptException())
         end
         if istaskdone(tsk_addprocs) && istaskfailed(tsk_addprocs)
-            @warn "AzManagers failed to process pending connections"
+            @warn "AzManagers, failed to process pending connections"
             try
                 fetch(tsk_addprocs)
             catch e
