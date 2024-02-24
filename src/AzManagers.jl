@@ -1012,10 +1012,8 @@ function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
     try
         _cookie = read(socket, Distributed.HDR_COOKIE_LEN)
     catch e
-        if manager.verbose > 0
-            @error "unable to read cookie from socket"
-            logerror(e, Logging.Error)
-        end
+        @error "unable to read cookie from socket"
+        logerror(e, Logging.Error)
         return
     end
 
