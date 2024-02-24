@@ -669,7 +669,7 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
         scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
         add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
         add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
-        throw(e)
+        return # we don't want addprocs_locked to throw
     end
     push!(launched_q, pid)
 
