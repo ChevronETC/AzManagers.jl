@@ -663,13 +663,19 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
             sleep(1)
         end
     catch e
-        @warn "unable to create worker within $(timeout+10) seconds, adding vm to pending down list"
+        @warn "unable to create worker within $timeout seconds, adding vm to pending down list"
         logerror(e, Logging.Warn)
         u = wconfig.userdata
         scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
         add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
         add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
-        return # we don't want addprocs_locked to throw
+
+        #=
+        We don't rethrow the exception because we don't want addprocs_locked to throw.
+        Instead, we want it to add whatever machines are successfull, and ignore those
+        that are not.
+        =#
+        return
     end
     push!(launched_q, pid)
 
@@ -998,6 +1004,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
 
     @sync for socket in sockets
         @async try
+            # TODO: do we need a timeout here?
             Distributed.launch_on_machine(manager, launched, c, socket)
         catch e
             @error "failed to launch on machine for socket=$socket"
