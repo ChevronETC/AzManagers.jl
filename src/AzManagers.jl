@@ -418,7 +418,7 @@ function prune_cluster()
 end
 
 function prune_scalesets()
-    worker_timeout = Second(parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "720")))
+    worker_timeout = Second(parse(Int, get(ENV, "JULIA_AZMANAGERS_VM_JOIN_TIMEOUT", "720")))
     manager = azmanager()
 
     _scalesets = scalesets(manager)
@@ -493,9 +493,11 @@ function add_pending_connections()
     while true
         try
             let s = accept(manager.server)
+                @debug "pushing new socket onto manger.pending_up" length(manager.pending_up.data)
                 push!(manager.pending_up, s)
+                @debug "done pushing new socket onto manger.pending_up" length(manager.pending_up.data)
             end
-        catch
+        catch e
             @error "AzManagers, error adding pending connection"
             logerror(e, Logging.Error)
         end
@@ -503,19 +505,52 @@ function add_pending_connections()
 end
 
 function Distributed.addprocs(manager::AzManager; sockets)
+    pids = []
     try
         Distributed.init_multi()
         Distributed.cluster_mgmt_from_master_check()
         lock(Distributed.worker_lock)
-        Distributed.addprocs_locked(manager; sockets)
+        pids = Distributed.addprocs_locked(manager; sockets)
     catch e
-        if manager.verbose > 0
-            @error "AzManagers, error processing pending connection"
-            logerror(e, Logging.Error)
-        end
+        @debug "AzManagers, error processing pending connection"
+        logerror(e, Logging.Debug)
     finally
         unlock(Distributed.worker_lock)
     end
+    pids
+end
+
+function addprocs_with_timeout(manager; sockets)
+    # Distributed.setup_launched_worker also uses Distributed.worker_timeout, so we add a grace period
+    # to allow for the Distributed.setup_launched_worker to hit its timeout.
+    timeout = Distributed.worker_timeout() + 30
+    tsk_addprocs = @async addprocs(manager; sockets)
+    tic = time()
+    pids = []
+    interrupted = false
+    while true
+        if time() - tic > timeout && !interrupted
+            @warn "AzManagers, interrupting addprocs due to a timeout"
+            @async Base.throwto(tsk_addprocs, InterruptException())
+            interrupted = true
+        end
+        if istaskdone(tsk_addprocs) && istaskfailed(tsk_addprocs)
+            @warn "AzManagers, failed to process pending connections"
+            try
+                fetch(tsk_addprocs)
+            catch e
+                logerror(e, Logging.Warn)
+            finally
+                break
+            end
+        end
+        if istaskdone(tsk_addprocs) && !istaskfailed(tsk_addprocs)
+            pids = fetch(tsk_addprocs)
+            break
+        end
+        sleep(1)
+    end
+    pids
 end
 
 function process_pending_connections()
@@ -529,9 +564,13 @@ function process_pending_connections()
     while true
         try
             if isempty(sockets)
+                @debug "taking from manager.pending_up" length(manager.pending_up.data)
                 push!(sockets, take!(manager.pending_up))
-            elseif isready(manager.pending_up)
+                @debug "done taking from manager.pending_up" length(manager.pending_up.data)
+            elseif isready(manager.pending_up) && length(sockets) < max_sockets
+                @debug "taking from manager.pending_up" length(manager.pending_up.data)
                 push!(sockets, take!(manager.pending_up))
+                @debug "done taking from manager.pending_up" length(manager.pending_up.data)
             else
                 sleep(0.1)
             end
@@ -545,16 +584,17 @@ function process_pending_connections()
                 @debug "triggered adding machines" elapsedtime min_cadence instances_per_second min_instances_per_second length(sockets) max_sockets nworkers_provisioned()
             end
         catch e
-            if manager.verbose > 0
-                @error "AzManagers, error retrieving pending connection"
-                logerror(e, Logging.Error)
-            end
-            return
+            @error "AzManagers, error retrieving pending connection"
+            logerror(e, Logging.Error)
+            continue
         end
 
-        pids = addprocs(manager; sockets)
+        @debug "calling addprocs_with_timeout from process_pending_connections"
+        pids = addprocs_with_timeout(manager; sockets)
+        @debug "done calling addprocs_with_timeout from process_pending_connections"
         empty!(sockets)
 
+        @debug "starting preempt loops" pids
         for pid in pids
             @async begin
                 wrkr = Distributed.map_pid_wrkr[pid]
@@ -593,7 +633,58 @@ function process_pending_connections()
                 end
             end
         end
-        pids
+        @debug "done starting preempt loops"
+    end
+end
+
+function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched_q)
+    # Distributed.create_worker also uses Distributed.worker_timeout, so we add a grace period
+    # to allow for the Distributed.create_worker to hit its timeout.
+    timeout = Distributed.worker_timeout() + 10
+    interrupted = false
+    local pid
+    try
+        tsk_create_worker = @async Distributed.create_worker(manager, wconfig)
+        tic = time()
+        while true
+            if istaskdone(tsk_create_worker)
+                pid = fetch(tsk_create_worker)
+                break
+            end
+            if time() - tic > timeout && !interrupted
+                @async Base.throwto(tsk_create_worker, InterruptException())
+                interrupted = true
+            end
+            sleep(1)
+        end
+    catch e
+        @warn "unable to create worker within $timeout seconds, adding vm to pending down list"
+        logerror(e, Logging.Warn)
+        u = wconfig.userdata
+        scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
+        add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
+        add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
+
+        #=
+        We don't rethrow the exception because we don't want addprocs_locked to throw.
+        Instead, we want it to add whatever machines are successfull, and ignore those
+        that are not.
+        =#
+        return
+    end
+    push!(launched_q, pid)
+
+    # When starting workers on remote multi-core hosts, `launch` can (optionally) start only one
+    # process on the remote machine, with a request to start additional workers of the
+    # same type. This is done by setting an appropriate value to `WorkerConfig.cnt`.
+    cnt = something(wconfig.count, 1)
+    if cnt === :auto
+        cnt = wconfig.environ[:cpu_threads]
+    end
+    cnt = cnt - 1   # Removing self from the requested number
+
+    if cnt > 0
+        launch_n_additional_processes(manager, pid, wconfig, cnt, launched_q)
     end
 end
 
@@ -780,6 +871,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
             logerror(e, Logging.Error)
         end
     end
+    notify(c)
 end
 
 function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
@@ -787,10 +879,8 @@ function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
     try
         _cookie = read(socket, Distributed.HDR_COOKIE_LEN)
     catch e
-        if manager.verbose > 0
-            @error "unable to read cookie from socket"
-            logerror(e, Logging.Error)
-        end
+        @error "unable to read cookie from socket"
+        logerror(e, Logging.Error)
         return
     end
 
@@ -800,12 +890,9 @@ function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
     local _connection_string
     try
         _connection_string = readline(socket)
-    catch
-        if manager.verbose > 0
-            @error "unable to read connection string from socket"
-            logerror(e, Logging.Error)
-        end
-        return
+    catch e
+        @error "unable to read connection string from socket"
+        throw(e)
     end
 
     connection_string = String(base64decode(_connection_string))
@@ -813,12 +900,9 @@ function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
     local vm
     try
         vm = JSON.parse(connection_string)
-    catch
-        if manager.verbose > 0
-            @error "unable to parse connection string, string=$connection_string, cookie=$cookie"
-            logerror(e, Logging.Error)
-        end
-        return
+    catch e
+        @error "unable to parse connection string, string=$connection_string, cookie=$cookie"
+        throw(e)
     end
 
     wconfig = WorkerConfig()
