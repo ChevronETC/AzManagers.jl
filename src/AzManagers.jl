@@ -187,6 +187,7 @@ mutable struct AzManager <: ClusterManager
     deleted::Dict{ScaleSet,Dict{String,DateTime}}
     pruned::Dict{ScaleSet,Set{String}}
     preempted::Dict{ScaleSet,Set{String}}
+    preempt_channel_futures::Dict{Int,Future}
     port::UInt16
     server::Sockets.TCPServer
     worker_socket::TCPSocket
@@ -219,6 +220,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
     _manager.pruned = Dict{ScaleSet,Set{String}}()
     _manager.preempted = Dict{ScaleSet,Set{String}}()
+    _manager.preempt_channel_futures = Dict{Int,Future}()
     _manager.scalesets = Dict{ScaleSet,Int}()
     _manager.task_add = @async add_pending_connections()
     _manager.task_process = @async process_pending_connections()
@@ -600,7 +602,8 @@ function process_pending_connections()
                 wrkr = Distributed.map_pid_wrkr[pid]
                 if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata) && lowercase(get(wrkr.config.userdata, "priority", "")) == "spot"
                     try
-                        remotecall_fetch(machine_preempt_loop, pid)
+                        manager.preempt_channel_futures[pid] = remotecall(Channel{Bool}, pid, 1)
+                        remotecall_fetch(machine_preempt_loop, pid, manager.preempt_channel_futures[pid])
                     catch e
                         if isa(e, RemoteException) && isa(e.captured.ex, TaskFailedException) && isa(e.captured.ex.task.result.ex, SpotPreemptException)
                             ex = e.captured.ex.task.result.ex
@@ -620,13 +623,16 @@ function process_pending_connections()
                             end
 
                             try
-                                @info "Removing preempted worker $pid from the Julia cluster"
-                                # We can't use rmprocs here since the worker process might already be gone due to preemption.  The
-                                # worker process would usually do the following two lines (see the Distributed.message_handler_loop function)
-                                Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
-                                Distributed.deregister_worker(pid)
+                                lock(Distributed.worker_lock)
+                                if haskey(Distributed.map_pid_wrkr, pid)
+                                    # We can't use rmprocs here since the worker process might already be gone due to preemption.  The
+                                    # worker process would usually do the following two lines (see the Distributed.message_handler_loop function)
+                                    Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
+                                    Distributed.deregister_worker(pid)
+                                end
                             catch
-                                @warn "unable to remove $pid"
+                            finally
+                                unlock(Distributed.worker_lock)
                             end
                         end
                     end
@@ -672,6 +678,7 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
         =#
         return
     end
+
     push!(launched_q, pid)
 
     # When starting workers on remote multi-core hosts, `launch` can (optionally) start only one
@@ -1196,9 +1203,10 @@ struct SpotPreemptException <: Exception
 end
 Base.showerror(io::IO, e::SpotPreemptException) = print(io, "spot preemption on process '$(e.clusterid)' ($(e.instanceid)), not before '$(e.notbefore)'")
 
-function machine_preempt_loop()
+function machine_preempt_loop(preempt_channel_future)
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
         tsk = @spawn_interactive begin
+            preempt_channel = fetch(preempt_channel_future)::Channel{Bool}
             instanceid = get_instanceid()
             clusterid = myid()
             @debug "starting preempt loop on $clusterid, $instanceid"
@@ -1206,6 +1214,9 @@ function machine_preempt_loop()
             while true
                 ispreempted, notbefore = preempted(instanceid, clusterid)
                 if ispreempted
+                    @debug "putting onto preempt_channel"
+                    put!(preempt_channel, true)
+                    @debug "done putting onto preempt_channel"
                     # pid=1 will catch this exception, and remove the worker from the Julia cluster.
                     throw(SpotPreemptException(instanceid, clusterid, notbefore))
                 end
@@ -1215,6 +1226,48 @@ function machine_preempt_loop()
         fetch(tsk)
     else
         @warn "AzManagers is not running the preempt loop for pid=$(myid()) since it requires at least one interactive thread on worker machines."
+    end
+end
+
+"""
+    f = machine_preempt_channel_future(pid)
+
+If it exists, return a Future for a Channel allocation on the process with id `pid`, and that is used to
+communicate VM preemptions on `pid`.  When a worker is preempted, a Bool is put onto the channel.  Thefore,
+code can detect when this happens and take appropriate action before the machine corresponding to `pid` is
+deleted.
+
+# Example
+```julia
+addproc2(template, 2; spot=true)
+
+f = machine_preempt_channel_future(workers()[1])
+
+remote_do(pid, f) do
+    c = fetch(f)::Channel{Bool}
+    while true
+        if isready(c)
+            @info "the VM is being preempted"
+            break
+        end
+        sleep(1)
+    end
+end
+```
+"""
+function machine_preempt_channel_future(pid)
+    manager = azmanager()
+    timeout = parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "60"))
+    tic = time()
+    while true
+        if haskey(manager.preempt_channel_futures, pid)
+            return manager.preempt_channel_futures[pid]
+        end
+        if time() - tic > timeout
+            @warn "unble to obtain preemption channel from worker $pid in $timeout seconds"
+            return nothing
+        end
+        sleep(1)
     end
 end
 
@@ -3406,6 +3459,6 @@ function Base.kill(job::DetachedJob)
         "http://$(job.vm["ip"]):$(job.vm["port"])/cofii/detached/job/$(job.id)/kill")
 end
 
-export AzManager, DetachedJob, addproc, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
+export AzManager, DetachedJob, addproc, machine_preempt_channel_future, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
 
 end
