@@ -143,6 +143,9 @@ function build_sstemplate(name;
                             "disablePasswordAuthentication" => true
                         )
                     ),
+                    "securityProfile" => Dict(
+                        "encryptionAtHost" => true
+                    ),
                     "networkProfile" => Dict(
                         "networkInterfaceConfigurations" => [
                             Dict(
@@ -346,6 +349,9 @@ function build_vmtemplate(name;
                         ),
                         "disablePasswordAuthentication" => true
                     )
+                ),
+                "securityProfile" => Dict(
+                    "encryptionAtHost" => true
                 ),
                 "networkProfile" => Dict(
                     "networkInterfaces" => [
