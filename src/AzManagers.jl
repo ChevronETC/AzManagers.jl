@@ -2994,7 +2994,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     r = @retry nretry azrequest(
         "PUT",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2019-07-01",
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2023-09-01",
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"],
         String(json(vm_template["value"])))
 
