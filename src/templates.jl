@@ -52,6 +52,7 @@ to the `~/.azmanagers` folder.
 * `datadisks=[]` list of data disks to create and attach [1]
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch; ln -s /mnt/scratch /scratch"` cloud-init commands used to mount or link to temporary disk
 * `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
+* `encryption_at_host = false` Optional argument for enabling encryption at host
 
 # Notes
 [1] Each datadisk is a Dictionary. For example,
@@ -82,7 +83,8 @@ function build_sstemplate(name;
         datadisks=[],
         tempdisk="sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         skuname,
-        tags=Dict())
+        tags=Dict(),
+        encryption_at_host=false)
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
@@ -142,6 +144,9 @@ function build_sstemplate(name;
                                 ),
                             "disablePasswordAuthentication" => true
                         )
+                    ),
+                    "securityProfile" => Dict(
+                        "encryptionAtHost" => encryption_at_host
                     ),
                     "networkProfile" => Dict(
                         "networkInterfaceConfigurations" => [
@@ -266,7 +271,8 @@ or written to AzManagers.jl configuration files.
 * `osdisksize = 60` size in GB of the OS disk
 * `datadisks=[]` additional data disks to attach
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"`  cloud-init commands used to mount or link to temporary disk
-# `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
+* `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
+* `encryption_at_host = false` Optional argument for enabling encryption at host
 
 # Notes
 [1] Each datadisk is a Dictionary. For example,
@@ -291,7 +297,8 @@ function build_vmtemplate(name;
         datadisks = [],
         tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         nicname = "cbox-nic",
-        tags = Dict())
+        tags = Dict(),
+        encryption_at_host=false)
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
@@ -346,6 +353,9 @@ function build_vmtemplate(name;
                         ),
                         "disablePasswordAuthentication" => true
                     )
+                ),
+                "securityProfile" => Dict(
+                    "encryptionAtHost" => encryption_at_host
                 ),
                 "networkProfile" => Dict(
                     "networkInterfaces" => [
