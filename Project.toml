@@ -1,7 +1,7 @@
 name = "AzManagers"
 uuid = "db05ebb0-6096-11e9-199b-87b703361841"
 authors = ["samtkaplan <sam.kaplan@chevron.com>"]
-version = "3.8.2"
+version = "3.9.0"
 
 [deps]
 AzSessions = "f239b30d-ae6b-58be-a2d5-7e9f30e280a9"
