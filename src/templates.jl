@@ -83,7 +83,7 @@ function build_sstemplate(name;
         tempdisk="sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         skuname,
         tags=Dict(),
-        encryptionAtHost=true)
+        encryption_at_host=false)
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
@@ -145,7 +145,7 @@ function build_sstemplate(name;
                         )
                     ),
                     "securityProfile" => Dict(
-                        "encryptionAtHost" => encryptionAtHost
+                        "encryptionAtHost" => encryption_at_host
                     ),
                     "networkProfile" => Dict(
                         "networkInterfaceConfigurations" => [
@@ -296,7 +296,7 @@ function build_vmtemplate(name;
         tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         nicname = "cbox-nic",
         tags = Dict(),
-        encryptionAtHost=true)
+        encryption_at_host=false)
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
@@ -353,7 +353,7 @@ function build_vmtemplate(name;
                     )
                 ),
                 "securityProfile" => Dict(
-                    "encryptionAtHost" => encryptionAtHost
+                    "encryptionAtHost" => encryption_at_host
                 ),
                 "networkProfile" => Dict(
                     "networkInterfaces" => [
