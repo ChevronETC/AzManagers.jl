@@ -52,6 +52,7 @@ to the `~/.azmanagers` folder.
 * `datadisks=[]` list of data disks to create and attach [1]
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch; ln -s /mnt/scratch /scratch"` cloud-init commands used to mount or link to temporary disk
 * `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
+* `encryption_at_host = false` Optional argument for enabling encryption at host
 
 # Notes
 [1] Each datadisk is a Dictionary. For example,
@@ -270,7 +271,8 @@ or written to AzManagers.jl configuration files.
 * `osdisksize = 60` size in GB of the OS disk
 * `datadisks=[]` additional data disks to attach
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"`  cloud-init commands used to mount or link to temporary disk
-# `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
+* `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
+* `encryption_at_host = false` Optional argument for enabling encryption at host
 
 # Notes
 [1] Each datadisk is a Dictionary. For example,

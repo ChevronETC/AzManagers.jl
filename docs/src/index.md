@@ -55,7 +55,8 @@ myscaleset = AzManagers.build_sstemplate("myvm",
     subnet               = "my-vnets-subnet",
     imagegallery         = "my-image-gallery",
     imagename            = "my-image-name",
-    skuname              = "Standard_D2s_v3")
+    skuname              = "Standard_D2s_v3",
+    encryption_at_host   = false)
 AzManagers.save_template_scaleset("myscaleset", myscaleset)
 ```
 The above code will save the template to the json file, `~/.azmanagers/templates_scaleset.json`.
