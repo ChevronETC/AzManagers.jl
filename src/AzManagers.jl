@@ -3270,6 +3270,10 @@ function loguri(job::DetachedJob)
     job.logurl
 end
 
+struct DetachedServiceTimeoutException <: Exception
+    vm
+end
+
 function detached_service_wait(vm, custom_environment)
     timeout = Distributed.worker_timeout()
     starttime = time()
@@ -3290,7 +3294,8 @@ function detached_service_wait(vm, custom_environment)
         elapsed_time = time() - starttime
 
         if elapsed_time > timeout
-            error("reached timeout ($timeout seconds) while waiting for $waitfor to start.")
+            @error "reached timeout ($timeout seconds) while waiting for $waitfor to start."
+            throw(DetachedServiceTimeoutException(vm))
         end
         
         write(stdout, spin(spincount, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
