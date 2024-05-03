@@ -2932,7 +2932,7 @@ Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` w
 # Notes
 [1] Interactive threads are supported beginning in version 1.9 of Julia.  For earlier versions, the default for `julia_num_threads` is `Threads.nthreads()`.
 """
-function addproc(vm_template::Dict, nic_template=nothing;
+function addproc(_vm_template::Dict, _nic_template=nothing;
         name = "",
         basename = "cbox",
         user = "",
@@ -2951,6 +2951,9 @@ function addproc(vm_template::Dict, nic_template=nothing;
         omp_num_threads = parse(Int, get(ENV, "OMP_NUM_THREADS", "1")),
         env = Dict(),
         detachedservice = true)
+    vm_template = deepcopy(_vm_template)
+    nic_template = deepcopy(_nic_template)
+
     load_manifest()
     subscriptionid == "" && (subscriptionid = get(vm_template, "subscriptionid", _manifest["subscriptionid"]))
     resourcegroup == "" && (resourcegroup = get(vm_template, "resourcegroup", _manifest["resourcegroup"]))
