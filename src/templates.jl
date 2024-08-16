@@ -52,6 +52,9 @@ to the `~/.azmanagers` folder.
 * `datadisks=[]` list of data disks to create and attach [1]
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch; ln -s /mnt/scratch /scratch"` cloud-init commands used to mount or link to temporary disk
 * `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
+* `cores = nothing` Optional integer parameter to record the number physical cores on the machine[3]
+* `numadomains = nothing` Optional integer prameter to record the number of numa domains on the machine[3]
+* `localstorage = nothing` Optional list of expected local storage mount points and their capacity[2,3]
 * `encryption_at_host = false` Optional argument for enabling encryption at host
 
 # Notes
@@ -65,6 +68,13 @@ Dict("diskSizeGB"=>1023)
 ```
 The above example is populated with the default options.  So, if `datadisks=[Dict()]`, then the default options
 will be included.
+
+[2] Each local storage mount point is a dictionary.  For example,
+```julia
+Dict("mountpoint"=>"/scratch", "diskSizeGB"=>800)
+```
+
+[3] This does not effect the deployment, but is just informative.
 """
 function build_sstemplate(name;
         subscriptionid,
@@ -84,6 +94,9 @@ function build_sstemplate(name;
         tempdisk="sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         skuname,
         tags=Dict(),
+        cores=nothing,
+        numadomains=nothing,
+        localstorage=nothing,
         encryption_at_host=false)
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
@@ -178,6 +191,19 @@ function build_sstemplate(name;
     if !isempty(tags)
         template["value"]["tags"] = tags
     end
+
+    if cores !== nothing
+        template["cores"] = cores
+    end
+
+    if numadomains !== nothing
+        template["numadomains"] = numadomains
+    end
+
+    if localstorage !== nothing
+        template["localstorage"] = localstorage
+    end
+
     template
 end
 
@@ -272,6 +298,9 @@ or written to AzManagers.jl configuration files.
 * `datadisks=[]` additional data disks to attach
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"`  cloud-init commands used to mount or link to temporary disk
 * `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
+* `cores = nothing` Optional integer parameter to record the number physical cores on the machine[3]
+* `numadomains = nothing` Optional integer prameter to record the number of numa domains on the machine[3]
+* `localstorage = nothing` Optional list of expected local storage mount points and their capacity[2,3]
 * `encryption_at_host = false` Optional argument for enabling encryption at host
 
 # Notes
@@ -281,6 +310,13 @@ Dict("createOption"=>"Empty", "diskSizeGB"=>1023, "managedDisk"=>Dict("storageAc
 ```
 The above example is populated with the default options.  So, if `datadisks=[Dict()]`, then the default options
 will be included.
+
+[2] Each local storage mount point is a dictionary.  For example,
+```julia
+Dict("mountpoint"=>"/scratch", "diskSizeGB"=>800)
+```
+
+[3] This does not effect the deployment, but is just informative.
 """
 function build_vmtemplate(name;
         subscriptionid,
@@ -298,6 +334,9 @@ function build_vmtemplate(name;
         tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         nicname = "cbox-nic",
         tags = Dict(),
+        cores = nothing,
+        numadomains = nothing,
+        localstorage = nothing,
         encryption_at_host=false)
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
@@ -373,6 +412,19 @@ function build_vmtemplate(name;
     if !isempty(tags)
         template["value"]["tags"] = tags
     end
+
+    if cores !== nothing
+        template["cores"] = cores
+    end
+
+    if numadomains !== nothing
+        template["numadomains"] = numadomains
+    end
+
+    if localstorage !== nothing
+        template["localstorage"] = localstorage
+    end
+
     template
 end
 
