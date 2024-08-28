@@ -1292,6 +1292,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
 
     _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false)
     r = JSON.parse(String(_r.body))
+
     vm = Dict(
         "exeflags" => exeflags,
         "bind_addr" => string(getipaddr(IPv4)),
@@ -2510,11 +2511,165 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
         String(json(_template)))
 
+
+
+    @info "waiting for PUT request to finish.."
+    sleep(10) # sleep to avoid throttling
+
+    # wait for provisioning state to exit a created state
+    ss_r = @retry nretry azrequest(
+            "GET",
+            verbose,
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
+            ["Authorization" => "Bearer $(token(manager.session))"]
+        )
+    ss_json = JSON.parse(String(ss_r.body))
+    prov_state = ss_json["properties"]["provisioningState"]
+
+    try
+        while prov_state == "Creating"
+            sleep(10)
+            ss_r = @retry nretry azrequest(
+                "GET",
+                verbose,
+                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
+                ["Authorization" => "Bearer $(token(manager.session))"]
+            )
+            ss_json = JSON.parse(String(ss_r.body))
+            prov_state = ss_json["properties"]["provisioningState"] 
+        end
+    catch e
+        @error "Failed to get scaleset status $e"
+    end
+
+    # If failed remove and redeploy
+    if prov_state == "Failed"
+        @warn "$scalesetname failed to provision!"
+        @info "Removing $scalesetname and attempting to redeploy..."
+
+        # directly call delete scaleset as it never 
+        rmgroup(
+            manager,
+            subscriptionid,
+            resourcegroup,
+            scalesetname
+        )
+
+        # wait for the scaleset to delete
+        try
+            _r = @retry nretry azrequest(
+                "GET",
+                verbose,
+                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
+                ["Authorization" => "Bearer $(token(manager.session))"]
+            )
+            status_code = _r.status 
+            while status_code == 200
+                sleep(10)
+                _r = @retry nretry azrequest(
+                    "GET",
+                    verbose,
+                    "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
+                    ["Authorization" => "Bearer $(token(manager.session))"]
+                )
+                status_code = _r.status
+            end
+        catch e 
+            @debug "$e"
+        end
+
+        # add zones and try to redeploy
+        can_redeploy = true
+        if !haskey(_template, "zones")
+            _template["zones"] = ["1"]
+            @info "Attempting Zone 1"
+        else
+            if _template["zones"] ==  ["1"]
+                _template["zones"] = ["2"]
+                @info "Attempting Zone 2"
+            elseif _template["zones"] == ["2"]
+                _template["zones"] = ["3"]
+                @info "Attempting Zone 3"
+            else
+                @warn "Failed to create in any zones [1, 2, 3], Deleting $scalesetname"
+                can_redeploy = false 
+                rmgroup(
+                    manager,
+                    subscriptionid,
+                    resourcegroup,
+                    scalesetname
+                )
+            end
+        end
+        if can_redeploy
+            t = deepcopy(template)
+            t["value"] = _template
+            scaleset_create_or_update(
+                manager,
+                user,
+                subscriptionid,
+                resourcegroup,
+                scalesetname,
+                sigimagename,
+                sigimageversion,
+                imagename,
+                osdisksize,
+                nretry,
+                t,
+                δn,
+                ppi,
+                mpi_ranks_per_worker,
+                mpi_flags,
+                nvidia_enable_ecc,
+                nvidia_enable_mig,
+                hyperthreading,
+                julia_num_threads,
+                omp_num_threads,
+                exeflags,
+                env,
+                spot,
+                maxprice,
+                spot_base_regular_priority_count,
+                spot_regular_percentage_above_base,
+                verbose,
+                custom_environment,
+                overprovision
+            )
+        end
+    end
+
     if manager.show_quota
         @info "Quota after requesting that the scale-set is created or grows" remaining_resource(_r)
     end
 
     n
+end
+
+
+function get_scaleset_provision_state(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
+    _r = @retry nretry azrequest(
+        "GET",
+        verbose,
+        "https://management.azure.com/subscription/$subscriptionid/resourceGroup/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
+        ["Authorization" => "Bearer $(token(manager.session))"]
+    )
+    r_dict = JSON.parse(String(_r.body))
+    if haskey(r_dict["properties"], "provisioningState")
+        prov_state = r_dict["properties"]["provisioningState"]
+    else
+        prov_state = nothing
+    end
+
+    return prov_state
+end
+
+function provision_scaleset(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose, template)
+    _r = @retry nretry azrequest(
+        "PUT",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
+        ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
+        String(json(template)))
 end
 
 function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, ids, nretry, verbose)
