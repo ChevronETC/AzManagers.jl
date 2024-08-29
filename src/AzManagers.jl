@@ -2513,7 +2513,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
 
 
 
-    @info "waiting for PUT request to finish.."
+    @info "waiting for create request to finish.."
     sleep(10) # sleep to avoid throttling
 
     # wait for provisioning state to exit a created state
@@ -2544,10 +2544,9 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
 
     # If failed remove and redeploy
     if prov_state == "Failed"
-        @warn "$scalesetname failed to provision!"
-        @info "Removing $scalesetname and attempting to redeploy..."
+        @warn "$scalesetname failed to provision! Removing.."
 
-        # directly call delete scaleset as it never 
+        # directly call delete scaleset as it never joins the cluster
         rmgroup(
             manager,
             subscriptionid,
@@ -2582,16 +2581,21 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         can_redeploy = true
         if !haskey(_template, "zones")
             _template["zones"] = ["1"]
-            @info "Attempting Zone 1"
+            @info "Attempting to redeploy to Zone 1"
         else
             if _template["zones"] ==  ["1"]
                 _template["zones"] = ["2"]
-                @info "Attempting Zone 2"
+                @info "Attempting to redeploy to Zone 2"
             elseif _template["zones"] == ["2"]
                 _template["zones"] = ["3"]
-                @info "Attempting Zone 3"
+                @info "Attempting to redeploy to Zone 3"
+            # Alot of other stuff with changing regions 
+            # elseif _template["zones"] == ["3"] && _template["location"] == "southcentralus"
+            #     delete!(_template, "zones")
+            #     _template["location"] = "eastus2"
+            #     @info "Attempting to redeploy in eastus2"
             else
-                @warn "Failed to create in any zones [1, 2, 3], Deleting $scalesetname"
+                @warn "Failed to create in any zones [1, 2, 3]. Deleting $scalesetname.."
                 can_redeploy = false 
                 rmgroup(
                     manager,
@@ -2643,33 +2647,6 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     end
 
     n
-end
-
-
-function get_scaleset_provision_state(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
-    _r = @retry nretry azrequest(
-        "GET",
-        verbose,
-        "https://management.azure.com/subscription/$subscriptionid/resourceGroup/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
-        ["Authorization" => "Bearer $(token(manager.session))"]
-    )
-    r_dict = JSON.parse(String(_r.body))
-    if haskey(r_dict["properties"], "provisioningState")
-        prov_state = r_dict["properties"]["provisioningState"]
-    else
-        prov_state = nothing
-    end
-
-    return prov_state
-end
-
-function provision_scaleset(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose, template)
-    _r = @retry nretry azrequest(
-        "PUT",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
-        ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
-        String(json(template)))
 end
 
 function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, ids, nretry, verbose)

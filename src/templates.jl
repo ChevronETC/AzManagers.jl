@@ -114,11 +114,6 @@ function build_sstemplate(name;
                 "name" => skuname
             ),
             "location" => location,
-            "zones": [
-                "1",
-                "2",
-                "3"
-            ],
             "properties" => Dict(
                 "overprovision" => true,
                 "singlePlacementGroup" => false,
