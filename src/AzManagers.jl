@@ -1016,7 +1016,7 @@ end
     nworkers_provisioned([service=false])
 
 Count of the number of scale-set machines that are provisioned
-regardless if their status within the Julia cluster.  If `service=true`,
+regardless of their status within the Julia cluster.  If `service=true`,
 then we use the Azure scale-set service to make the count, otherwise
 we use client side book-keeeping.  The later is useful to avoid making
 too many requests to the Azure scale-set service, causing it to throttle
@@ -1859,7 +1859,21 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
         export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
-        $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+
+        attempt_number=1
+        maximum_attempts=5
+        exit_code=0
+        while [  \$attempt_number -le \$maximum_attempts ]; do
+            $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+
+            exit_code=\$?
+            echo "attempt \$attempt_number is done with exit code \$exit_code. trying again after sleeping for 5 seconds..."
+            sleep 5
+            attempt_number=\$(( attempt_number + 1 ))
+
+            echo "the worker startup was tried \$attempt_number times."
+        done
+        echo "the worker has finished running with exit code \$exit_code."
         EOF
         """
     else
@@ -1869,8 +1883,23 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
         export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
+
         $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
-        mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+
+        attempt_number=1
+        maximum_attempts=5
+        exit_code=0
+        while [  \$attempt_number -le \$maximum_attempts ]; do
+            mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+
+            exit_code=\$?
+            echo "attempt \$attempt_number is done with exit code \$exit_code. trying again after sleeping for 5 seconds..."
+            sleep 5
+            attempt_number=\$(( attempt_number + 1 ))
+
+            echo "the worker startup was tried \$attempt_number times."
+        done
+        echo "the worker has finished running with exit code \$exit_code."
         EOF
         """
     end
