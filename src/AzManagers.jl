@@ -2798,6 +2798,19 @@ function addproc(vm_template::Dict, nic_template=nothing;
 
     vm_template["value"]["properties"]["osProfile"]["customData"] = _cmd
 
+    # When the VM is deleted, auto-delete attached nic's and disks.
+    vm_template["value"]["properties"]["storageProfile"]["osDisk"]["deleteOption"] = "Delete"
+    for network_interface in get(vm_template["value"]["properties"]["networkProfile"], "networkInterfaces", [])
+        if !haskey(network_interface, "properties")
+            network_interface["properties"] = Dict()
+        end
+        network_interface["properties"]["deleteOption"] = "Delete"
+    end
+
+    for attached_disk in get(vm_template["value"]["properties"]["storageProfile"], "dataDisks", [])
+        attached_disk["deleteOption"] = "Delete"
+    end
+
     # vm quota check
     @debug "quota check"
     while true
@@ -2908,17 +2921,6 @@ function rmproc(vm;
 
     manager = azmanager!(session, "", nretry, verbose, false, show_quota)
 
-    _r = @retry nretry azrequest(
-        "GET",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?\$expand=instanceView&api-version=2022-11-01",
-        ["Authorization"=>"Bearer $(token(session))"])
-
-    r = JSON.parse(String(_r.body))
-
-    osdisk = r["properties"]["storageProfile"]["osDisk"]["name"]
-    datadisks = [datadisk["name"] for datadisk in r["properties"]["storageProfile"]["dataDisks"]]
-
     r = @retry nretry azrequest(
         "DELETE",
         verbose,
@@ -2968,27 +2970,6 @@ function rmproc(vm;
     write(stdout, spin(5, elapsed_time)*", waiting for VM, $vmname, to delete.\r")
     write(stdout, "\n")
 
-    @retry nretry azrequest(
-        "DELETE",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/disks/$osdisk?api-version=2021-12-01",
-        ["Authorization" => "Bearer $(token(session))"])
-
-    for datadisk in datadisks
-        @retry nretry azrequest(
-            "DELETE",
-            verbose,
-            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/disks/$datadisk?api-version=2021-12-01",
-            ["Authorization" => "Bearer $(token(session))"])
-    end
-
-    nicname = vmname*"-nic"
-
-    @retry nretry azrequest(
-        "DELETE",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2022-09-01",
-        ["Authorization"=>"Bearer $(token(session))"])
     nothing
 end
 
