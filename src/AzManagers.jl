@@ -691,7 +691,7 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
     cnt = cnt - 1   # Removing self from the requested number
 
     if cnt > 0
-        launch_n_additional_processes(manager, pid, wconfig, cnt, launched_q)
+        Distributed.launch_n_additional_processes(manager, pid, wconfig, cnt, launched_q)
     end
 end
 
