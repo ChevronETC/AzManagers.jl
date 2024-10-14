@@ -985,7 +985,7 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     end
 
     try
-        remote_do(exit, id)
+        remote_do(exit, id, 42)
     catch
     end
     @debug "kill, done remote_do"
@@ -1762,7 +1762,7 @@ end
 
 function buildstartupscript(manager::AzManager, exename::String, user::String, disk::AbstractString, custom_environment::Bool)
     cmd = """
-    #!/bin/sh
+    #!/bin/bash
     $disk
     sed -i 's/ scripts-user/ [scripts-user, always]/g' /etc/cloud/cloud.cfg
     """
@@ -1771,7 +1771,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
         gitconfig = read(joinpath(homedir(), ".gitconfig"), String)
         cmd *= """
         
-        sudo su - $user << EOF
+        sudo -u $user bash << EOF
         echo '$gitconfig' > ~/.gitconfig
         EOF
         """
@@ -1780,7 +1780,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
         gitcredentials = rstrip(read(joinpath(homedir(), ".git-credentials"), String), [' ','\n'])
         cmd *= """
         
-        sudo su - $user << EOF
+        sudo -u $user bash << EOF
         echo "$gitcredentials" > ~/.git-credentials
         chmod 600 ~/.git-credentials
         EOF
@@ -1803,7 +1803,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
 
             cmd *= """
             
-            sudo su - $user <<'EOF'
+            sudo -u $user bash << 'EOF'
             $exename -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$localpreferences_compressed", "$remote_julia_environment_name")'
             $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.Registry.update(); Pkg.activate(path); (retry(Pkg.instantiate))(); Pkg.precompile()'
             EOF
@@ -1855,7 +1855,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
     if mpi_ranks_per_worker == 0
         cmd *= """
 
-        sudo su - $user <<EOF
+        sudo -u $user bash << 'EOF'
         export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
@@ -1867,7 +1867,14 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
             $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
 
             exit_code=\$?
-            echo "attempt \$attempt_number is done with exit code \$exit_code. trying again after sleeping for 5 seconds..."
+            echo "attempt \$attempt_number is done with exit code \$exit_code..."
+
+            if [ "\$exit_code" == "42" ]; then
+                echo "...breaking from retry loop due to exit code 42."
+                break
+            fi
+
+            echo "...trying again after sleeping for 5 seconds..."
             sleep 5
             attempt_number=\$(( attempt_number + 1 ))
 
@@ -1879,7 +1886,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
     else
         cmd *= """
 
-        sudo su - $user <<EOF
+        sudo -u $user bash << 'EOF'
         export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
@@ -1893,7 +1900,14 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
             mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
 
             exit_code=\$?
-            echo "attempt \$attempt_number is done with exit code \$exit_code. trying again after sleeping for 5 seconds..."
+            echo "attempt \$attempt_number is done with exit code \$exit_code...."
+
+            if [ "\$exit_code" == "42" ]; then
+                echo "...breaking from retry loop due to exit code 42."
+                break
+            fi
+
+            echo "...trying again after sleeping for 5 seconds..."
             sleep 5
             attempt_number=\$(( attempt_number + 1 ))
 
@@ -1917,7 +1931,7 @@ function buildstartupscript_detached(manager::AzManager, exename::String, julia_
 
     cmd *= """
 
-    sudo su - $user <<EOF
+    sudo -u $user bash << EOF
     $envstring
     export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
     export OMP_NUM_THREADS=$omp_num_threads
