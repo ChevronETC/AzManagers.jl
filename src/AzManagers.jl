@@ -1771,7 +1771,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
         gitconfig = read(joinpath(homedir(), ".gitconfig"), String)
         cmd *= """
         
-        sudo -u $user bash << EOF
+        sudo su - $user << EOF
         echo '$gitconfig' > ~/.gitconfig
         EOF
         """
@@ -1780,7 +1780,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
         gitcredentials = rstrip(read(joinpath(homedir(), ".git-credentials"), String), [' ','\n'])
         cmd *= """
         
-        sudo -u $user bash << EOF
+        sudo su - $user << EOF
         echo "$gitcredentials" > ~/.git-credentials
         chmod 600 ~/.git-credentials
         EOF
@@ -1803,7 +1803,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
 
             cmd *= """
             
-            sudo -u $user bash << 'EOF'
+            sudo su - $user << 'EOF'
             $exename -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$localpreferences_compressed", "$remote_julia_environment_name")'
             $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.Registry.update(); Pkg.activate(path); (retry(Pkg.instantiate))(); Pkg.precompile()'
             EOF
@@ -1855,7 +1855,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
     if mpi_ranks_per_worker == 0
         cmd *= """
 
-        sudo -u $user bash << 'EOF'
+        sudo su - $user << 'EOF'
         export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
@@ -1886,7 +1886,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
     else
         cmd *= """
 
-        sudo -u $user bash << 'EOF'
+        sudo su - $user << 'EOF'
         export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
         export OMP_NUM_THREADS=$omp_num_threads
         $envstring
@@ -1931,7 +1931,7 @@ function buildstartupscript_detached(manager::AzManager, exename::String, julia_
 
     cmd *= """
 
-    sudo -u $user bash << EOF
+    sudo su - $user << EOF
     $envstring
     export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
     export OMP_NUM_THREADS=$omp_num_threads
