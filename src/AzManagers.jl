@@ -2212,7 +2212,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     _cmd = base64encode(cmd)
 
     if length(_cmd) > 64_000
-        error("cloud init custom data is too large. custom data is $(length_cmd) long, but cloud init limit is 64,000")
+        error("cloud init custom data is too large. custom data is $(length(cmd)) long, but cloud init limit is 64,000")
     end
 
     if overprovision
