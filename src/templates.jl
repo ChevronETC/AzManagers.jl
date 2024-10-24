@@ -103,7 +103,7 @@ function build_sstemplate(name;
         end
     end
 
-    template = Dict(
+    template = Dict{Any,Any}(
         "subscriptionid" => subscriptionid,
         "resourcegroup" => resourcegroup,
         "tempdisk" => tempdisk,
