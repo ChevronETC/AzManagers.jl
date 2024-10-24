@@ -2424,8 +2424,19 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         _template["tags"]["UserUniqueName"] = _user
     end
 
+    # on failure, same ssh key is being pushed to the template. This also checks if keydata is the same incase other keys need to be added
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
-    push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
+    if length(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"]) > 0
+        for kd in _template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"]
+            for (k,v) in kd
+                if k == "keyData" && !(v == key["keyData"])
+                    push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
+                end
+            end
+        end
+    else
+        push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
+    end
     
     cmd = buildstartupscript_cluster(manager, spot, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, exeflags, env, user, template["tempdisk"], custom_environment)
     _cmd = base64encode(cmd)
@@ -2589,13 +2600,48 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
             elseif _template["zones"] == ["2"]
                 _template["zones"] = ["3"]
                 @info "Attempting to redeploy to Zone 3"
-            # Alot of other stuff with changing regions 
-            # elseif _template["zones"] == ["3"] && _template["location"] == "southcentralus"
-            #     delete!(_template, "zones")
-            #     _template["location"] = "eastus2"
-            #     @info "Attempting to redeploy in eastus2"
+            # Not sure if this is redundant or not since zones 1 or 2 or 3 would have failed 
+            # zones [1 and 2] or [1 and 3] or [2 and 3] or [1 and 2 and 3] in theory would also fail 
+            elseif _template["zones"] == ["3"]
+                _template["zones"] = ["1", "2"]
+                @info "Attempting to redeplopy to Zones 1 and 2"
+            elseif _template["zones"] == ["1", "2"]
+                _template["zones"] = ["1", "3"]
+                @info "Attempting to redeploy to Zones 1 and 3"
+            elseif _template["zones"] == ["1", "3"]
+                _template["zones"] = ["2", "3"]
+                @info "Attempting to redeploy to Zones 2 and 3"
+            elseif _template["zones"] == ["2", "3"]
+                _template["zones"] = ["1", "2", "3"]
+                @info "Attempting to redeploy to Zones 1, 2, and 3"
+            # hardcode eastus for now, probably want another kwarg in addprocs for alternate region
+            elseif length(_template["zones"]) == 3 && _template["location"] == "southcentralus"
+                @info "Attempting to redeploy in eastus"
+                nic_templates = JSON.parse(read(templates_filename_nic(), String))
+                # needs to be an easier way to lookup vnet id
+                nic_cfg = nic_templates["use1/t107/nic"]
+                _template["zones"] = []
+                _template["location"] = "eastus"
+                _template["properties"]["virtualMachineProfile"]["networkProfile"]["networkInterfaceConfigurations"] = [
+                    Dict(
+                        "name" => scalesetname,
+                        "properties" => Dict(
+                            "primary" => true,
+                            "ipConfigurations" => [
+                                Dict(
+                                    "name" => "$scalesetname-ipconfig",
+                                    "properties" => Dict(
+                                        "subnet" => Dict(
+                                            "id" => getindex(nic_cfg["properties"]["ipConfigurations"], 1)["properties"]["subnet"]["id"]
+                                        )
+                                    )
+                                )
+                            ]
+                        )
+                    )
+                ]
             else
-                @warn "Failed to create in any zones [1, 2, 3]. Deleting $scalesetname.."
+                @warn "Failed to create in any zones [1, 2, 3] as well as in region eastus. Deleting $scalesetname.."
                 can_redeploy = false 
                 rmgroup(
                     manager,
