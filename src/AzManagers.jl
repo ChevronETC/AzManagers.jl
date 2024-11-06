@@ -2020,7 +2020,7 @@ end
 function buildstartupscript_detached(manager::AzManager, exename::String, julia_num_threads::String, omp_num_threads::Int, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool, subscriptionid, resourcegroup, vmname, use_lvm::Bool)
 
-    shell_cmds, remote_julia_environment_name = buildstartupscript(manager, exename, user, disk, custom_environment)
+    shell_cmds, remote_julia_environment_name = buildstartupscript(manager, exename, user, disk, custom_environment, use_lvm)
 
     envstring = build_envstring(env)
 
