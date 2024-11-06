@@ -780,6 +780,7 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `nvidia_enable_ecc=true` on NVIDIA machines, ensure that ECC is set to `true` or `false` for all GPUs[5]
 * `nvidia_enable_mig=false` on NVIDIA machines, ensure that MIG is set to `true` or `false` for all GPUs[5]
 * `hyperthreading=nothing` Turn on/off hyperthreading on supported machine sizes.  The default uses the setting in the template.  To override the template setting, use `true` (on) or `false` (off).
+* `use_lvm=false` For SKUs that have 1 or more nvme disks, combines all disks as a single mount point /scratch vs /scratch, /scratch1, /scratch2, etc..
 
 # Notes
 [1] If `addprocs` is called from an Azure VM, then the default `imagename`,`imageversion` are the
@@ -2842,7 +2843,7 @@ Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` w
 * `exename="\$(Sys.BINDIR)/julia"` name of the julia executable.
 * `env=Dict()` Dictionary of environemnt variables that will be exported before starting the detached process
 * `detachedservice=true` start the detached service allowing for RESTful remote code execution
-
+* `use_lvm=false` For SKUs that have 1 or more nvme disks, combines all disks as a single mount point /scratch vs /scratch, /scratch1, /scratch2, etc..
 # Notes
 [1] Interactive threads are supported beginning in version 1.9 of Julia.  For earlier versions, the default for `julia_num_threads` is `Threads.nthreads()`.
 """
