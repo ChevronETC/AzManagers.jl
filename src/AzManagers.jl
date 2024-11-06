@@ -2920,7 +2920,8 @@ function addproc(vm_template::Dict, nic_template=nothing;
     nic_r = @retry nretry azrequest(
         "GET",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2024-03-01"
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2024-03-01",
+        ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"]
     )
     nic_dic = JSON.parse(String(nic_r.body))
     nic_state = nic_dic["properties"]["provisioningState"]
@@ -2930,7 +2931,8 @@ function addproc(vm_template::Dict, nic_template=nothing;
             nic_r = @retry nretry azrequest(
                 "GET",
                 verbose,
-                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2024-03-01"
+                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2024-03-01",
+                ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"]
             )
             nic_dic = JSON.parse(String(nic_r.body))
             nic_state = nic_dic["properties"]["provisioningState"]
