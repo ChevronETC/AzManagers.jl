@@ -2865,7 +2865,8 @@ function addproc(vm_template::Dict, nic_template=nothing;
         omp_num_threads = parse(Int, get(ENV, "OMP_NUM_THREADS", "1")),
         exename = "$(Sys.BINDIR)/julia",
         env = Dict(),
-        detachedservice = true)
+        detachedservice = true,
+        use_lvm = false)
     load_manifest()
     subscriptionid == "" && (subscriptionid = get(vm_template, "subscriptionid", _manifest["subscriptionid"]))
     resourcegroup == "" && (resourcegroup = get(vm_template, "resourcegroup", _manifest["resourcegroup"]))
@@ -2930,9 +2931,9 @@ function addproc(vm_template::Dict, nic_template=nothing;
     local cmd
     if detachedservice
         cmd = buildstartupscript_detached(manager, exename, nthreads_filter(julia_num_threads), omp_num_threads, env, user,
-            disk, customenv, subscriptionid, resourcegroup, vmname)
+            disk, customenv, subscriptionid, resourcegroup, vmname, use_lvm)
     else
-        cmd,_ = buildstartupscript(manager, exename, user, disk, customenv)
+        cmd,_ = buildstartupscript(manager, exename, user, disk, customenv, use_lvm)
     end
     
     _cmd = base64encode(cmd)
