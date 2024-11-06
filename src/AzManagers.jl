@@ -1500,7 +1500,7 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
 
     # get machines' metadata
     t = @async begin
-        r = @retry manager.nretry HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute/storageProfile/imageReference?api-version=2021-02-01", ["Metadata"=>"true"]; retry=true, redirect=false)
+        r = @retry manager.nretry HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute/storageProfile/imageReference?api-version=2021-02-01", ["Metadata"=>"true"]; retry=false, redirect=false)
     end
     tic = time()
     while !istaskdone(t)
@@ -1765,6 +1765,8 @@ function build_lvm()
     if isfile("/usr/sbin/azure_nvme.sh")
         @info "Building scratch.."
         run(`sudo bash /usr/sbin/azure_nvme.sh`)
+    else 
+        @warn "No scratch nvme script found!"
     end
 end
 
