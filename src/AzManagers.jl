@@ -2870,6 +2870,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     load_manifest()
     subscriptionid == "" && (subscriptionid = get(vm_template, "subscriptionid", _manifest["subscriptionid"]))
     resourcegroup == "" && (resourcegroup = get(vm_template, "resourcegroup", _manifest["resourcegroup"]))
+
     user == "" && (user = _manifest["ssh_user"])
     ssh_key =  AzManagers._manifest["ssh_public_key_file"]
     user == "" && (user = AzManagers._manifest["ssh_user"])
@@ -2884,7 +2885,13 @@ function addproc(vm_template::Dict, nic_template=nothing;
         nic_templates = JSON.parse(read(templates_filename_nic(), String))
         _keys = keys(nic_templates)
         length(_keys) == 0 && error("if nic_template==nothing, then the file $(templates_filename_nic()) must contain at-least one template.  See AzManagers.save_template_nic.")
-        nic_template = nic_templates[first(_keys)]
+    
+        if haskey(nic_templates, "default_nic")
+            nic_template = nic_templates["default_nic"]
+        else
+            nic_template = nic_templates[first(_keys)]
+        end
+
     elseif isa(nic_template, AbstractString)
         isfile(templates_filename_nic()) || error("if nic_template is a string, then the file $(templates_filename_nic()) must exist.  See AzManagers.save_template_nic.")
         nic_templates = JSON.parse(read(templates_filename_nic(), String))
@@ -2945,6 +2952,13 @@ function addproc(vm_template::Dict, nic_template=nothing;
         @error "Nic creation failed!"
     end
 
+    nic_r = @retry nretry azrequest(
+        "GET",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2024-03-01",
+        ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"]
+    )
+    nic_dic = JSON.parse(String(nic_r.body))
     # nic_id = JSON.parse(String(r.body))["id"]
     nic_id = nic_dic["id"]
 
