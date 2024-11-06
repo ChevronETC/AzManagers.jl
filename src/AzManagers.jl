@@ -2711,6 +2711,7 @@ Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` w
 * `exename="\$(Sys.BINDIR)/julia"` name of the julia executable.
 * `env=Dict()` Dictionary of environemnt variables that will be exported before starting the detached process
 * `detachedservice=true` start the detached service allowing for RESTful remote code execution
+* `hyperthreading=nothing` Turn on/off hyperthreading on supported machine sizes.  The default uses the setting in the template.  To override the template setting, use `true` (on) or `false` (off).
 
 # Notes
 [1] Interactive threads are supported beginning in version 1.9 of Julia.  For earlier versions, the default for `julia_num_threads` is `Threads.nthreads()`.
@@ -2734,7 +2735,8 @@ function addproc(vm_template::Dict, nic_template=nothing;
         omp_num_threads = parse(Int, get(ENV, "OMP_NUM_THREADS", "1")),
         exename = "$(Sys.BINDIR)/julia",
         env = Dict(),
-        detachedservice = true)
+        detachedservice = true,
+        hyperthreading = nothing)
     load_manifest()
     subscriptionid == "" && (subscriptionid = get(vm_template, "subscriptionid", _manifest["subscriptionid"]))
     resourcegroup == "" && (resourcegroup = get(vm_template, "resourcegroup", _manifest["resourcegroup"]))
@@ -2771,6 +2773,13 @@ function addproc(vm_template::Dict, nic_template=nothing;
     scaleset_image!(manager, vm_template["value"], sigimagename, sigimageversion, imagename)
 
     vm_template["value"]["properties"]["storageProfile"]["osDisk"]["diskSizeGB"] = max(osdisksize, image_osdisksize(manager, vm_template["value"], sigimagename, sigimageversion, imagename))
+
+    if hyperthreading !== nothing
+        if !haskey(vm_template["value"], "tags")
+            vm_template["value"]["tags"] = Dict{Any,Any}()
+        end
+        vm_template["value"]["tags"]["platformsettings.host_environment.disablehyperthreading"] = hyperthreading ? "False" : "True"
+    end
 
     @debug "software sanity check"
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
