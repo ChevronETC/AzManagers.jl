@@ -377,7 +377,7 @@ function build_vmtemplate(name;
 end
 
 function cloudcfg_nvme_scratch()
-    cloud_cfg = """
+    cloud_cfg = raw"""
     #cloud-config
     write_files:
     - path: /usr/sbin/azure_nvme.sh
