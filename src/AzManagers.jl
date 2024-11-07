@@ -2060,7 +2060,7 @@ function buildstartupscript_detached(manager::AzManager, exename::String, julia_
         """
 
     else
-        cmd *= """
+        shell_cmds *= """
 
         sudo su - $user << EOF
         $envstring
@@ -2071,6 +2071,7 @@ function buildstartupscript_detached(manager::AzManager, exename::String, julia_
         $exename -t $julia_num_threads -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.mount_datadisks(); AzManagers.detached_port!($(AzManagers.detached_port())); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
         EOF
         """
+        cmd = shell_cmds
     end
 
     cmd
