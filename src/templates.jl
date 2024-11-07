@@ -273,6 +273,7 @@ or written to AzManagers.jl configuration files.
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"`  cloud-init commands used to mount or link to temporary disk
 * `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
 * `encryption_at_host = false` Optional argument for enabling encryption at host
+* `default_nic = ""` Optional argument for inserting "default_nic" as a key 
 
 # Notes
 [1] Each datadisk is a Dictionary. For example,
@@ -298,7 +299,8 @@ function build_vmtemplate(name;
         tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
         nicname = "cbox-nic",
         tags = Dict(),
-        encryption_at_host=false)
+        encryption_at_host=false,
+        default_nic = "")
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
@@ -317,7 +319,7 @@ function build_vmtemplate(name;
         end
     end
 
-    template = Dict(
+    template = Dict{Any, Any}(
         "subscriptionid" => subscriptionid,
         "resourcegroup" => resourcegroup,
         "tempdisk" => tempdisk,
@@ -372,6 +374,9 @@ function build_vmtemplate(name;
     )
     if !isempty(tags)
         template["value"]["tags"] = tags
+    end
+    if default_nic != ""
+        template["default_nic"] = default_nic
     end
     template
 end
