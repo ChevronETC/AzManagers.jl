@@ -31,7 +31,8 @@ vmtemplate = AzManagers.build_vmtemplate(
         resourcegroup_vnet   = resourcegroup,
         imagegallery         = ENV["GALLERY_NAME"],
         imagename            = imagename,
-        vmsize              = "Standard_D2s_v5")
+        vmsize               = "Standard_D2s_v5",
+        default_nic          = templatename)
 
 nictemplate = AzManagers.build_nictemplate(
         templatename,

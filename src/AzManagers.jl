@@ -2932,7 +2932,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     nic_dic = JSON.parse(String(nic_r.body))
     nic_state = nic_dic["properties"]["provisioningState"]
     try
-        while nic_state == "Creating"
+        while nic_state != "Succeeded"
             sleep(10)
             nic_r = @retry nretry azrequest(
                 "GET",
