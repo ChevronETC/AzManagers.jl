@@ -2887,9 +2887,10 @@ function addproc(vm_template::Dict, nic_template=nothing;
         nic_templates = JSON.parse(read(templates_filename_nic(), String))
         _keys = keys(nic_templates)
         length(_keys) == 0 && error("if nic_template==nothing, then the file $(templates_filename_nic()) must contain at-least one template.  See AzManagers.save_template_nic.")
-        # nic_template = nic_templates[first(_keys)]
-\
-        nic_template = get(nic_templates, vm_template["default_nic"], first(_keys))
+        nic_template = nic_templates[first(_keys)]
+
+        # For a different PR
+        # nic_template = get(nic_templates, vm_template["default_nic"], first(_keys))
 
     elseif isa(nic_template, AbstractString)
         isfile(templates_filename_nic()) || error("if nic_template is a string, then the file $(templates_filename_nic()) must exist.  See AzManagers.save_template_nic.")

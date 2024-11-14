@@ -22,6 +22,19 @@ sstemplate = AzManagers.build_sstemplate(
         imagename            = imagename,
         skuname              = "Standard_D2s_v5")
 
+# For another PR
+# vmtemplate = AzManagers.build_vmtemplate(
+#         templatename,
+#         subscriptionid       = subscriptionid,
+#         admin_username       = "cvx",
+#         location             = "southcentralus",
+#         resourcegroup        = resourcegroup,
+#         resourcegroup_vnet   = resourcegroup,
+#         imagegallery         = ENV["GALLERY_NAME"],
+#         imagename            = imagename,
+#         vmsize               = "Standard_D2s_v5",
+#         default_nic          = templatename)
+
 vmtemplate = AzManagers.build_vmtemplate(
         templatename,
         subscriptionid       = subscriptionid,
@@ -31,8 +44,7 @@ vmtemplate = AzManagers.build_vmtemplate(
         resourcegroup_vnet   = resourcegroup,
         imagegallery         = ENV["GALLERY_NAME"],
         imagename            = imagename,
-        vmsize               = "Standard_D2s_v5",
-        default_nic          = templatename)
+        vmsize               = "Standard_D2s_v5")
 
 nictemplate = AzManagers.build_nictemplate(
         templatename,
