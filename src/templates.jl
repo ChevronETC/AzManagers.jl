@@ -273,6 +273,7 @@ or written to AzManagers.jl configuration files.
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"`  cloud-init commands used to mount or link to temporary disk
 * `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
 * `encryption_at_host = false` Optional argument for enabling encryption at host
+* `default_nic = ""` Optional argument for inserting "default_nic" as a key 
 
 # Notes
 [1] Each datadisk is a Dictionary. For example,
@@ -299,6 +300,7 @@ function build_vmtemplate(name;
         nicname = "cbox-nic",
         tags = Dict(),
         encryption_at_host=false)
+        # default_nic = "") # add in different PR
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
@@ -317,7 +319,7 @@ function build_vmtemplate(name;
         end
     end
 
-    template = Dict(
+    template = Dict{Any, Any}(
         "subscriptionid" => subscriptionid,
         "resourcegroup" => resourcegroup,
         "tempdisk" => tempdisk,
@@ -373,7 +375,77 @@ function build_vmtemplate(name;
     if !isempty(tags)
         template["value"]["tags"] = tags
     end
+    # Add in different PR
+    # if default_nic != ""
+    #     template["default_nic"] = default_nic
+    # end
     template
+end
+
+function cloudcfg_nvme_scratch()
+    cloud_cfg = raw"""
+    #cloud-config
+    write_files:
+      - path: /usr/sbin/azure_nvme.sh
+        permissions: '0755'
+        owner: root:root
+        content: |
+          #!/bin/bash
+          # This script creates a NVMe scratch LVM and replaces the existing /mnt/resource scratch
+          export PATH=/bin:/sbin:/usr/bin:/usr/sbin
+
+          # Build associative array of nvme devices and their sizes
+          declare -A NVME_DEVICES=()
+          while read -r device size
+          do
+              NVME_DEVICES[$device]=$(($size/1024/1024-10))
+          done < <(lsblk -pbln -o name,size,mountpoint | awk '/^\/dev\/nvme/ && $3 == "" { print $0 }')
+          NVME_DEVICE_SIZE=$((${NVME_DEVICES[@]/%/+}0))
+
+          SCRATCH_VG="scratch"
+          SCRATCH_LV="storage"
+
+          echo "Number of NVMe Devices:" "${#NVME_DEVICES[@]}"
+          echo "NVMe Device List:" "${!NVME_DEVICES[@]}"
+          echo "NVMe LVM Size (MB):" $NVME_DEVICE_SIZE
+
+          if [[ "${#NVME_DEVICES[@]}" -gt 0 ]]
+          then
+              sed -i '/^\/dev\/disk\/cloud\/azure_resource-part1/s/^\(.*\)$/#\1/' /etc/fstab
+              umount /scratch
+              mkdir -m 777 -p /scratch
+              for x in "${!NVME_DEVICES[@]}"
+              do
+                  pvcreate $x
+              done
+              vgcreate -q -s 1M $SCRATCH_VG ${!NVME_DEVICES[@]} --force
+              lvcreate -q -Wy --yes -I 128k -i ${#NVME_DEVICES[@]} -L $NVME_DEVICE_SIZE -v $SCRATCH_VG -n $SCRATCH_LV
+              mkfs.xfs -q -f /dev/$SCRATCH_VG/$SCRATCH_LV
+              mount /dev/$SCRATCH_VG/$SCRATCH_LV /scratch
+              # querk with 777 dropping writes
+              chmod ugo+rwx -Rf /scratch
+          fi
+
+      - path: /etc/systemd/system/scratch-nvme.service
+        permissions: '0644'
+        owner: root:root
+        content: |
+          [Unit]
+          Description=Create nvme scratch directory
+
+          [Service]
+          ExecStart=/usr/bin/bash /usr/sbin/azure_nvme_scratch.sh
+          User=root
+          Type=oneshot
+          RemainAfterExit=no
+
+          [Install]
+          WantedBy=cloud-init.target
+    runcmd:
+      - [ systemctl, enable, scratch-nvme.service ]
+      - [ systemctl, daemon-reload ]
+    """
+    cloud_cfg
 end
 
 templates_filename_vm() = joinpath(templates_folder(), "templates_vm.json")

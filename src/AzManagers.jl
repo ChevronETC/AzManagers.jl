@@ -780,6 +780,7 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `nvidia_enable_ecc=true` on NVIDIA machines, ensure that ECC is set to `true` or `false` for all GPUs[5]
 * `nvidia_enable_mig=false` on NVIDIA machines, ensure that MIG is set to `true` or `false` for all GPUs[5]
 * `hyperthreading=nothing` Turn on/off hyperthreading on supported machine sizes.  The default uses the setting in the template.  To override the template setting, use `true` (on) or `false` (off).
+* `use_lvm=false` For SKUs that have 1 or more nvme disks, combines all disks as a single mount point /scratch vs /scratch, /scratch1, /scratch2, etc..
 
 # Notes
 [1] If `addprocs` is called from an Azure VM, then the default `imagename`,`imageversion` are the
@@ -824,7 +825,8 @@ function Distributed.addprocs(template::Dict, n::Int;
         mpi_flags = "-bind-to core:$(get(ENV, "OMP_NUM_THREADS", 1)) --map-by numa",
         nvidia_enable_ecc = true,
         nvidia_enable_mig = false,
-        hyperthreading = nothing)
+        hyperthreading = nothing,
+        use_lvm = false)
     n_current_workers = nprocs() == 1 ? 0 : nworkers()
 
     (subscriptionid == "" || resourcegroup == "" || user == "") && load_manifest()
@@ -850,7 +852,7 @@ function Distributed.addprocs(template::Dict, n::Int;
     _scalesets[scaleset] = scaleset_create_or_update(manager, user, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, sigimagename,
         sigimageversion, imagename, osdisksize, nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig,
         hyperthreading, julia_num_threads, omp_num_threads, exename, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base,
-        verbose, customenv, overprovision)
+        verbose, customenv, overprovision, use_lvm)
 
     if waitfor
         @info "Initiating cluster..."
@@ -1760,13 +1762,30 @@ function nvidia_gpucheck(enable_ecc=true, enable_mig=false)
     end
 end
 
-function buildstartupscript(manager::AzManager, exename::String, user::String, disk::AbstractString, custom_environment::Bool)
-    cmd = """
-    #!/bin/bash
-    $disk
-    sed -i 's/ scripts-user/ [scripts-user, always]/g' /etc/cloud/cloud.cfg
-    """
-    
+function build_lvm()
+    if isfile("/usr/sbin/azure_nvme.sh")
+        @info "Building scratch.."
+        run(`sudo bash /usr/sbin/azure_nvme.sh`)
+    else 
+        @warn "No scratch nvme script found!"
+    end
+end
+
+function buildstartupscript(manager::AzManager, exename::String, user::String, disk::AbstractString, custom_environment::Bool, use_lvm::Bool)
+
+    if use_lvm
+        cmd = """
+        #!/bin/sh
+        sed -i 's/ scripts-user/ [scripts-user, always]/g' /etc/cloud/cloud.cfg
+        """
+    else
+        cmd = """
+        #!/bin/bash
+        $disk
+        sed -i 's/ scripts-user/ [scripts-user, always]/g' /etc/cloud/cloud.cfg
+        """
+    end
+
     if isfile(joinpath(homedir(), ".gitconfig"))
         gitconfig = read(joinpath(homedir(), ".gitconfig"), String)
         cmd *= """
@@ -1826,8 +1845,9 @@ function build_envstring(env::Dict)
 end
 
 function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads::String, omp_num_threads::Int, exename::String, exeflags::String, env::Dict, user::String,
-        disk::AbstractString, custom_environment::Bool)
-    cmd, remote_julia_environment_name = buildstartupscript(manager, exename, user, disk, custom_environment)
+        disk::AbstractString, custom_environment::Bool, use_lvm::Bool)
+
+    shell_cmds, remote_julia_environment_name = buildstartupscript(manager, exename, user, disk, custom_environment, use_lvm)
 
     cookie = Distributed.cluster_cookie()
     master_address = string(getipaddr())
@@ -1852,94 +1872,207 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
 
     _exeflags = isempty(exeflags) ? "-t $julia_num_threads" : "$exeflags -t $julia_num_threads"
 
-    if mpi_ranks_per_worker == 0
-        cmd *= """
+    shell_cmds *= """
 
-        sudo su - $user << 'EOF'
-        export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
-        export OMP_NUM_THREADS=$omp_num_threads
-        $envstring
+    sudo su - $user << 'EOF'
+    export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
+    export OMP_NUM_THREADS=$omp_num_threads
+    $envstring
+    """
 
-        attempt_number=1
-        maximum_attempts=5
-        exit_code=0
-        while [  \$attempt_number -le \$maximum_attempts ]; do
-            $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+    if use_lvm
+        if mpi_ranks_per_worker == 0 
+            shell_cmds *= """
 
-            exit_code=\$?
-            echo "attempt \$attempt_number is done with exit code \$exit_code..."
+            attempt_number=1
+            maximum_attempts=5
+            exit_code=0
+            while [  \$attempt_number -le \$maximum_attempts ]; do
+                $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+                
+                exit_code=\$?
+                echo "attempt \$attempt_number is done with exit code \$exit_code..."
 
-            if [ "\$exit_code" == "42" ]; then
-                echo "...breaking from retry loop due to exit code 42."
-                break
-            fi
+                if [ "\$exit_code" == "42" ]; then
+                    echo "...breaking from retry loop due to exit code 42."
+                    break
+                fi
 
-            echo "...trying again after sleeping for 5 seconds..."
-            sleep 5
-            attempt_number=\$(( attempt_number + 1 ))
+                echo "...trying again after sleeping for 5 seconds..."
+                sleep 5
+                attempt_number=\$(( attempt_number + 1 ))
 
-            echo "the worker startup was tried \$attempt_number times."
-        done
-        echo "the worker has finished running with exit code \$exit_code."
-        EOF
+                echo "the worker startup was tried \$attempt_number times."
+            done
+            echo "the worker has finished running with exit code \$exit_code."
+            EOF
+            """
+        else
+            shell_cmds *= """
+
+            $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm()'
+
+            attempt_number=1
+            maximum_attempts=5
+            exit_code=0
+            while [  \$attempt_number -le \$maximum_attempts ]; do
+                mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+
+                exit_code=\$?
+                echo "attempt \$attempt_number is done with exit code \$exit_code...."
+
+                if [ "\$exit_code" == "42" ]; then
+                    echo "...breaking from retry loop due to exit code 42."
+                    break
+                fi
+
+                echo "...trying again after sleeping for 5 seconds..."
+                sleep 5
+                attempt_number=\$(( attempt_number + 1 ))
+
+                echo "the worker startup was tried \$attempt_number times."
+            done
+            echo "the worker has finished running with exit code \$exit_code."
+            EOF
+            """
+        end
+
+        cloud_cfg = cloudcfg_nvme_scratch()
+        boundary = "===Boundary==="
+        cmd = """
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="$boundary"
+
+        --$boundary
+        Content-Type: text/cloud-config; charset="us-ascii"
+
+        $cloud_cfg
+
+        --$boundary
+        Content-Type: text/x-shellscript; charset="us-ascii"
+
+        $shell_cmds
+
+        --$boundary--
         """
     else
-        cmd *= """
+        if mpi_ranks_per_worker == 0 
+            shell_cmds *= """
 
-        sudo su - $user << 'EOF'
-        export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
-        export OMP_NUM_THREADS=$omp_num_threads
-        $envstring
+            attempt_number=1
+            maximum_attempts=5
+            exit_code=0
+            while [  \$attempt_number -le \$maximum_attempts ]; do
+                $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+                
+                exit_code=\$?
+                echo "attempt \$attempt_number is done with exit code \$exit_code..."
 
-        $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
+                if [ "\$exit_code" == "42" ]; then
+                    echo "...breaking from retry loop due to exit code 42."
+                    break
+                fi
 
-        attempt_number=1
-        maximum_attempts=5
-        exit_code=0
-        while [  \$attempt_number -le \$maximum_attempts ]; do
-            mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+                echo "...trying again after sleeping for 5 seconds..."
+                sleep 5
+                attempt_number=\$(( attempt_number + 1 ))
 
-            exit_code=\$?
-            echo "attempt \$attempt_number is done with exit code \$exit_code...."
+                echo "the worker startup was tried \$attempt_number times."
+            done
+            echo "the worker has finished running with exit code \$exit_code."
+            EOF
+            """
+        else
+            shell_cmds *= """
 
-            if [ "\$exit_code" == "42" ]; then
-                echo "...breaking from retry loop due to exit code 42."
-                break
-            fi
+            $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
 
-            echo "...trying again after sleeping for 5 seconds..."
-            sleep 5
-            attempt_number=\$(( attempt_number + 1 ))
+            attempt_number=1
+            maximum_attempts=5
+            exit_code=0
+            while [  \$attempt_number -le \$maximum_attempts ]; do
+                mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
 
-            echo "the worker startup was tried \$attempt_number times."
-        done
-        echo "the worker has finished running with exit code \$exit_code."
-        EOF
-        """
+                exit_code=\$?
+                echo "attempt \$attempt_number is done with exit code \$exit_code...."
+
+                if [ "\$exit_code" == "42" ]; then
+                    echo "...breaking from retry loop due to exit code 42."
+                    break
+                fi
+
+                echo "...trying again after sleeping for 5 seconds..."
+                sleep 5
+                attempt_number=\$(( attempt_number + 1 ))
+
+                echo "the worker startup was tried \$attempt_number times."
+            done
+            echo "the worker has finished running with exit code \$exit_code."
+            EOF
+            """
+        end
+
+        cmd = shell_cmds
     end
 
     cmd
 end
 
 function buildstartupscript_detached(manager::AzManager, exename::String, julia_num_threads::String, omp_num_threads::Int, env::Dict, user::String,
-        disk::AbstractString, custom_environment::Bool, subscriptionid, resourcegroup, vmname)
-    cmd, remote_julia_environment_name = buildstartupscript(manager, exename, user, disk, custom_environment)
+        disk::AbstractString, custom_environment::Bool, subscriptionid, resourcegroup, vmname, use_lvm::Bool)
+
+    shell_cmds, remote_julia_environment_name = buildstartupscript(manager, exename, user, disk, custom_environment, use_lvm)
 
     envstring = build_envstring(env)
 
     juliaenvstring = remote_julia_environment_name == "" ? "" : """using Pkg; Pkg.activate(joinpath(Pkg.envdir(), "$remote_julia_environment_name")); """
 
-    cmd *= """
+    if use_lvm
+        shell_cmds *= """
 
-    sudo su - $user << EOF
-    $envstring
-    export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
-    export OMP_NUM_THREADS=$omp_num_threads
-    ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N '' <<<y
-    cd /home/$user
-    $exename -t $julia_num_threads -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.mount_datadisks(); AzManagers.detached_port!($(AzManagers.detached_port())); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
-    EOF
-    """
+        sudo su - $user << EOF
+        $envstring
+        export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
+        export OMP_NUM_THREADS=$omp_num_threads
+        ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N '' <<<y
+        cd /home/$user
+        $exename -t $julia_num_threads -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.detached_port!($(AzManagers.detached_port())); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
+        EOF
+        """
+
+        cloud_cfg = cloudcfg_nvme_scratch()
+        boundary = "===Boundary==="
+        cmd = """
+        MIME-Version: 1.0
+        Content-Type: multipart/mixed; boundary="$boundary"
+
+        --$boundary
+        Content-Type: text/cloud-config; charset="us-ascii"
+
+        $cloud_cfg
+
+        --$boundary
+        Content-Type: text/x-shellscript; charset="us-ascii"
+
+        $shell_cmds
+
+        --$boundary--
+        """
+
+    else
+        shell_cmds *= """
+
+        sudo su - $user << EOF
+        $envstring
+        export JULIA_WORKER_TIMEOUT=$(get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
+        export OMP_NUM_THREADS=$omp_num_threads
+        ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N '' <<<y
+        cd /home/$user
+        $exename -t $julia_num_threads -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.mount_datadisks(); AzManagers.detached_port!($(AzManagers.detached_port())); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
+        EOF
+        """
+        cmd = shell_cmds
+    end
 
     cmd
 end
@@ -2171,7 +2304,7 @@ end
 
 function scaleset_create_or_update(manager::AzManager, user, subscriptionid, resourcegroup, scalesetname, sigimagename, sigimageversion,
         imagename, osdisksize, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, hyperthreading, julia_num_threads,
-        omp_num_threads, exename, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base, verbose, custom_environment, overprovision)
+        omp_num_threads, exename, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base, verbose, custom_environment, overprovision, use_lvm)
     load_manifest()
     ssh_key = _manifest["ssh_public_key_file"]
 
@@ -2208,7 +2341,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
     
-    cmd = buildstartupscript_cluster(manager, spot, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, exename, exeflags, env, user, template["tempdisk"], custom_environment)
+    cmd = buildstartupscript_cluster(manager, spot, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, exename, exeflags, env, user, template["tempdisk"], custom_environment, use_lvm)
     _cmd = base64encode(cmd)
 
     if length(_cmd) > 64_000
@@ -2711,7 +2844,7 @@ Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` w
 * `exename="\$(Sys.BINDIR)/julia"` name of the julia executable.
 * `env=Dict()` Dictionary of environemnt variables that will be exported before starting the detached process
 * `detachedservice=true` start the detached service allowing for RESTful remote code execution
-
+* `use_lvm=false` For SKUs that have 1 or more nvme disks, combines all disks as a single mount point /scratch vs /scratch, /scratch1, /scratch2, etc..
 # Notes
 [1] Interactive threads are supported beginning in version 1.9 of Julia.  For earlier versions, the default for `julia_num_threads` is `Threads.nthreads()`.
 """
@@ -2734,10 +2867,12 @@ function addproc(vm_template::Dict, nic_template=nothing;
         omp_num_threads = parse(Int, get(ENV, "OMP_NUM_THREADS", "1")),
         exename = "$(Sys.BINDIR)/julia",
         env = Dict(),
-        detachedservice = true)
+        detachedservice = true,
+        use_lvm = false)
     load_manifest()
     subscriptionid == "" && (subscriptionid = get(vm_template, "subscriptionid", _manifest["subscriptionid"]))
     resourcegroup == "" && (resourcegroup = get(vm_template, "resourcegroup", _manifest["resourcegroup"]))
+
     user == "" && (user = _manifest["ssh_user"])
     ssh_key =  AzManagers._manifest["ssh_public_key_file"]
     user == "" && (user = AzManagers._manifest["ssh_user"])
@@ -2753,6 +2888,10 @@ function addproc(vm_template::Dict, nic_template=nothing;
         _keys = keys(nic_templates)
         length(_keys) == 0 && error("if nic_template==nothing, then the file $(templates_filename_nic()) must contain at-least one template.  See AzManagers.save_template_nic.")
         nic_template = nic_templates[first(_keys)]
+
+        # For a different PR
+        # nic_template = get(nic_templates, vm_template["default_nic"], first(_keys))
+
     elseif isa(nic_template, AbstractString)
         isfile(templates_filename_nic()) || error("if nic_template is a string, then the file $(templates_filename_nic()) must exist.  See AzManagers.save_template_nic.")
         nic_templates = JSON.parse(read(templates_filename_nic(), String))
@@ -2783,7 +2922,45 @@ function addproc(vm_template::Dict, nic_template=nothing;
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"],
         String(json(nic_template)))
 
-    nic_id = JSON.parse(String(r.body))["id"]
+    sleep(5)
+
+    nic_r = @retry nretry azrequest(
+        "GET",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2024-03-01",
+        ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"]
+    )
+    nic_dic = JSON.parse(String(nic_r.body))
+    nic_state = nic_dic["properties"]["provisioningState"]
+    try
+        while nic_state != "Succeeded"
+            sleep(10)
+            nic_r = @retry nretry azrequest(
+                "GET",
+                verbose,
+                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2024-03-01",
+                ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"]
+            )
+            nic_dic = JSON.parse(String(nic_r.body))
+            nic_state = nic_dic["properties"]["provisioningState"]
+        end
+    catch e 
+        @error "failed to get $nicname status"
+    end
+
+    if nic_state == "Failed"
+        @error "Nic creation failed!"
+    end
+
+    nic_r = @retry nretry azrequest(
+        "GET",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2024-03-01",
+        ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"]
+    )
+    nic_dic = JSON.parse(String(nic_r.body))
+    # nic_id = JSON.parse(String(r.body))["id"]
+    nic_id = nic_dic["id"]
 
     @debug "unique names for the attached disks"
     for attached_disk in get(vm_template["value"]["properties"]["storageProfile"], "dataDisks", [])
@@ -2799,9 +2976,9 @@ function addproc(vm_template::Dict, nic_template=nothing;
     local cmd
     if detachedservice
         cmd = buildstartupscript_detached(manager, exename, nthreads_filter(julia_num_threads), omp_num_threads, env, user,
-            disk, customenv, subscriptionid, resourcegroup, vmname)
+            disk, customenv, subscriptionid, resourcegroup, vmname, use_lvm)
     else
-        cmd,_ = buildstartupscript(manager, exename, user, disk, customenv)
+        cmd,_ = buildstartupscript(manager, exename, user, disk, customenv, use_lvm)
     end
     
     _cmd = base64encode(cmd)
