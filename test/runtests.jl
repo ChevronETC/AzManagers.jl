@@ -384,8 +384,9 @@ end
 
 end
 
-@testset "AzManagers, addproc" begin
-
+@testset "AzManagers, addproc physical_hostname" begin
+    r = randstring('a':'z',4)
+    basename = "test$r"
     testvm = addproc(templatename; basename=basename, session=session)
 
     ip = testvm["ip"]
