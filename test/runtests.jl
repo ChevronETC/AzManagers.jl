@@ -383,3 +383,19 @@ end
     rmprocs(workers())
 
 end
+
+@testset "AzManagers, addproc" begin
+
+    testvm = addproc(templatename; basename=basename, session=session)
+
+    ip = testvm["ip"]
+    port = testvm["port"]
+    url = "http://$ip:$port/cofii/detached/vm"
+    _r = HTTP.get(url)
+    r = JSON.parse(String(_r.body))
+
+    name = r["physical_hostname"]
+    @test name !== "unknown" && match(r"[A-Z0-9]", name) !== nothing
+
+    rmproc(testvm; session=session)
+end
