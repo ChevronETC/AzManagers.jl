@@ -2563,8 +2563,10 @@ function detachedservice(address=ip"0.0.0.0"; server=nothing, subscriptionid="",
 
     port = detached_port()
 
+    vm_sn = azure_physical_name()
+
     AzManagers.DETACHED_VM[] = Dict("subscriptionid"=>string(subscriptionid), "resourcegroup"=>string(resourcegroup),
-        "name"=>string(vmname), "ip"=>string(getipaddr()), "port"=>string(port))
+        "name"=>string(vmname), "ip"=>string(getipaddr()), "port"=>string(port), "physical_hostname" => vm_sn)
 
     global_logger(ConsoleLogger(stdout, Logging.Info; meta_formatter=timestamp_metaformatter))
 
