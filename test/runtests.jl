@@ -269,17 +269,17 @@ end
     rmprocs(workers())
 end
 
-@testset "AzManagers, addproc" begin
+@testset "AzManagers, addproc, and test if nthreads propagates properly" begin
     r = randstring('a':'z',4)
     basename = "test$r"
-    testvm = addproc(templatename; basename=basename, session=session)
+    testvm = addproc(templatename; basename=basename, session=session, julia_num_threads="1,2")
     testjob = @detachat testvm begin
         write(stdout, "write to stdout\n")
-        write(stderr, "write to stderr\n")
+        write(stderr, "nthreads: $(Threads.nthreads()),$(Threads.nthreads(:interactive))\n")
     end
     wait(testjob)
     @test read(testjob) == "write to stdout\n"
-    @test read(testjob; stdio=stderr) == "write to stderr\n"
+    @test read(testjob; stdio=stderr) == "nthreads: 1,2\n"
     rmproc(testvm; session=session)
 
     testvm = addproc(templatename, name=basename, session=session)
