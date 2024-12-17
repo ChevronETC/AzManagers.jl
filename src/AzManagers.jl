@@ -2652,8 +2652,9 @@ function detachedrun(request::HTTP.Request)
         write(_tempname_wrapper, wrapper_code)
 
         nthreads, nthreads_interactive = Threads.nthreads(), Threads.nthreads(:interactive)
+        julia_num_threads = nthreads_filter("$(Threads.nthreads()),$(Threads.nthreads(:interactive))")
         projectdir = dirname(Pkg.project().path)
-        process = open(`julia -t $nthreads,$nthreads_interactive --project=$projectdir $_tempname_wrapper`)
+        process = open(`julia -t $julia_num_threads --project=$projectdir $_tempname_wrapper`)
         pid = getpid(process)
         @info "executing $_tempname_wrapper with $nthreads threads, and pid $pid"
 
