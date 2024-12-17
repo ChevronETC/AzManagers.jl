@@ -2616,6 +2616,7 @@ function detachedrun(request::HTTP.Request)
         outfile = "job-$id.out"
         errfile = "job-$id.err"
         wrapper_code = """
+        __detached_id() = $id
         open("$outfile", "w") do out
             open("$errfile", "w") do err
                 redirect_stdout(out) do
