@@ -2616,6 +2616,7 @@ function detachedrun(request::HTTP.Request)
         outfile = "job-$id.out"
         errfile = "job-$id.err"
         wrapper_code = """
+        __detached_id() = $id
         open("$outfile", "w") do out
             open("$errfile", "w") do err
                 redirect_stdout(out) do
@@ -2623,7 +2624,6 @@ function detachedrun(request::HTTP.Request)
                         include("$_tempname_logging")
                         include("$_tempname_varbundle")
                         try
-                            __detached_id() = $id
                             include("$_tempname")
                         catch e
                             for (exc, bt) in Base.catch_stack()
