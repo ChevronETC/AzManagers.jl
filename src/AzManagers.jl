@@ -2623,6 +2623,7 @@ function detachedrun(request::HTTP.Request)
                         include("$_tempname_logging")
                         include("$_tempname_varbundle")
                         try
+                            __detached_id() = $id
                             include("$_tempname")
                         catch e
                             for (exc, bt) in Base.catch_stack()
