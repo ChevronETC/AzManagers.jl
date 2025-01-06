@@ -1,5 +1,6 @@
 using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
 using MPI
+using AzManagers: addprocs_azure
 
 session = AzSession(;protocal=AzClientCredentials)
 
@@ -19,10 +20,10 @@ error:
 No outbound connectivity configured for virtual machine .... Please attach standard load balancer or public IP address to VM, create NAT gateway
 or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defaultoutboundaccess.
 =#
-@testset "AzManagers, addprocs, ppi=$ppi, flexible=$flexible" for ppi in (1,), flexible in (false,#=true=#)
+@testset "AzManagers, addprocs_azure, ppi=$ppi, flexible=$flexible" for ppi in (1,), flexible in (false,#=true=#)
     ninstances = 4
     group = "test$(randstring('a':'z',4))"
-    
+
     # Set up iteration vars
     url = "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$group?api-version=2019-12-01"
     tppi = ppi*ninstances                       # Total number of Julia processes in the entire scale set
@@ -31,7 +32,7 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     # Unit Test 1 - Create scale set and start Julia processes
     #
     if flexible
-        addprocs(templatename, ninstances;
+        addprocs_azure(templatename, ninstances;
             waitfor = true,
             ppi,
             group,
@@ -39,13 +40,13 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
             spot = true,
             spot_base_regular_priority_count = 2)
     else
-        addprocs(templatename, ninstances;
+        addprocs_azure(templatename, ninstances;
             waitfor = true,
             ppi,
             group,
             session)
     end
-    
+
     # Verify that the scale set is present
     _r = HTTP.request("GET", url, Dict("Authorization"=>"Bearer $(token(session))"); verbose=0)
     @test _r.status == 200
@@ -67,7 +68,7 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     unique_workers = unique(myworkers)
 
     @test length(unique_workers) == ninstances
-    for worker in myworkers 
+    for worker in myworkers
         @test master != worker
     end
 
@@ -109,10 +110,10 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     end
 end
 
-@testset "addprocs, spot" begin
+@testset "addprocs_azure, spot" begin
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "2,0" : "2"
-    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads)
+    addprocs_azure(templatename, 1; waitfor = true, group, session, julia_num_threads)
 
     @test remotecall_fetch(Threads.nthreads, workers()[1]) == 2
 
@@ -123,7 +124,7 @@ end
 
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "2,0" : "2"
-    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads, spot = true)
+    addprocs_azure(templatename, 1; waitfor = true, group, session, julia_num_threads, spot = true)
 
     @test remotecall_fetch(Threads.nthreads, workers()[1]) == 2
 
@@ -136,7 +137,7 @@ end
 
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "3,2" : "3"
-    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads, spot=true)
+    addprocs_azure(templatename, 1; waitfor = true, group, session, julia_num_threads, spot=true)
 
     @test remotecall_fetch(Threads.nthreads, workers()[1]) == 3
 
@@ -150,7 +151,7 @@ if VERSION >= v"1.9"
     @testset "spot eviction" begin
         group = "test$(randstring('a':'z',4))"
         julia_num_threads = "2,1"
-        addprocs(templatename, 2; waitfor = true, group, session, julia_num_threads, spot = true)
+        addprocs_azure(templatename, 2; waitfor = true, group, session, julia_num_threads, spot = true)
 
         AzManagers.simulate_spot_eviction(workers()[1])
 
@@ -202,7 +203,7 @@ end
     rmproc(testvm; session=session)
 end
 
-@testset "environment, addprocs" begin
+@testset "environment, addprocs_azure" begin
     mkpath("myproject")
     cd("myproject")
     Pkg.activate(".")
@@ -217,7 +218,7 @@ end
 
     group = "test$(randstring('a':'z',4))"
 
-    addprocs(templatename, 1; waitfor=true, group=group, session=session, customenv=true)
+    addprocs_azure(templatename, 1; waitfor=true, group=group, session=session, customenv=true)
     @everywhere using Pkg
     pinfo = remotecall_fetch(Pkg.project, workers()[1])
     @test contains(pinfo.path, "myproject")
@@ -232,7 +233,7 @@ end
 
 end
 
-@testset "tags, addprocs" begin
+@testset "tags, addprocs_azure" begin
     mkpath("myproject")
     cd("myproject")
     Pkg.activate(".")
@@ -255,7 +256,7 @@ end
         _template["tags"] = Dict("foo"=>"bar")
     end
 
-    addprocs(template, 1; waitfor=true, group=group, session=session)
+    addprocs_azure(template, 1; waitfor=true, group=group, session=session)
 
     _r = HTTP.request(
         "GET",
@@ -367,12 +368,12 @@ end
 
     templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))
     template = templates_scaleset[templatename]
-    
-    addprocs(template, 2; waitfor=true, group=group, session=session)
+
+    addprocs_azure(template, 2; waitfor=true, group=group, session=session)
 
     wrkers = Distributed.map_pid_wrkr
     for i in workers()
-        userdata = wrkers[i].config.userdata 
+        userdata = wrkers[i].config.userdata
         @info userdata
         name = get(userdata, "physical_hostname", "unknown")
 

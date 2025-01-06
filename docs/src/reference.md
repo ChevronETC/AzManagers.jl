@@ -2,7 +2,7 @@
 
 ## Julia clusters
 ```@docs
-addprocs
+addprocs_azure
 preempted
 ```
 
