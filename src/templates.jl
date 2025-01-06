@@ -29,7 +29,7 @@ end
 """
     AzManagers.build_sstemplate(name; kwargs...)
 
-returns a dictionary that is an Azure scaleset template for use in `addprocs` or for saving
+returns a dictionary that is an Azure scaleset template for use in `addprocs_azure` or for saving
 to the `~/.azmanagers` folder.
 
 # required key-word arguments
@@ -260,7 +260,7 @@ or written to AzManagers.jl configuration files.
 * `location` Azure data center location
 * `resourcegroup` Azure resource group where the VM will reside
 * `imagegallery` Azure shared image gallery name
-* `imagename` Azure image name that is in the shared image gallery 
+* `imagename` Azure image name that is in the shared image gallery
 * `vmsize` Azure vm type, e.g. "Standard_D8s_v3"
 
 # Optional keyword arguments
@@ -273,7 +273,7 @@ or written to AzManagers.jl configuration files.
 * `tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch"`  cloud-init commands used to mount or link to temporary disk
 * `tags = Dict("azure_tag_name" => "some_tag_value")` Optional tags argument for resource
 * `encryption_at_host = false` Optional argument for enabling encryption at host
-* `default_nic = ""` Optional argument for inserting "default_nic" as a key 
+* `default_nic = ""` Optional argument for inserting "default_nic" as a key
 
 # Notes
 [1] Each datadisk is a Dictionary. For example,

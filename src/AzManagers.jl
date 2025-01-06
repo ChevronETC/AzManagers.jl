@@ -150,11 +150,11 @@ function azrequest(rtype, verbose, url, headers, body=nothing)
     else
         r = HTTP.request(rtype, url, headers, body; verbose=verbose, options...)
     end
-    
+
     if r.status >= 300
         throw(HTTP.Exceptions.StatusError(r.status, r.request.method, r.request.target, r))
     end
-    
+
     r
 end
 
@@ -512,7 +512,7 @@ function Distributed.addprocs(manager::AzManager; sockets)
         Distributed.init_multi()
         Distributed.cluster_mgmt_from_master_check()
         lock(Distributed.worker_lock)
-        pids = Distributed.addprocs_locked(manager; sockets)
+        pids = addprocs_locked(manager; sockets)
     catch e
         @debug "AzManagers, error processing pending connection"
         logerror(e, Logging.Debug)
@@ -526,7 +526,7 @@ function addprocs_with_timeout(manager; sockets)
     # Distributed.setup_launched_worker also uses Distributed.worker_timeout, so we add a grace period
     # to allow for the Distributed.setup_launched_worker to hit its timeout.
     timeout = Distributed.worker_timeout() + 30
-    tsk_addprocs = @async addprocs(manager; sockets)
+    tsk_addprocs = @async addprocs_azure(manager; sockets)
     tic = time()
     pids = []
     interrupted = false
@@ -743,7 +743,7 @@ function nthreads_filter(nthreads)
 end
 
 """
-    addprocs(template, ninstances[; kwargs...])
+    addprocs_azure(template, ninstances[; kwargs...])
 
 Add Azure scale set instances where template is either a dictionary produced via the `AzManagers.build_sstemplate`
 method or a string corresponding to a template stored in `~/.azmanagers/templates_scaleset.json.`
@@ -783,10 +783,10 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `use_lvm=false` For SKUs that have 1 or more nvme disks, combines all disks as a single mount point /scratch vs /scratch, /scratch1, /scratch2, etc..
 
 # Notes
-[1] If `addprocs` is called from an Azure VM, then the default `imagename`,`imageversion` are the
+[1] If `addprocs_azure` is called from an Azure VM, then the default `imagename`,`imageversion` are the
 image/version the VM was built with; otherwise, it is the latest version of the image specified in the scale-set template.
 [2] Interactive threads are supported beginning in version 1.9 of Julia.  For earlier versions, the default for `julia_num_threads` is `Threads.nthreads()`.
-[3] `waitfor=false` reflects the fact that the cluster manager is dynamic.  After the call to `addprocs` returns, use `workers()`
+[3] `waitfor=false` reflects the fact that the cluster manager is dynamic.  After the call to `addprocs_azure` returns, use `workers()`
 to monitor the size of the cluster.
 [4] This is inteneded for use with Devito.  In particular, it allows Devito to gain performance by using
 MPI to do domain decomposition using MPI within a single VM.  If `mpi_ranks_per_worker=0`, then MPI is not
@@ -794,7 +794,7 @@ used on the Julia workers.  This feature makes use of package extensions, meanin
 that `using MPI` is somewhere in your calling script.
 [5] This may result in a re-boot of the VMs
 """
-function Distributed.addprocs(template::Dict, n::Int;
+function addprocs_azure(template::Dict, n::Int;
         subscriptionid = "",
         resourcegroup = "",
         sigimagename = "",
@@ -863,13 +863,13 @@ function Distributed.addprocs(template::Dict, n::Int;
     nothing
 end
 
-function Distributed.addprocs(template::AbstractString, n::Int; kwargs...)
+function addprocs_azure(template::AbstractString, n::Int; kwargs...)
     isfile(templates_filename_scaleset()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
 
     templates_scaleset = JSON.parse(read(templates_filename_scaleset(), String))
     haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
 
-    addprocs(templates_scaleset[template], n; kwargs...)
+    addprocs_azure(templates_scaleset[template], n; kwargs...)
 end
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)
@@ -1524,7 +1524,7 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
     k_galleries = findfirst(x->x=="galleries", _image)
     gallery = k_galleries == nothing ? "" : _image[k_galleries+1]
     different_image = true
-    
+
     if sigimagename == "" && imagename == ""
         different_image = false
         k_images = findfirst(x->x=="images", _image)
@@ -1537,7 +1537,7 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
 
     (sigimagename != "" && gallery == "") && error("sigimagename provided, but gallery name not found in template")
     (sigimagename == "" && imagename == "") && error("Unable to determine 'image gallery name' or 'image name'")
-    
+
     if imagename == "" && sigimageversion == ""
         k = findfirst(x->x=="versions", _image)
         if k != nothing && !different_image
@@ -1766,7 +1766,7 @@ function build_lvm()
     if isfile("/usr/sbin/azure_nvme.sh")
         @info "Building scratch.."
         run(`sudo bash /usr/sbin/azure_nvme.sh`)
-    else 
+    else
         @warn "No scratch nvme script found!"
     end
 end
@@ -1789,7 +1789,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
     if isfile(joinpath(homedir(), ".gitconfig"))
         gitconfig = read(joinpath(homedir(), ".gitconfig"), String)
         cmd *= """
-        
+
         sudo su - $user << EOF
         echo '$gitconfig' > ~/.gitconfig
         EOF
@@ -1798,7 +1798,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
     if isfile(joinpath(homedir(), ".git-credentials"))
         gitcredentials = rstrip(read(joinpath(homedir(), ".git-credentials"), String), [' ','\n'])
         cmd *= """
-        
+
         sudo su - $user << EOF
         echo "$gitcredentials" > ~/.git-credentials
         chmod 600 ~/.git-credentials
@@ -1821,7 +1821,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
             project_compressed, manifest_compressed, localpreferences_compressed = compress_environment(julia_environment_folder)
 
             cmd *= """
-            
+
             sudo su - $user << 'EOF'
             $exename -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$localpreferences_compressed", "$remote_julia_environment_name")'
             $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.Registry.update(); Pkg.activate(path); (retry(Pkg.instantiate))(); Pkg.precompile()'
@@ -1881,7 +1881,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
     """
 
     if use_lvm
-        if mpi_ranks_per_worker == 0 
+        if mpi_ranks_per_worker == 0
             shell_cmds *= """
 
             attempt_number=1
@@ -1889,7 +1889,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
             exit_code=0
             while [  \$attempt_number -le \$maximum_attempts ]; do
                 $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-                
+
                 exit_code=\$?
                 echo "attempt \$attempt_number is done with exit code \$exit_code..."
 
@@ -1956,7 +1956,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
         --$boundary--
         """
     else
-        if mpi_ranks_per_worker == 0 
+        if mpi_ranks_per_worker == 0
             shell_cmds *= """
 
             attempt_number=1
@@ -1964,7 +1964,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
             exit_code=0
             while [  \$attempt_number -le \$maximum_attempts ]; do
                 $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-                
+
                 exit_code=\$?
                 echo "attempt \$attempt_number is done with exit code \$exit_code..."
 
@@ -2340,7 +2340,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
 
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
-    
+
     cmd = buildstartupscript_cluster(manager, spot, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, exename, exeflags, env, user, template["tempdisk"], custom_environment, use_lvm)
     _cmd = base64encode(cmd)
 
@@ -2948,7 +2948,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
             nic_dic = JSON.parse(String(nic_r.body))
             nic_state = nic_dic["properties"]["provisioningState"]
         end
-    catch e 
+    catch e
         @error "failed to get $nicname status"
     end
 
@@ -2984,7 +2984,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     else
         cmd,_ = buildstartupscript(manager, exename, user, disk, customenv, use_lvm)
     end
-    
+
     _cmd = base64encode(cmd)
 
     if length(_cmd) > 64_000
@@ -3243,11 +3243,11 @@ function detached_service_wait(vm, custom_environment)
             @error "reached timeout ($timeout seconds) while waiting for $waitfor to start."
             throw(DetachedServiceTimeoutException(vm))
         end
-        
+
         write(stdout, spin(spincount, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
         flush(stdout)
         spincount = spincount == 4 ? 1 : spincount + 1
-        
+
         sleep(0.5)
     end
     write(stdout, spin(5, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
