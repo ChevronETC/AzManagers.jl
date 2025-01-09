@@ -2162,13 +2162,7 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     ncores_available - (ncores_per_machine * δn), ncores_spot_available - (ncores_per_machine * δn)
 end
 
-function get_CPU(template::AbstractString)
-    isfile(templates_filename_vm()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
-
-    templates_scaleset = JSON.parse(read(templates_filename_vm(), String))
-    haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
-    template = templates_scaleset[template]
-
+function nphysical_cores(template::Dict)
     ssid = template["subscriptionid"]
     region = template["value"]["location"]
     sku_name = template["value"]["properties"]["hardwareProfile"]["vmSize"]
@@ -2187,6 +2181,16 @@ function get_CPU(template::AbstractString)
 
     # Number of physical cores
     pCPU = hyperthreading ? div(parse(Int,vCPU),2) : parse(Int,vCPU)
+end
+
+function nphysical_cores(template::AbstractString)
+    isfile(templates_filename_vm()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
+
+    templates_scaleset = JSON.parse(read(templates_filename_vm(), String))
+    haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
+    template = templates_scaleset[template]
+
+    nphysical_cores(template)
 end
 
 function getnextlinks!(manager::AzManager, _r, value, nextlink, nretry, verbose)
@@ -3437,7 +3441,7 @@ function Base.kill(job::DetachedJob)
         "http://$(job.vm["ip"]):$(job.vm["port"])/cofii/detached/job/$(job.id)/kill")
 end
 
-export AzManager, DetachedJob, addproc, machine_preempt_channel_future, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
+export AzManager, DetachedJob, addproc, machine_preempt_channel_future, nphysical_cores, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
 
 if !isdefined(Base, :get_extension)
     include("../ext/MPIExt.jl")
