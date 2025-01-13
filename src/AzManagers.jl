@@ -2162,6 +2162,37 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     ncores_available - (ncores_per_machine * δn), ncores_spot_available - (ncores_per_machine * δn)
 end
 
+function nphysical_cores(template::Dict)
+    ssid = template["subscriptionid"]
+    region = template["value"]["location"]
+    sku_name = template["value"]["properties"]["hardwareProfile"]["vmSize"]
+
+    _r = HTTP.request("GET", 
+        "https://management.azure.com/subscriptions/$ssid/providers/Microsoft.Compute/skus?api-version=2022-11-01", 
+        ["Authorization" => "Bearer $(token(AzSession(;lazy=true)))"])
+    r = JSON.parse(String(_r.body))
+
+
+    filtered_skus = filter(sku -> sku["name"] == sku_name && haskey(sku, "capabilities") && any(location -> location == region, sku["locations"]), r["value"])
+
+    vCPU_details = [(cap["value"], any(cap -> cap["name"] == "HyperThreadingEnabled" && cap["value"] == "true", sku["capabilities"])) for sku in filtered_skus for cap in sku["capabilities"] if cap["name"] == "vCPUs"]
+    hyperthreading = vCPU_details[1][2]
+    vCPU = vCPU_details[1][1]
+
+    # Number of physical cores
+    pCPU = hyperthreading ? div(parse(Int,vCPU),2) : parse(Int,vCPU)
+end
+
+function nphysical_cores(template::AbstractString)
+    isfile(templates_filename_vm()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
+
+    templates_scaleset = JSON.parse(read(templates_filename_vm(), String))
+    haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
+    template = templates_scaleset[template]
+
+    nphysical_cores(template)
+end
+
 function getnextlinks!(manager::AzManager, _r, value, nextlink, nretry, verbose)
     while nextlink != ""
         _r = @retry nretry azrequest(
@@ -3410,7 +3441,7 @@ function Base.kill(job::DetachedJob)
         "http://$(job.vm["ip"]):$(job.vm["port"])/cofii/detached/job/$(job.id)/kill")
 end
 
-export AzManager, DetachedJob, addproc, machine_preempt_channel_future, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
+export AzManager, DetachedJob, addproc, machine_preempt_channel_future, nphysical_cores, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
 
 if !isdefined(Base, :get_extension)
     include("../ext/MPIExt.jl")

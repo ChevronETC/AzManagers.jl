@@ -400,3 +400,23 @@ end
 
     rmproc(testvm; session=session)
 end
+
+@testset "AzManagers, nphysical_cores $machine_name" for machine_name in ("cbox96","cbox64","ussc/t107/v4/amd/cbox176")
+    ncores = nphysical_cores(machine_name)
+
+    if machine_name == "cbox96"
+        @test ncores == 96
+    elseif machine_name == "cbox64"
+        @test ncores == 64
+    elseif machine_name == "ussc/t107/v4/amd/cbox176"
+        @test ncores == 176
+    end
+end
+
+@testset "AzManagers, nphysical_cores $templatename"
+    templates_scaleset = JSON.parse(read(AzManagers.templates_filename_vm(), String))
+    template = templates_vm[templatename] 
+    ncores = nphysical_cores(template)
+
+    @test ncores == 2
+end
