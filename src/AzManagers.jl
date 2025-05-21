@@ -1392,7 +1392,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
         version_string_from_master = read(client, Distributed.HDR_VERSION_LEN)
 
-        @shwo version_string_from_master
+        @show version_string_from_master
 
         Distributed.process_messages(client, client, false)
     end)
