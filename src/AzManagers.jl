@@ -1379,9 +1379,6 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         =#
 
         cookie_from_master = read(client, Distributed.HDR_COOKIE_LEN)
-
-        @show cookie_from_master
-
         if cookie_from_master[1] == 0x00
             error("received cookie with at least one null character")
         end
