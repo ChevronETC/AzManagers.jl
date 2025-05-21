@@ -1390,6 +1390,10 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
             error("received invalid cookie.")
         end
 
+        version_string_from_master = read(client, Distributed.HDR_VERSION_LEN)
+
+        @shwo version_string_from_master
+
         Distributed.process_messages(client, client, false)
     end)
     print(out, "julia_worker:")  # print header
