@@ -775,8 +775,6 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `spot_base_regular_priority_count=0` If spot is true, only start adding spot machines once there are this many non-spot machines added.
 * `spot_regular_percentage_above_base` If spot is true, then when ading new machines (above `spot_base_reqular_priority_count`) use regular (non-spot) priority for this percent of new machines.
 * `waitfor=false` wait for the cluster to be provisioned before returning, or return control to the caller immediately[3]
-* `mpi_ranks_per_worker=0` set the number of MPI ranks per Julia worker[4]
-* `mpi_flags="-bind-to core:\$(ENV["OMP_NUM_THREADS"]) -map-by numa"` extra flags to pass to mpirun (has effect when `mpi_ranks_per_worker>0`)
 * `nvidia_enable_ecc=true` on NVIDIA machines, ensure that ECC is set to `true` or `false` for all GPUs[5]
 * `nvidia_enable_mig=false` on NVIDIA machines, ensure that MIG is set to `true` or `false` for all GPUs[5]
 * `hyperthreading=nothing` Turn on/off hyperthreading on supported machine sizes.  The default uses the setting in the template.  To override the template setting, use `true` (on) or `false` (off).
@@ -788,11 +786,7 @@ image/version the VM was built with; otherwise, it is the latest version of the 
 [2] Interactive threads are supported beginning in version 1.9 of Julia.  For earlier versions, the default for `julia_num_threads` is `Threads.nthreads()`.
 [3] `waitfor=false` reflects the fact that the cluster manager is dynamic.  After the call to `addprocs` returns, use `workers()`
 to monitor the size of the cluster.
-[4] This is inteneded for use with Devito.  In particular, it allows Devito to gain performance by using
-MPI to do domain decomposition using MPI within a single VM.  If `mpi_ranks_per_worker=0`, then MPI is not
-used on the Julia workers.  This feature makes use of package extensions, meaning that you need to ensure
-that `using MPI` is somewhere in your calling script.
-[5] This may result in a re-boot of the VMs
+[4] This may result in a re-boot of the VMs
 """
 function Distributed.addprocs(template::Dict, n::Int;
         subscriptionid = "",
@@ -821,8 +815,6 @@ function Distributed.addprocs(template::Dict, n::Int;
         spot_base_regular_priority_count = 0,
         spot_regular_percentage_above_base = 0,
         waitfor = false,
-        mpi_ranks_per_worker = 0,
-        mpi_flags = "-bind-to core:$(get(ENV, "OMP_NUM_THREADS", 1)) --map-by numa",
         nvidia_enable_ecc = true,
         nvidia_enable_mig = false,
         hyperthreading = nothing,
@@ -850,7 +842,7 @@ function Distributed.addprocs(template::Dict, n::Int;
 
     @info "Provisioning $n virtual machines in scale-set $group..."
     _scalesets[scaleset] = scaleset_create_or_update(manager, user, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, sigimagename,
-        sigimageversion, imagename, osdisksize, nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig,
+        sigimageversion, imagename, osdisksize, nretry, template, n, ppi, nvidia_enable_ecc, nvidia_enable_mig,
         hyperthreading, julia_num_threads, omp_num_threads, exename, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base,
         verbose, customenv, overprovision, use_lvm)
 
@@ -1288,7 +1280,7 @@ function azure_physical_name(keyval="PhysicalHostName")
     physical_hostname
 end
 
-function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
+function azure_worker_init(cookie, master_address, master_port, ppi, exeflags)
     c = connect(IPv4(master_address), master_port)
 
     nbytes_written = write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
@@ -1309,8 +1301,6 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
             "priority" => get(r["compute"], "priority", ""),
             "localid" => 1,
             "name" => r["compute"]["name"],
-            "mpi" => mpi_size > 0,
-            "mpi_size" => mpi_size,
             "physical_hostname" => azure_physical_name()))
 
     _vm = base64encode(json(vm))
@@ -1325,7 +1315,6 @@ end
 function logging()
     manager = azmanager()
 
-    # if the workers are MPI enabled, then manager is only fully defined on MPI rank 0
     if isdefined(manager, :worker_socket)
         out = manager.worker_socket
 
@@ -1450,8 +1439,6 @@ function azure_worker(cookie, master_address, master_port, ppi, exeflags)
         sleep(60)
     end
 end
-
-function azure_worker_mpi end
 
 # We create our own method here so that we can add `localid` and `cnt` to `wconfig`.  This can
 # be useful when we need to understand the layout of processes that are sharing the same hardware.
@@ -1844,7 +1831,7 @@ function build_envstring(env::Dict)
     envstring
 end
 
-function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads::String, omp_num_threads::Int, exename::String, exeflags::String, env::Dict, user::String,
+function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads::String, omp_num_threads::Int, exename::String, exeflags::String, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool, use_lvm::Bool)
 
     shell_cmds, remote_julia_environment_name = buildstartupscript(manager, exename, user, disk, custom_environment, use_lvm)
@@ -1881,61 +1868,31 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
     """
 
     if use_lvm
-        if mpi_ranks_per_worker == 0 
-            shell_cmds *= """
+        shell_cmds *= """
 
-            attempt_number=1
-            maximum_attempts=5
-            exit_code=0
-            while [  \$attempt_number -le \$maximum_attempts ]; do
-                $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-                
-                exit_code=\$?
-                echo "attempt \$attempt_number is done with exit code \$exit_code..."
+        attempt_number=1
+        maximum_attempts=5
+        exit_code=0
+        while [  \$attempt_number -le \$maximum_attempts ]; do
+            $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+            
+            exit_code=\$?
+            echo "attempt \$attempt_number is done with exit code \$exit_code..."
 
-                if [ "\$exit_code" == "42" ]; then
-                    echo "...breaking from retry loop due to exit code 42."
-                    break
-                fi
+            if [ "\$exit_code" == "42" ]; then
+                echo "...breaking from retry loop due to exit code 42."
+                break
+            fi
 
-                echo "...trying again after sleeping for 5 seconds..."
-                sleep 5
-                attempt_number=\$(( attempt_number + 1 ))
+            echo "...trying again after sleeping for 5 seconds..."
+            sleep 5
+            attempt_number=\$(( attempt_number + 1 ))
 
-                echo "the worker startup was tried \$attempt_number times."
-            done
-            echo "the worker has finished running with exit code \$exit_code."
-            EOF
-            """
-        else
-            shell_cmds *= """
-
-            $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm()'
-
-            attempt_number=1
-            maximum_attempts=5
-            exit_code=0
-            while [  \$attempt_number -le \$maximum_attempts ]; do
-                mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-
-                exit_code=\$?
-                echo "attempt \$attempt_number is done with exit code \$exit_code...."
-
-                if [ "\$exit_code" == "42" ]; then
-                    echo "...breaking from retry loop due to exit code 42."
-                    break
-                fi
-
-                echo "...trying again after sleeping for 5 seconds..."
-                sleep 5
-                attempt_number=\$(( attempt_number + 1 ))
-
-                echo "the worker startup was tried \$attempt_number times."
-            done
-            echo "the worker has finished running with exit code \$exit_code."
-            EOF
-            """
-        end
+            echo "the worker startup was tried \$attempt_number times."
+        done
+        echo "the worker has finished running with exit code \$exit_code."
+        EOF
+        """
 
         cloud_cfg = cloudcfg_nvme_scratch()
         boundary = "===Boundary==="
@@ -1956,61 +1913,31 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
         --$boundary--
         """
     else
-        if mpi_ranks_per_worker == 0 
-            shell_cmds *= """
+        shell_cmds *= """
 
-            attempt_number=1
-            maximum_attempts=5
-            exit_code=0
-            while [  \$attempt_number -le \$maximum_attempts ]; do
-                $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-                
-                exit_code=\$?
-                echo "attempt \$attempt_number is done with exit code \$exit_code..."
+        attempt_number=1
+        maximum_attempts=5
+        exit_code=0
+        while [  \$attempt_number -le \$maximum_attempts ]; do
+            $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+            
+            exit_code=\$?
+            echo "attempt \$attempt_number is done with exit code \$exit_code..."
 
-                if [ "\$exit_code" == "42" ]; then
-                    echo "...breaking from retry loop due to exit code 42."
-                    break
-                fi
+            if [ "\$exit_code" == "42" ]; then
+                echo "...breaking from retry loop due to exit code 42."
+                break
+            fi
 
-                echo "...trying again after sleeping for 5 seconds..."
-                sleep 5
-                attempt_number=\$(( attempt_number + 1 ))
+            echo "...trying again after sleeping for 5 seconds..."
+            sleep 5
+            attempt_number=\$(( attempt_number + 1 ))
 
-                echo "the worker startup was tried \$attempt_number times."
-            done
-            echo "the worker has finished running with exit code \$exit_code."
-            EOF
-            """
-        else
-            shell_cmds *= """
-
-            $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
-
-            attempt_number=1
-            maximum_attempts=5
-            exit_code=0
-            while [  \$attempt_number -le \$maximum_attempts ]; do
-                mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-
-                exit_code=\$?
-                echo "attempt \$attempt_number is done with exit code \$exit_code...."
-
-                if [ "\$exit_code" == "42" ]; then
-                    echo "...breaking from retry loop due to exit code 42."
-                    break
-                fi
-
-                echo "...trying again after sleeping for 5 seconds..."
-                sleep 5
-                attempt_number=\$(( attempt_number + 1 ))
-
-                echo "the worker startup was tried \$attempt_number times."
-            done
-            echo "the worker has finished running with exit code \$exit_code."
-            EOF
-            """
-        end
+            echo "the worker startup was tried \$attempt_number times."
+        done
+        echo "the worker has finished running with exit code \$exit_code."
+        EOF
+        """
 
         cmd = shell_cmds
     end
@@ -2334,7 +2261,7 @@ function scaleset_capacity!(manager::AzManager, subscriptionid, resourcegroup, s
 end
 
 function scaleset_create_or_update(manager::AzManager, user, subscriptionid, resourcegroup, scalesetname, sigimagename, sigimageversion,
-        imagename, osdisksize, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, hyperthreading, julia_num_threads,
+        imagename, osdisksize, nretry, template, δn, ppi, nvidia_enable_ecc, nvidia_enable_mig, hyperthreading, julia_num_threads,
         omp_num_threads, exename, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base, verbose, custom_environment, overprovision, use_lvm)
     load_manifest()
     ssh_key = _manifest["ssh_public_key_file"]
@@ -2372,7 +2299,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     key = Dict("path" => "/home/$user/.ssh/authorized_keys", "keyData" => read(ssh_key, String))
     push!(_template["properties"]["virtualMachineProfile"]["osProfile"]["linuxConfiguration"]["ssh"]["publicKeys"], key)
     
-    cmd = buildstartupscript_cluster(manager, spot, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, exename, exeflags, env, user, template["tempdisk"], custom_environment, use_lvm)
+    cmd = buildstartupscript_cluster(manager, spot, ppi, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads, omp_num_threads, exename, exeflags, env, user, template["tempdisk"], custom_environment, use_lvm)
     _cmd = base64encode(cmd)
 
     if length(_cmd) > 64_000
@@ -3443,9 +3370,5 @@ function Base.kill(job::DetachedJob)
 end
 
 export AzManager, DetachedJob, addproc, machine_preempt_channel_future, nphysical_cores, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
-
-if !isdefined(Base, :get_extension)
-    include("../ext/MPIExt.jl")
-end
 
 end

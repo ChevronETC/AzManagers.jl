@@ -1,5 +1,4 @@
 using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
-using MPI
 
 session = AzSession(;protocal=AzClientCredentials)
 
