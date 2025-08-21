@@ -822,7 +822,8 @@ function Distributed.addprocs(template::Dict, n::Int;
         spot_regular_percentage_above_base = 0,
         waitfor = false,
         mpi_ranks_per_worker = 0,
-        mpi_flags = "-bind-to core:$(get(ENV, "OMP_NUM_THREADS", 1)) --map-by numa",
+        # mpi_flags = "-bind-to core:$(get(ENV, "OMP_NUM_THREADS", 1)) --map-by numa",
+        mpi_flags = "",
         nvidia_enable_ecc = true,
         nvidia_enable_mig = false,
         hyperthreading = nothing,
@@ -1289,6 +1290,7 @@ function azure_physical_name(keyval="PhysicalHostName")
 end
 
 function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
+    @show mpi_size
     c = connect(IPv4(master_address), master_port)
 
     nbytes_written = write(c, rpad(cookie, Distributed.HDR_COOKIE_LEN)[1:Distributed.HDR_COOKIE_LEN])
@@ -1908,33 +1910,34 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
             EOF
             """
         else
-            shell_cmds *= """
+            error("Should never be here ... mpi with lvm")
+            # shell_cmds *= """
 
-            $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm()'
+            # $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm()'
 
-            attempt_number=1
-            maximum_attempts=5
-            exit_code=0
-            while [  \$attempt_number -le \$maximum_attempts ]; do
-                mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+            # attempt_number=1
+            # maximum_attempts=5
+            # exit_code=0
+            # while [  \$attempt_number -le \$maximum_attempts ]; do
+            #     mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
 
-                exit_code=\$?
-                echo "attempt \$attempt_number is done with exit code \$exit_code...."
+            #     exit_code=\$?
+            #     echo "attempt \$attempt_number is done with exit code \$exit_code...."
 
-                if [ "\$exit_code" == "42" ]; then
-                    echo "...breaking from retry loop due to exit code 42."
-                    break
-                fi
+            #     if [ "\$exit_code" == "42" ]; then
+            #         echo "...breaking from retry loop due to exit code 42."
+            #         break
+            #     fi
 
-                echo "...trying again after sleeping for 5 seconds..."
-                sleep 5
-                attempt_number=\$(( attempt_number + 1 ))
+            #     echo "...trying again after sleeping for 5 seconds..."
+            #     sleep 5
+            #     attempt_number=\$(( attempt_number + 1 ))
 
-                echo "the worker startup was tried \$attempt_number times."
-            done
-            echo "the worker has finished running with exit code \$exit_code."
-            EOF
-            """
+            #     echo "the worker startup was tried \$attempt_number times."
+            # done
+            # echo "the worker has finished running with exit code \$exit_code."
+            # EOF
+            # """
         end
 
         cloud_cfg = cloudcfg_nvme_scratch()
@@ -1983,33 +1986,34 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
             EOF
             """
         else
-            shell_cmds *= """
+            error("Should never be here ... mpi without lvm")
+            # shell_cmds *= """
 
-            $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
+            # $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
 
-            attempt_number=1
-            maximum_attempts=5
-            exit_code=0
-            while [  \$attempt_number -le \$maximum_attempts ]; do
-                mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+            # attempt_number=1
+            # maximum_attempts=5
+            # exit_code=0
+            # while [  \$attempt_number -le \$maximum_attempts ]; do
+            #     mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
 
-                exit_code=\$?
-                echo "attempt \$attempt_number is done with exit code \$exit_code...."
+            #     exit_code=\$?
+            #     echo "attempt \$attempt_number is done with exit code \$exit_code...."
 
-                if [ "\$exit_code" == "42" ]; then
-                    echo "...breaking from retry loop due to exit code 42."
-                    break
-                fi
+            #     if [ "\$exit_code" == "42" ]; then
+            #         echo "...breaking from retry loop due to exit code 42."
+            #         break
+            #     fi
 
-                echo "...trying again after sleeping for 5 seconds..."
-                sleep 5
-                attempt_number=\$(( attempt_number + 1 ))
+            #     echo "...trying again after sleeping for 5 seconds..."
+            #     sleep 5
+            #     attempt_number=\$(( attempt_number + 1 ))
 
-                echo "the worker startup was tried \$attempt_number times."
-            done
-            echo "the worker has finished running with exit code \$exit_code."
-            EOF
-            """
+            #     echo "the worker startup was tried \$attempt_number times."
+            # done
+            # echo "the worker has finished running with exit code \$exit_code."
+            # EOF
+            # """
         end
 
         cmd = shell_cmds
