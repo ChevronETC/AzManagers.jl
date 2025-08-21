@@ -23,6 +23,15 @@ Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
+[weakdeps]
+MPI = "da04e1cc-30fd-572f-bb4f-1f8673147195"
+
+[extras]
+MPI = "da04e1cc-30fd-572f-bb4f-1f8673147195"
+
+[extensions]
+MPIExt = "MPI"
+
 [compat]
 AzSessions = "2"
 CodecZlib = "0.7"
@@ -30,5 +39,6 @@ HTTP = "1"
 JSON = "0.21"
 JSONWebTokens = "1"
 LibCURL = "0.6"
+MPI = "0.14, 0.15, 0.16, 0.17, 0.18, 0.19, 0.20"
 TOML = "1"
 julia = "^1.4"
