@@ -1890,7 +1890,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
             maximum_attempts=5
             exit_code=0
             while [  \$attempt_number -le \$maximum_attempts ]; do
-                $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+                $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.status(); Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
                 
                 exit_code=\$?
                 echo "attempt \$attempt_number is done with exit code \$exit_code..."
