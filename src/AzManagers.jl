@@ -1453,8 +1453,6 @@ function azure_worker(cookie, master_address, master_port, ppi, exeflags)
     end
 end
 
-function azure_worker_mpi end
-
 # We create our own method here so that we can add `localid` and `cnt` to `wconfig`.  This can
 # be useful when we need to understand the layout of processes that are sharing the same hardware.
 function Distributed.launch_n_additional_processes(manager::AzManager, frompid, fromconfig, cnt, launched_q)
@@ -1883,62 +1881,31 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
     """
 
     if use_lvm
-        if mpi_ranks_per_worker == 0 
-            shell_cmds *= """
+        shell_cmds *= """
 
-            attempt_number=1
-            maximum_attempts=5
-            exit_code=0
-            while [  \$attempt_number -le \$maximum_attempts ]; do
-                $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.status(); Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-                
-                exit_code=\$?
-                echo "attempt \$attempt_number is done with exit code \$exit_code..."
+        attempt_number=1
+        maximum_attempts=5
+        exit_code=0
+        while [  \$attempt_number -le \$maximum_attempts ]; do
+            $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.status(); Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+            
+            exit_code=\$?
+            echo "attempt \$attempt_number is done with exit code \$exit_code..."
 
-                if [ "\$exit_code" == "42" ]; then
-                    echo "...breaking from retry loop due to exit code 42."
-                    break
-                fi
+            if [ "\$exit_code" == "42" ]; then
+                echo "...breaking from retry loop due to exit code 42."
+                break
+            fi
 
-                echo "...trying again after sleeping for 5 seconds..."
-                sleep 5
-                attempt_number=\$(( attempt_number + 1 ))
+            echo "...trying again after sleeping for 5 seconds..."
+            sleep 5
+            attempt_number=\$(( attempt_number + 1 ))
 
-                echo "the worker startup was tried \$attempt_number times."
-            done
-            echo "the worker has finished running with exit code \$exit_code."
-            EOF
-            """
-        else
-            error("Should never be here ... mpi with lvm")
-            # shell_cmds *= """
-
-            # $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm()'
-
-            # attempt_number=1
-            # maximum_attempts=5
-            # exit_code=0
-            # while [  \$attempt_number -le \$maximum_attempts ]; do
-            #     mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-
-            #     exit_code=\$?
-            #     echo "attempt \$attempt_number is done with exit code \$exit_code...."
-
-            #     if [ "\$exit_code" == "42" ]; then
-            #         echo "...breaking from retry loop due to exit code 42."
-            #         break
-            #     fi
-
-            #     echo "...trying again after sleeping for 5 seconds..."
-            #     sleep 5
-            #     attempt_number=\$(( attempt_number + 1 ))
-
-            #     echo "the worker startup was tried \$attempt_number times."
-            # done
-            # echo "the worker has finished running with exit code \$exit_code."
-            # EOF
-            # """
-        end
+            echo "the worker startup was tried \$attempt_number times."
+        done
+        echo "the worker has finished running with exit code \$exit_code."
+        EOF
+        """
 
         cloud_cfg = cloudcfg_nvme_scratch()
         boundary = "===Boundary==="
@@ -1959,62 +1926,31 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
         --$boundary--
         """
     else
-        if mpi_ranks_per_worker == 0 
-            shell_cmds *= """
+        shell_cmds *= """
 
-            attempt_number=1
-            maximum_attempts=5
-            exit_code=0
-            while [  \$attempt_number -le \$maximum_attempts ]; do
-                $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-                
-                exit_code=\$?
-                echo "attempt \$attempt_number is done with exit code \$exit_code..."
+        attempt_number=1
+        maximum_attempts=5
+        exit_code=0
+        while [  \$attempt_number -le \$maximum_attempts ]; do
+            $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
+            
+            exit_code=\$?
+            echo "attempt \$attempt_number is done with exit code \$exit_code..."
 
-                if [ "\$exit_code" == "42" ]; then
-                    echo "...breaking from retry loop due to exit code 42."
-                    break
-                fi
+            if [ "\$exit_code" == "42" ]; then
+                echo "...breaking from retry loop due to exit code 42."
+                break
+            fi
 
-                echo "...trying again after sleeping for 5 seconds..."
-                sleep 5
-                attempt_number=\$(( attempt_number + 1 ))
+            echo "...trying again after sleeping for 5 seconds..."
+            sleep 5
+            attempt_number=\$(( attempt_number + 1 ))
 
-                echo "the worker startup was tried \$attempt_number times."
-            done
-            echo "the worker has finished running with exit code \$exit_code."
-            EOF
-            """
-        else
-            error("Should never be here ... mpi without lvm")
-            # shell_cmds *= """
-
-            # $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
-
-            # attempt_number=1
-            # maximum_attempts=5
-            # exit_code=0
-            # while [  \$attempt_number -le \$maximum_attempts ]; do
-            #     mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-
-            #     exit_code=\$?
-            #     echo "attempt \$attempt_number is done with exit code \$exit_code...."
-
-            #     if [ "\$exit_code" == "42" ]; then
-            #         echo "...breaking from retry loop due to exit code 42."
-            #         break
-            #     fi
-
-            #     echo "...trying again after sleeping for 5 seconds..."
-            #     sleep 5
-            #     attempt_number=\$(( attempt_number + 1 ))
-
-            #     echo "the worker startup was tried \$attempt_number times."
-            # done
-            # echo "the worker has finished running with exit code \$exit_code."
-            # EOF
-            # """
-        end
+            echo "the worker startup was tried \$attempt_number times."
+        done
+        echo "the worker has finished running with exit code \$exit_code."
+        EOF
+        """
 
         cmd = shell_cmds
     end
@@ -3447,9 +3383,5 @@ function Base.kill(job::DetachedJob)
 end
 
 export AzManager, DetachedJob, addproc, machine_preempt_channel_future, nphysical_cores, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
-
-# if !isdefined(Base, :get_extension)
-#     include("../ext/MPIExt.jl")
-# end
 
 end
