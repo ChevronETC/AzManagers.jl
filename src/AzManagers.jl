@@ -2027,6 +2027,21 @@ function buildstartupscript_detached(manager::AzManager, exename::String, julia_
 
     juliaenvstring = remote_julia_environment_name == "" ? "" : """using Pkg; Pkg.activate(joinpath(Pkg.envdir(), "$remote_julia_environment_name")); """
 
+    #=
+    if exename is something like `mpirun -n 1 julia`, then we need to remove the `mpirun -n 1` part
+    to get the actual julia executable name.  The reason for this is that detached jobs
+    run on detached machines in their own process started with `exename`.  If `exename` includes
+    mpirun or mpiexec, this wouuld result in a recursive mpi call error due to the
+    detached service also being started with mpirun or mpiexec.
+    =#
+    exename_parts = split(exename, ' ')
+    i = findfirst(part->contains(part, "julia"), exename_parts)
+    
+    if i === nothing
+        error("unable to find 'julia' in exename='$exename'")
+    end
+    exename_nompi = join(exename_parts[i:end], ' ')
+
     if use_lvm
         shell_cmds *= """
 
@@ -2036,7 +2051,7 @@ function buildstartupscript_detached(manager::AzManager, exename::String, julia_
         export OMP_NUM_THREADS=$omp_num_threads
         ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N '' <<<y
         cd /home/$user
-        $exename -t $julia_num_threads -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.detached_port!($(AzManagers.detached_port())); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
+        $exename_nompi -t $julia_num_threads -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.detached_port!($(AzManagers.detached_port())); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname", exename="$exename")'
         EOF
         """
 
@@ -2068,7 +2083,7 @@ function buildstartupscript_detached(manager::AzManager, exename::String, julia_
         export OMP_NUM_THREADS=$omp_num_threads
         ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N '' <<<y
         cd /home/$user
-        $exename -t $julia_num_threads -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.mount_datadisks(); AzManagers.detached_port!($(AzManagers.detached_port())); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname")'
+        $exename_nompi -t $julia_num_threads -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.mount_datadisks(); AzManagers.detached_port!($(AzManagers.detached_port())); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname", exename="$exename")'
         EOF
         """
         cmd = shell_cmds
@@ -2582,7 +2597,7 @@ function timestamp_metaformatter(level::Logging.LogLevel, _module, group, id, fi
     color, prefix, suffix
 end
 
-function detachedservice(address=ip"0.0.0.0"; server=nothing, subscriptionid="", resourcegroup="", vmname="")
+function detachedservice(address=ip"0.0.0.0"; server=nothing, subscriptionid="", resourcegroup="", vmname="", exename="julia")
     HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/run", detachedrun)
     HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/kill", detachedkill)
     HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/wait", detachedwait)
@@ -2597,7 +2612,7 @@ function detachedservice(address=ip"0.0.0.0"; server=nothing, subscriptionid="",
     vm_sn = azure_physical_name()
 
     AzManagers.DETACHED_VM[] = Dict("subscriptionid"=>string(subscriptionid), "resourcegroup"=>string(resourcegroup),
-        "name"=>string(vmname), "ip"=>string(getipaddr()), "port"=>string(port), "physical_hostname" => vm_sn)
+        "name"=>string(vmname), "ip"=>string(getipaddr()), "port"=>string(port), "physical_hostname" => vm_sn, "exename"=>string(exename))
 
     global_logger(ConsoleLogger(stdout, Logging.Info; meta_formatter=timestamp_metaformatter))
 
@@ -2614,6 +2629,8 @@ function detachedrun(request::HTTP.Request)
         if !haskey(r, "code")
             return HTTP.Response(400, ["Content-Type"=>"application/json"], json(Dict("error"=>"Malformed body: JSON body must contain the key: code")); request)
         end
+
+        exename = get(r, "exename", "julia")
 
         _tempname_logging = tempname(;cleanup=false)
         write(_tempname_logging, """using Logging; global_logger(ConsoleLogger(stdout, Logging.Info))""")
@@ -2685,9 +2702,11 @@ function detachedrun(request::HTTP.Request)
         nthreads, nthreads_interactive = Threads.nthreads(), Threads.nthreads(:interactive)
         julia_num_threads = nthreads_filter("$(Threads.nthreads()),$(Threads.nthreads(:interactive))")
         projectdir = dirname(Pkg.project().path)
-        process = open(`julia -t $julia_num_threads --project=$projectdir $_tempname_wrapper`)
+        exename_parts = split(exename)
+        cmd = pipeline(Cmd(vcat(exename_parts, ["-t", julia_num_threads, "--project=$projectdir", _tempname_wrapper])))
+        process = open(cmd)
         pid = getpid(process)
-        @info "executing $_tempname_wrapper with $nthreads threads, and pid $pid"
+        @info "executing $_tempname_wrapper with executable '$exename', $nthreads Julia threads, environment '$projectdir', and pid $pid"
 
         DETACHED_JOBS[string(id)] = Dict("process"=>process, "request"=>request, "stdout"=>outfile, "stderr"=>errfile, "codefile"=>_tempname, "code"=>code)
     catch e
@@ -3104,7 +3123,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
 
     vm = Dict("name"=>vmname, "ip"=>string(r["properties"]["ipConfigurations"][1]["properties"]["privateIPAddress"]),
         "subscriptionid"=>string(subscriptionid), "resourcegroup"=>string(resourcegroup), "port"=>string(detached_port()),
-        "julia_num_threads"=>string(julia_num_threads), "omp_num_threads"=>string(omp_num_threads),
+        "julia_num_threads"=>string(julia_num_threads), "omp_num_threads"=>string(omp_num_threads), "exename"=>string(exename),
         "size"=>vm_template["value"]["properties"]["hardwareProfile"]["vmSize"])
 
     if detachedservice
@@ -3369,6 +3388,7 @@ function detached_run(code, ip::String="", port=detached_port();
     serialize(io, variablebundle())
     body = Dict(
         "persist" => persist,
+        "exename" => vm["exename"],
         "variablebundle" => base64encode(take!(io)),
         "code" => """
         $code
