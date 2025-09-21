@@ -3388,7 +3388,7 @@ function detached_run(code, ip::String="", port=detached_port();
     serialize(io, variablebundle())
     body = Dict(
         "persist" => persist,
-        "exename" => vm["exename"],
+        "exename" => get(vm, "exename", "julia"),
         "variablebundle" => base64encode(take!(io)),
         "code" => """
         $code
