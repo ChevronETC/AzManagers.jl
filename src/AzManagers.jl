@@ -2025,7 +2025,7 @@ function buildstartupscript_detached(manager::AzManager, exename::String, julia_
 
     envstring = build_envstring(env)
 
-    juliaenvstring = remote_julia_environment_name == "" ? "" : """using Pkg; Pkg.activate(joinpath(Pkg.envdir(), "$remote_julia_environment_name")); """
+    juliaenvstring = remote_julia_environment_name == "" ? "" : """Pkg.activate(joinpath(Pkg.envdir(), "$remote_julia_environment_name")); """
 
     #=
     if exename is something like `mpirun -n 1 julia`, then we need to remove the `mpirun -n 1` part
@@ -2051,7 +2051,7 @@ function buildstartupscript_detached(manager::AzManager, exename::String, julia_
         export OMP_NUM_THREADS=$omp_num_threads
         ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N '' <<<y
         cd /home/$user
-        $exename_nompi -t $julia_num_threads -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.detached_port!($(AzManagers.detached_port())); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname", exename="$exename")'
+        $exename_nompi -t $julia_num_threads -e 'using Pkg; $(juliaenvstring)try using AzManagers; catch; Pkg.instantiate(); using AzManagers; end; AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.detached_port!($(AzManagers.detached_port())); if Pkg.dependencies()[Base.UUID("db05ebb0-6096-11e9-199b-87b703361841")].version >= v"3.17"; AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname", exename="$exename"); else @warn "exename not supported in Azmanagers < 3.17"; AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname"); end'
         EOF
         """
 
@@ -2083,7 +2083,7 @@ function buildstartupscript_detached(manager::AzManager, exename::String, julia_
         export OMP_NUM_THREADS=$omp_num_threads
         ssh-keygen -f /home/$user/.ssh/azmanagers_rsa -N '' <<<y
         cd /home/$user
-        $exename_nompi -t $julia_num_threads -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.mount_datadisks(); AzManagers.detached_port!($(AzManagers.detached_port())); AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname", exename="$exename")'
+        $exename_nompi -t $julia_num_threads -e 'using Pkg; $(juliaenvstring)try using AzManagers; catch; Pkg.instantiate(); using AzManagers; end; AzManagers.mount_datadisks(); AzManagers.detached_port!($(AzManagers.detached_port())); if Pkg.dependencies()[Base.UUID("db05ebb0-6096-11e9-199b-87b703361841")].version >= v"3.17"; AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname", exename="$exename"); else @warn "exename not supported in Azmanagers < 3.17"; AzManagers.detachedservice(;subscriptionid="$subscriptionid", resourcegroup="$resourcegroup", vmname="$vmname"); end'
         EOF
         """
         cmd = shell_cmds
@@ -3388,7 +3388,7 @@ function detached_run(code, ip::String="", port=detached_port();
     serialize(io, variablebundle())
     body = Dict(
         "persist" => persist,
-        "exename" => vm["exename"],
+        "exename" => get(vm, "exename", "julia"),
         "variablebundle" => base64encode(take!(io)),
         "code" => """
         $code
