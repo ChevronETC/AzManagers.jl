@@ -6,7 +6,7 @@ function save_template(templates_filename::AbstractString, name::AbstractString,
     if !ispath(templates_folder())
         mkdir(templates_folder())
     end
-    write(templates_filename, json(templates, 1))
+    write(templates_filename, JSON.json(templates, 1))
     nothing
 end
 

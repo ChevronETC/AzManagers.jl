@@ -37,7 +37,7 @@ function write_manifest(;
     manifest = Dict("resourcegroup"=>resourcegroup, "subscriptionid"=>subscriptionid, "ssh_user"=>ssh_user, "ssh_private_key_file"=>ssh_private_key_file, "ssh_public_key_file"=>ssh_public_key_file)
     try
         isdir(manifestpath()) || mkdir(manifestpath(); mode=0o700)
-        write(manifestfile(), json(manifest, 1))
+        write(manifestfile(), JSON.json(manifest, 1))
         chmod(manifestfile(), 0o600)
     catch e
         @error "Failed to write manifest file, $(AzManagers.manifestfile())"
@@ -1313,7 +1313,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
             "mpi_size" => mpi_size,
             "physical_hostname" => azure_physical_name()))
 
-    _vm = base64encode(json(vm))
+    _vm = base64encode(JSON.json(vm))
 
     nbytes_written = write(c, _vm*"\n")
     nbytes_written == length(_vm)+1 || error("wrote wrong number of bytes")
@@ -2235,7 +2235,7 @@ function resourcegraphrequest(manager, body)
             manager.verbose,
             "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01",
             ["Authorization"=>"Bearer $(token(manager.session))", "Content-Type"=>"application/json"],
-            json(body)
+            JSON.json(body)
         )
         r = JSON.parse(String(_r.body))
         data = [data;get(r, "data", [])]
@@ -2345,7 +2345,7 @@ function scaleset_capacity!(manager::AzManager, subscriptionid, resourcegroup, s
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
         ["Authorization"=>"Bearer $(token(manager.session))", "Content-Type"=>"application/json"],
-        json(Dict("sku"=>Dict("capacity"=>capacity))))
+        JSON.json(Dict("sku"=>Dict("capacity"=>capacity))))
 end
 
 function scaleset_create_or_update(manager::AzManager, user, subscriptionid, resourcegroup, scalesetname, sigimagename, sigimageversion,
@@ -2469,7 +2469,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
         ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
-        String(json(_template)))
+        String(JSON.json(_template)))
 
     if manager.show_quota
         @info "Quota after requesting that the scale-set is created or grows" remaining_resource(_r)
@@ -2485,7 +2485,7 @@ function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetn
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/delete?forceDeletion=True&api-version=2023-07-01",
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
-        json(body))
+        JSON.json(body))
 
     if manager.show_quota
         @info "Quota after requesting deletion of $(length(ids)) virtual machines" remaining_resource(_r)
@@ -2627,7 +2627,7 @@ function detachedrun(request::HTTP.Request)
         r = JSON.parse(String(HTTP.payload(request)))
 
         if !haskey(r, "code")
-            return HTTP.Response(400, ["Content-Type"=>"application/json"], json(Dict("error"=>"Malformed body: JSON body must contain the key: code")); request)
+            return HTTP.Response(400, ["Content-Type"=>"application/json"], JSON.json(Dict("error"=>"Malformed body: JSON body must contain the key: code")); request)
         end
 
         exename = get(r, "exename", "julia")
@@ -2652,7 +2652,7 @@ function detachedrun(request::HTTP.Request)
             end
         end
         if length(codelines) == 0
-            return HTTP.Response(400, ["Content-Type"=>"application/json"], json(Dict("error"=>"No code to execute, missing end?", "code"=>code)); request)
+            return HTTP.Response(400, ["Content-Type"=>"application/json"], JSON.json(Dict("error"=>"No code to execute, missing end?", "code"=>code)); request)
         end
 
         code = join(codelines, "\n")
@@ -2712,7 +2712,7 @@ function detachedrun(request::HTTP.Request)
     catch e
         io = IOBuffer()
         logerror(e, Logging.Warn)
-        return HTTP.Response(500, ["Content-Type"=>"application/json"], json(Dict("error"=>String(take!(io)))); request)
+        return HTTP.Response(500, ["Content-Type"=>"application/json"], JSON.json(Dict("error"=>String(take!(io)))); request)
     end
 
     Threads.@spawn begin
@@ -2725,7 +2725,7 @@ function detachedrun(request::HTTP.Request)
             rmproc(vm; session=sessionbundle(:management))
         end
     end
-    HTTP.Response(200, ["Content-Type"=>"application/json"], json(Dict("id"=>id, "pid"=>pid)); request)
+    HTTP.Response(200, ["Content-Type"=>"application/json"], JSON.json(Dict("id"=>id, "pid"=>pid)); request)
 end
 
 function detachedkill(request::HTTP.Request)
@@ -2778,9 +2778,9 @@ function detachedstatus(request::HTTP.Request)
             status = "starting"
         end
     catch e
-        return HTTP.Response(500, ["Content-Type"=>"application/json"], json(Dict("error"=>show(e), "trace"=>show(stacktrace()))); request)
+        return HTTP.Response(500, ["Content-Type"=>"application/json"], JSON.json(Dict("error"=>show(e), "trace"=>show(stacktrace()))); request)
     end
-    HTTP.Response(200, ["Content-Type"=>"application/json"], json(Dict("id"=>id, "status"=>status)); request)
+    HTTP.Response(200, ["Content-Type"=>"application/json"], JSON.json(Dict("id"=>id, "status"=>status)); request)
 end
 
 function detachedstdout(request::HTTP.Request)
@@ -2857,7 +2857,7 @@ function detachedwait(request::HTTP.Request)
         end
         write(io, "\n")
 
-        return HTTP.Response(400, ["Content-Type"=>"application/json"], json(Dict("error"=>String(take!(io)))); request)
+        return HTTP.Response(400, ["Content-Type"=>"application/json"], JSON.json(Dict("error"=>String(take!(io)))); request)
     end
     HTTP.Response(200, ["Content-Type"=>"application/text"], "OK, job $id is finished"; request)
 end
@@ -2867,7 +2867,7 @@ function detachedping(request::HTTP.Request)
 end
 
 function detachedvminfo(request::HTTP.Request)
-    HTTP.Response(200, ["Content-Type"=>"application/json"], json(AzManagers.DETACHED_VM[]); request)
+    HTTP.Response(200, ["Content-Type"=>"application/json"], JSON.json(AzManagers.DETACHED_VM[]); request)
 end
 
 #
@@ -2974,7 +2974,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2022-09-01",
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"],
-        String(json(nic_template)))
+        String(JSON.json(nic_template)))
 
     sleep(5)
 
@@ -3077,7 +3077,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
         verbose,
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2023-09-01",
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"],
-        String(json(vm_template["value"])))
+        String(JSON.json(vm_template["value"])))
 
     spincount = 1
     starttime = tic = time()
@@ -3398,7 +3398,7 @@ function detached_run(code, ip::String="", port=detached_port();
         "POST",
         "http://$(vm["ip"]):$(vm["port"])/cofii/detached/run",
         ["Content-Type"=>"application/json"],
-        json(body))
+        JSON.json(body))
     r = JSON.parse(String(_r.body))
 
     @info "detached job id is $(r["id"]) at $(vm["name"]),$(vm["ip"]):$(vm["port"])"
