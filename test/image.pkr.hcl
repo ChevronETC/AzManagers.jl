@@ -71,8 +71,8 @@ source "azure-arm" "cofii" {
     os_type = "Linux"
     vm_size = "Standard_D8s_v3"
     image_publisher = "canonical"
-    image_offer = "0001-com-ubuntu-server-jammy"
-    image_sku = "22_04-lts-gen2"
+    image_offer = "ubuntu-24_04-lts"
+    image_sku = "server"
     shared_image_gallery_destination {
         resource_group = var.resource_group
         gallery_name = var.gallery
