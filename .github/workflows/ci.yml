@@ -78,7 +78,7 @@ jobs:
             -var "julia_version_major=${JULIA_VERSION_MAJOR}" \
             -var "julia_version_minor=${JULIA_VERSION_MINOR}" \
             -var "julia_version_patch=${JULIA_VERSION_PATCH}" \
-            -var "azmanagers_version=${{ github.sha }}" \
+            -var "azmanagers_version=${{ github.event.pull_request.head.sha }}" \
             ${GITHUB_WORKSPACE}/test/image.pkr.hcl
 
       - name: Create coordinator VM
