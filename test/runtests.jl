@@ -184,6 +184,7 @@ end
     bname = "test$r"
 
     testvm = addproc(templatename; basename=bname, session=session, customenv=true)
+    sleep(1)
     testjob = @detachat testvm begin
         using Pkg
         pinfo = Pkg.project()
