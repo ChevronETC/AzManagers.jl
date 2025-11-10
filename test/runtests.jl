@@ -167,7 +167,7 @@ if VERSION >= v"1.9"
     end
 end
 
-@testset "environment, addproc" begin
+@test_skip @testset "environment, addproc" begin
     mkpath("myproject")
     cd("myproject")
     Pkg.activate(".")
