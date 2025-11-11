@@ -12,8 +12,8 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - 1.6
-          - 1
+          - lts
+          - 1 # automatically expands to the latest stable 1.x release of Julia
         os:
           - ubuntu-latest
         arch:
@@ -34,7 +34,7 @@ jobs:
       COMMIT_SHA: "${{ github.sha }}"
     steps:
       - uses: actions/checkout@v3
-      - uses: julia-actions/setup-julia@v1
+      - uses: julia-actions/setup-julia@v2
         with:
           version: ${{ matrix.version }}
 
@@ -47,9 +47,9 @@ jobs:
           az group create                -g "$RESOURCE_GROUP" -l southcentralus --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com"
           az group wait                  -g "$RESOURCE_GROUP" --created 
           az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
-          az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-jammy" -s "22_04-lts-gen2" --os-type linux --hyper-v-generation V2
+          az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "ubuntu-24_04-lts" -s "server" --os-type linux --hyper-v-generation V2
           az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME"
-          az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22
+          az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22 8000-9000
           az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
           az network vnet subnet update  -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" --vnet-name "$VNET_NAME" --network-security-group "$NSG_NAME"
 
@@ -78,7 +78,7 @@ jobs:
             -var "julia_version_major=${JULIA_VERSION_MAJOR}" \
             -var "julia_version_minor=${JULIA_VERSION_MINOR}" \
             -var "julia_version_patch=${JULIA_VERSION_PATCH}" \
-            -var "azmanagers_version=${{ github.sha }}" \
+            -var "azmanagers_version=${{ github.event.pull_request.head.sha }}" \
             ${GITHUB_WORKSPACE}/test/image.pkr.hcl
 
       - name: Create coordinator VM

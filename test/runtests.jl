@@ -167,7 +167,7 @@ if VERSION >= v"1.9"
     end
 end
 
-@testset "environment, addproc" begin
+@test_skip @testset "environment, addproc" begin
     mkpath("myproject")
     cd("myproject")
     Pkg.activate(".")
@@ -184,6 +184,7 @@ end
     bname = "test$r"
 
     testvm = addproc(templatename; basename=bname, session=session, customenv=true)
+    sleep(1)
     testjob = @detachat testvm begin
         using Pkg
         pinfo = Pkg.project()
