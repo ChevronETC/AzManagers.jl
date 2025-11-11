@@ -49,7 +49,7 @@ jobs:
           az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
           az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "ubuntu-24_04-lts" -s "server" --os-type linux --hyper-v-generation V2
           az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME"
-          az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22;8080-8090
+          az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22 8081
           az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
           az network vnet subnet update  -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" --vnet-name "$VNET_NAME" --network-security-group "$NSG_NAME"
 
