@@ -2177,14 +2177,14 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     ncores_available - (ncores_per_machine * δn), ncores_spot_available - (ncores_per_machine * δn)
 end
 
-function nphysical_cores(template::Dict)
+function nphysical_cores(template::Dict; session=AzSession())
     ssid = template["subscriptionid"]
     region = template["value"]["location"]
     sku_name = template["value"]["properties"]["hardwareProfile"]["vmSize"]
 
     _r = HTTP.request("GET", 
         "https://management.azure.com/subscriptions/$ssid/providers/Microsoft.Compute/skus?api-version=2022-11-01", 
-        ["Authorization" => "Bearer $(token(AzSession(;lazy=true)))"])
+        ["Authorization" => "Bearer $(token(session))"])
     r = JSON.parse(String(_r.body))
 
 
@@ -2198,14 +2198,14 @@ function nphysical_cores(template::Dict)
     pCPU = hyperthreading ? div(parse(Int,vCPU),2) : parse(Int,vCPU)
 end
 
-function nphysical_cores(template::AbstractString)
+function nphysical_cores(template::AbstractString; session=AzSession())
     isfile(templates_filename_vm()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
 
-    templates_scaleset = JSON.parse(read(templates_filename_vm(), String))
+    templates_scaleset = JSON.parse(read(templates_filename_vm(), String); dicttype=Dict)
     haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
     template = templates_scaleset[template]
 
-    nphysical_cores(template)
+    nphysical_cores(template; session)
 end
 
 function getnextlinks!(manager::AzManager, _r, value, nextlink, nretry, verbose)
