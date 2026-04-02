@@ -324,7 +324,11 @@ function delete_pending_down_vms()
             delete!(pending_down(manager), scaleset)
         catch e
             if status(e) == 404
-                # the resource is already deleted, nothing else to do
+                @debug "scaleset $(scaleset.scalesetname) not found when attempting to delete vms, assuming it was already deleted."
+                # the resource is already deleted, nothing else to do except empty the pending down list for this scaleset
+                if haskey(pending_down(manager), scaleset)
+                    delete!(pending_down(manager), scaleset)
+                end
             else
                 @error "error deleting scaleset vms, manual clean-up may be required."
                 logerror(e, Logging.Error)
