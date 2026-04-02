@@ -66,25 +66,25 @@ Dict("diskSizeGB"=>1023)
 The above example is populated with the default options.  So, if `datadisks=[Dict()]`, then the default options
 will be included.
 """
-function build_sstemplate(name;
-        subscriptionid,
-        subscriptionid_image = "",
-        admin_username,
-        location,
-        resourcegroup,
-        resourcegroup_vnet = "",
-        resourcegroup_image = "",
-        imagegallery,
-        imagename,
-        vnet,
-        subnet,
-        skutier="Standard",
-        osdisksize=60,
+function build_sstemplate(name::AbstractString;
+        subscriptionid::String,
+        subscriptionid_image::String = "",
+        admin_username::String,
+        location::String,
+        resourcegroup::String,
+        resourcegroup_vnet::String = "",
+        resourcegroup_image::String = "",
+        imagegallery::String,
+        imagename::String,
+        vnet::String,
+        subnet::String,
+        skutier::String="Standard",
+        osdisksize::Int=60,
         datadisks=[],
-        tempdisk="sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
-        skuname,
+        tempdisk::String="sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
+        skuname::String,
         tags=Dict(),
-        encryption_at_host=false)
+        encryption_at_host::Bool=false)
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
     subscriptionid_image == "" && (subscriptionid_image = subscriptionid)
@@ -209,13 +209,13 @@ to AzManagers.jl configuration files.
 # Optional keyword arguments
 * `accelerated=true` use accelerated networking (not all VM sizes support accelerated networking).
 """
-function build_nictemplate(name;
-        subscriptionid,
-        resourcegroup_vnet,
-        vnet,
-        subnet,
-        accelerated = true,
-        location)
+function build_nictemplate(name::AbstractString;
+        subscriptionid::String,
+        resourcegroup_vnet::String,
+        vnet::String,
+        subnet::String,
+        accelerated::Bool = true,
+        location::String)
     subnetid = "/subscriptions/$subscriptionid/resourceGroups/$resourcegroup_vnet/providers/Microsoft.Network/virtualNetworks/$vnet/subnets/$subnet"
 
     body = Dict(
@@ -283,23 +283,23 @@ Dict("createOption"=>"Empty", "diskSizeGB"=>1023, "managedDisk"=>Dict("storageAc
 The above example is populated with the default options.  So, if `datadisks=[Dict()]`, then the default options
 will be included.
 """
-function build_vmtemplate(name;
-        subscriptionid,
-        admin_username,
-        subscriptionid_image = "",
-        location,
-        resourcegroup,
-        resourcegroup_vnet = "",
-        resourcegroup_image = "",
-        imagegallery,
-        imagename,
-        vmsize,
-        osdisksize = 60,
+function build_vmtemplate(name::AbstractString;
+        subscriptionid::String,
+        admin_username::String,
+        subscriptionid_image::String = "",
+        location::String,
+        resourcegroup::String,
+        resourcegroup_vnet::String = "",
+        resourcegroup_image::String = "",
+        imagegallery::String,
+        imagename::String,
+        vmsize::String,
+        osdisksize::Int = 60,
         datadisks = [],
-        tempdisk = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
-        nicname = "cbox-nic",
+        tempdisk::String = "sudo mkdir -m 777 /mnt/scratch\nln -s /mnt/scratch /scratch",
+        nicname::String = "cbox-nic",
         tags = Dict(),
-        encryption_at_host=false)
+        encryption_at_host::Bool=false)
         # default_nic = "") # add in different PR
     resourcegroup_vnet == "" && (resourcegroup_vnet = resourcegroup)
     resourcegroup_image == "" && (resourcegroup_image = resourcegroup)
