@@ -91,6 +91,21 @@ jobs:
           ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq '.ipAddress' | cut -d "\"" -f 2)
           echo ""
 
+          echo "Waiting for SSH to become available on $ipaddress..."
+          for i in $(seq 1 30); do
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "echo ready" 2>/dev/null; then
+              echo "SSH is ready after attempt $i"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "SSH not available after 30 attempts, giving up."
+              exit 1
+            fi
+            echo "Attempt $i: SSH not ready, retrying in 10 seconds..."
+            sleep 10
+          done
+          echo ""
+
           echo "Running the Unit Tests and Code Coverage..."
           ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true); using AzManagers; include(joinpath(pkgdir(AzManagers), \"test\", \"julia-codecov.jl\"))'"
           echo ""
