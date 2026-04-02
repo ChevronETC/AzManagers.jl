@@ -5,8 +5,10 @@ scale-set is a collection of virtual machines (VMs).  To describe the scale-set,
 uses a user-defined template.  For example, we can create a new julia cluster consisting of
 5 VMs, and where the scale-set is described by the template `"myscaleset"` as follows,
 ```julia
-using AzManagers, Distributed
-addprocs("myscaleset", 5)
+using AzManagers, Distributed, AzSessions
+session = AzSession(;lazy=true)
+manager = AzManagers.azmanager!(session, AzManagers._manifest["ssh_user"], 20, 0, false, false)
+addprocs(manager, "myscaleset", 5)
 ```
 Note that `addprocs` will return as soon as the provisioning is initialized.  Subsequently, workers
 will add themselves to the Julia cluster as they become available.  This is similar to the "elastic.jl" 
@@ -14,8 +16,10 @@ cluster manager in [ClusterManagers.jl](https://github.com/JuliaParallel/Cluster
 AzManagers to behave dynamically.  To wait for the cluster to be completely up use the `waitfor` argument.
 For example,
 ```julia
-using AzManagers, Distributed
-addprocs("myscaleset", 5; waitfor=true)
+using AzManagers, Distributed, AzSessions
+session = AzSession(;lazy=true)
+manager = AzManagers.azmanager!(session, AzManagers._manifest["ssh_user"], 20, 0, false, false)
+addprocs(manager, "myscaleset", 5; waitfor=true)
 ```
 In this case `addprocs` will return only once the 5 workers have joined the cluster.
 
@@ -60,7 +64,7 @@ myscaleset = AzManagers.build_sstemplate("myvm",
 AzManagers.save_template_scaleset("myscaleset", myscaleset)
 ```
 The above code will save the template to the json file, `~/.azmanagers/templates_scaleset.json`.
-Subsequently, `addprocs("myscaleset", 5)` will query the json file for the VM template.  One can
+Subsequently, `addprocs(manager, "myscaleset", 5)` will query the json file for the VM template.  One can
 repeat this process, populating `~/.azmanagers/templates_scaleset.json` with a variety of templates
 for a variety of machine types.
 
@@ -100,7 +104,7 @@ such as azure log analytics might be useful.  At this time, AzManagers does not 
 logger; but, if one had such a logger (e.g. MyAzureLogger), then one would do:
 ```
 using AzManagers, Distributed
-addprocs("myscaleset",5)
+addprocs(manager, "myscaleset", 5)
 @everywhere using Logging, MyAzureLogger
 @everywhere global_logger(MyAzureLogger())
 ```
@@ -143,7 +147,8 @@ variablebundle!(session = AzSession())
 myvm = addproc("myvm")
 detached_job = @detachat myvm begin
     using Distributed, AzManagers
-    addprocs("myscaleset", 5; session=variablebundle(:session))
+    manager = AzManagers.azmanager!(variablebundle(:session), AzManagers._manifest["ssh_user"], 20, 0, false, false)
+    addprocs(manager, "myscaleset", 5)
     for pid in workers()
         remotecall_fetch(println, "hello from pid=$(myid())")
     end
@@ -169,7 +174,7 @@ using Pkg
 Pkg.instantiate(".")
 Pkg.add("AzManagers")
 Pkg.add("Jets")
-addprocs("cbox16",2;customenv=true)
+addprocs(manager, "cbox16", 2; customenv=true)
 ```
 Now, when worker VMs are initialized, they will have the software stack
 defined by the current project.  Please note that this can add significant

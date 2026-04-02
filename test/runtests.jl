@@ -2,6 +2,7 @@ using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
 using MPI
 
 session = AzSession(;protocal=AzClientCredentials)
+manager = AzManagers.azmanager!(session, AzManagers._manifest["ssh_user"], 20, 0, false, false)
 
 azmanagers_pinfo = Pkg.project()
 pkgs=TOML.parse(read(joinpath(dirname(azmanagers_pinfo.path),"Manifest.toml"), String))
@@ -31,19 +32,17 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     # Unit Test 1 - Create scale set and start Julia processes
     #
     if flexible
-        addprocs(templatename, ninstances;
+        addprocs(manager, templatename, ninstances;
             waitfor = true,
             ppi,
             group,
-            session,
             spot = true,
             spot_base_regular_priority_count = 2)
     else
-        addprocs(templatename, ninstances;
+        addprocs(manager, templatename, ninstances;
             waitfor = true,
             ppi,
-            group,
-            session)
+            group)
     end
     
     # Verify that the scale set is present
@@ -112,7 +111,7 @@ end
 @testset "addprocs, spot" begin
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "2,0" : "2"
-    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads)
+    addprocs(manager, templatename, 1; waitfor = true, group, julia_num_threads)
 
     @test remotecall_fetch(Threads.nthreads, workers()[1]) == 2
 
@@ -123,7 +122,7 @@ end
 
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "2,0" : "2"
-    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads, spot = true)
+    addprocs(manager, templatename, 1; waitfor = true, group, julia_num_threads, spot = true)
 
     @test remotecall_fetch(Threads.nthreads, workers()[1]) == 2
 
@@ -136,7 +135,7 @@ end
 
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "3,2" : "3"
-    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads, spot=true)
+    addprocs(manager, templatename, 1; waitfor = true, group, julia_num_threads, spot=true)
 
     @test remotecall_fetch(Threads.nthreads, workers()[1]) == 3
 
@@ -150,7 +149,7 @@ if VERSION >= v"1.9"
     @testset "spot eviction" begin
         group = "test$(randstring('a':'z',4))"
         julia_num_threads = "2,1"
-        addprocs(templatename, 2; waitfor = true, group, session, julia_num_threads, spot = true)
+        addprocs(manager, templatename, 2; waitfor = true, group, julia_num_threads, spot = true)
 
         AzManagers.simulate_spot_eviction(workers()[1])
 
@@ -217,7 +216,7 @@ end
 
     group = "test$(randstring('a':'z',4))"
 
-    addprocs(templatename, 1; waitfor=true, group=group, session=session, customenv=true)
+    addprocs(manager, templatename, 1; waitfor=true, group=group, customenv=true)
     @everywhere using Pkg
     pinfo = remotecall_fetch(Pkg.project, workers()[1])
     @test contains(pinfo.path, "myproject")
@@ -255,7 +254,7 @@ end
         _template["tags"] = Dict("foo"=>"bar")
     end
 
-    addprocs(template, 1; waitfor=true, group=group, session=session)
+    addprocs(manager, template, 1; waitfor=true, group=group)
 
     _r = HTTP.request(
         "GET",
@@ -368,7 +367,7 @@ end
     templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))
     template = templates_scaleset[templatename]
     
-    addprocs(template, 2; waitfor=true, group=group, session=session)
+    addprocs(manager, template, 2; waitfor=true, group=group)
 
     wrkers = Distributed.map_pid_wrkr
     for i in workers()

@@ -743,10 +743,11 @@ function nthreads_filter(nthreads)
 end
 
 """
-    addprocs(template, ninstances[; kwargs...])
+    addprocs(manager::AzManager, template, ninstances[; kwargs...])
 
-Add Azure scale set instances where template is either a dictionary produced via the `AzManagers.build_sstemplate`
-method or a string corresponding to a template stored in `~/.azmanagers/templates_scaleset.json.`
+Add Azure scale set instances where `manager` is an `AzManager` instance, and template is either a dictionary produced
+via the `AzManagers.build_sstemplate` method or a string corresponding to a template stored in
+`~/.azmanagers/templates_scaleset.json.`
 
 # key word arguments:
 * `subscriptionid=template["subscriptionid"]` if exists, or `AzManagers._manifest["subscriptionid"]` otherwise.
@@ -756,7 +757,6 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `imagename=""` The name of the image (alternative to `sigimagename` and `sigimageversion` used for development work).
 * `osdisksize=60` The size of the OS disk in GB.
 * `customenv=false` If true, then send the current project environment to the workers where it will be instantiated.
-* `session=AzSession(;lazy=true)` The Azure session used for authentication.
 * `group="cbox"` The name of the Azure scale set.  If the scale set does not yet exist, it will be created.
 * `overprovision=true` Use Azure scle-set overprovisioning?
 * `ppi=1` The number of Julia processes to start per Azure scale set instance.
@@ -769,7 +769,6 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `verbose=0` verbose flag used in HTTP requests.
 * `save_cloud_init_failures=false` set to true to copy cloud init logs (/var/log/clout-init-output.log) from workers that fail to join the cluster.
 * `show_quota=false` after various operation, show the "x-ms-rate-remaining-resource" response header.  Useful for debugging/understanding Azure quota's.
-* `user=AzManagers._manifest["ssh_user"]` ssh user.
 * `spot=false` use Azure SPOT VMs for the scale-set
 * `maxprice=-1` set maximum price per hour for a VM in the scale-set.  `-1` uses the market price.
 * `spot_base_regular_priority_count=0` If spot is true, only start adding spot machines once there are this many non-spot machines added.
@@ -794,7 +793,7 @@ used on the Julia workers.  This feature makes use of package extensions, meanin
 that `using MPI` is somewhere in your calling script.
 [5] This may result in a re-boot of the VMs
 """
-function Distributed.addprocs(template::Dict, n::Int;
+function Distributed.addprocs(manager::AzManager, template::Dict, n::Int;
         subscriptionid = "",
         resourcegroup = "",
         sigimagename = "",
@@ -802,7 +801,6 @@ function Distributed.addprocs(template::Dict, n::Int;
         imagename = "",
         osdisksize = 60,
         customenv = false,
-        session = AzSession(;lazy=true),
         group = "cbox",
         overprovision = true,
         ppi = 1,
@@ -815,7 +813,6 @@ function Distributed.addprocs(template::Dict, n::Int;
         verbose = 0,
         save_cloud_init_failures = false,
         show_quota = false,
-        user = "",
         spot = false,
         maxprice = -1,
         spot_base_regular_priority_count = 0,
@@ -829,12 +826,12 @@ function Distributed.addprocs(template::Dict, n::Int;
         use_lvm = false)
     n_current_workers = nprocs() == 1 ? 0 : nworkers()
 
-    (subscriptionid == "" || resourcegroup == "" || user == "") && load_manifest()
+    user = manager.ssh_user
+
+    (subscriptionid == "" || resourcegroup == "") && load_manifest()
     subscriptionid == "" && (subscriptionid = get(template, "subscriptionid", _manifest["subscriptionid"]))
     resourcegroup == "" && (resourcegroup = get(template, "resourcegroup", _manifest["resourcegroup"]))
-    user == "" && (user = _manifest["ssh_user"])
 
-    manager = azmanager!(session, user, nretry, verbose, save_cloud_init_failures, show_quota)
     sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
@@ -863,13 +860,13 @@ function Distributed.addprocs(template::Dict, n::Int;
     nothing
 end
 
-function Distributed.addprocs(template::AbstractString, n::Int; kwargs...)
+function Distributed.addprocs(manager::AzManager, template::AbstractString, n::Int; kwargs...)
     isfile(templates_filename_scaleset()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
 
     templates_scaleset = JSON.parse(read(templates_filename_scaleset(), String); dicttype=Dict)
     haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
 
-    addprocs(templates_scaleset[template], n; kwargs...)
+    addprocs(manager, templates_scaleset[template], n; kwargs...)
 end
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)
