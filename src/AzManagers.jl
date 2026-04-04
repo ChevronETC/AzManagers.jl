@@ -605,8 +605,8 @@ function process_pending_connections()
                         manager.preempt_channel_futures[pid] = remotecall(Channel{Bool}, pid, 1)
                         remotecall_fetch(machine_preempt_loop, pid, manager.preempt_channel_futures[pid])
                     catch e
-                        if isa(e, RemoteException) && isa(e.captured.ex, TaskFailedException) && isa(e.captured.ex.task.result.ex, SpotPreemptException)
-                            ex = e.captured.ex.task.result.ex
+                        ex = _extract_preempt_exception(e)
+                        if ex !== nothing
                             notbefore = DateTime(ex.notbefore, dateformat"e, dd u yyyy HH:MM:SS \G\M\T")
                             @info "caught preempt exception for $(ex.clusterid), removing not before $notbefore UTC"
                             _now = now(UTC)
@@ -619,7 +619,7 @@ function process_pending_connections()
                                 scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
                                 add_instance_to_preempted_list(manager, scaleset, u["instanceid"])
                             catch e
-                                @info "error adding instance to preempted list"
+                                @warn "error adding instance to preempted list" exception=e
                             end
 
                             try
@@ -630,10 +630,13 @@ function process_pending_connections()
                                     Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
                                     Distributed.deregister_worker(pid)
                                 end
-                            catch
+                            catch e
+                                @error "error during worker deregistration for pid=$pid" exception=e
                             finally
                                 unlock(Distributed.worker_lock)
                             end
+                        else
+                            @warn "preempt loop for pid=$pid exited with unexpected exception" exception=e
                         end
                     end
                 end
@@ -1216,6 +1219,30 @@ struct SpotPreemptException <: Exception
     instanceid::String
     clusterid::Int
     notbefore::String
+end
+
+"""
+    _extract_preempt_exception(e)
+
+Walk an exception chain to find a SpotPreemptException, regardless of how
+it is wrapped (RemoteException, TaskFailedException, etc.). Returns the
+SpotPreemptException if found, or nothing.
+"""
+function _extract_preempt_exception(e)
+    e isa SpotPreemptException && return e
+    if e isa RemoteException
+        return _extract_preempt_exception(e.captured.ex)
+    end
+    if e isa TaskFailedException && isdefined(e, :task) && istaskdone(e.task) && e.task.result isa Exception
+        return _extract_preempt_exception(e.task.result)
+    end
+    if hasproperty(e, :captured) && e.captured isa CapturedException
+        return _extract_preempt_exception(e.captured.ex)
+    end
+    if e isa CapturedException
+        return _extract_preempt_exception(e.ex)
+    end
+    return nothing
 end
 Base.showerror(io::IO, e::SpotPreemptException) = print(io, "spot preemption on process '$(e.clusterid)' ($(e.instanceid)), not before '$(e.notbefore)'")
 
