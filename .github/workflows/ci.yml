@@ -65,14 +65,18 @@ jobs:
           echo "JULIA_VERSION_PATCH=$JULIA_VERSION_PATCH" >> $GITHUB_ENV
           echo "CACHE_IMAGE_DEF=$CACHE_IMAGE_DEF" >> $GITHUB_ENV
 
-          # Ensure persistent resource group and gallery exist
+          # Ensure persistent resource group and gallery exist (these are idempotent)
           az group create -g "$PERSISTENT_RG" -l southcentralus \
             --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" \
-                   "OwnerEmail=sam.kaplan@chevron.com" "purpose=ci-image-cache" 2>/dev/null || true
-          az sig create -g "$PERSISTENT_RG" -r "$PERSISTENT_GALLERY" 2>/dev/null || true
+                   "OwnerEmail=sam.kaplan@chevron.com" "purpose=ci-image-cache"
+          az sig create -g "$PERSISTENT_RG" -r "$PERSISTENT_GALLERY" || true
+
+          # Create image definition if it doesn't already exist
+          az sig image-definition show -g "$PERSISTENT_RG" -r "$PERSISTENT_GALLERY" \
+            -i "$CACHE_IMAGE_DEF" > /dev/null 2>&1 || \
           az sig image-definition create -g "$PERSISTENT_RG" -r "$PERSISTENT_GALLERY" \
             -i "$CACHE_IMAGE_DEF" -p "canonical" -f "0001-com-ubuntu-server-jammy" \
-            -s "22_04-lts-gen2" --os-type linux --hyper-v-generation V2 2>/dev/null || true
+            -s "22_04-lts-gen2" --os-type linux --hyper-v-generation V2
 
           # Check for a recent image version
           CUTOFF_DATE=$(date -d "-${CACHE_MAX_AGE_DAYS} days" -u +%Y-%m-%dT%H:%M:%S)
