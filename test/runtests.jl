@@ -85,7 +85,7 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     @test _r.status == 200
 
     @info "[$(elapsed())s] addprocs test: deleting cluster..."
-    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
+    with_timeout(()->rmprocs(workers()), 120; msg="rmprocs")
 
     # Last, verify that the scale set has been deleted
     itry = 0
@@ -120,7 +120,7 @@ end
         @test remotecall_fetch(Threads.nthreads, workers()[1], :interactive) == 0
     end
     @info "[$(elapsed())s] spot test: cleaning up non-spot workers..."
-    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
+    with_timeout(()->rmprocs(workers()), 120; msg="rmprocs")
 
     @info "[$(elapsed())s] spot test: provisioning 1 instance (threads=2,0, spot=true)..."
     group = "test$(randstring('a':'z',4))"
@@ -135,7 +135,7 @@ end
         end
     end
     @info "[$(elapsed())s] spot test: cleaning up spot workers..."
-    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
+    with_timeout(()->rmprocs(workers()), 120; msg="rmprocs")
 
     @info "[$(elapsed())s] spot test: provisioning 1 instance (threads=3,2, spot=true)..."
     group = "test$(randstring('a':'z',4))"
@@ -148,7 +148,7 @@ end
         @test remotecall_fetch(Threads.nthreads, workers()[1], :interactive) == 2
     end
     @info "[$(elapsed())s] spot test: cleaning up..."
-    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
+    with_timeout(()->rmprocs(workers()), 120; msg="rmprocs")
 end
 
 if VERSION >= v"1.9"
@@ -171,7 +171,7 @@ if VERSION >= v"1.9"
         end
         @test nprocs() < 3
         @info "[$(elapsed())s] spot eviction test: cleaning up..."
-        with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
+        with_timeout(()->rmprocs(workers()), 120; msg="rmprocs")
     end
 end
 
@@ -215,7 +215,7 @@ end
         end
     end
     @info "[$(elapsed())s] environment addproc test: waiting for detached job..."
-    with_timeout(300; msg="wait(testjob)") do wait(testjob) end
+    with_timeout(()->wait(testjob), 300; msg="wait(testjob)")
     testjob_stdout = read(testjob)
     @test contains(testjob_stdout, "myproject")
 
@@ -225,7 +225,7 @@ end
     @test contains(testjob_stdout, "Project.toml")
 
     @info "[$(elapsed())s] environment addproc test: cleaning up..."
-    with_timeout(120; msg="rmproc") do rmproc(testvm; session=session) end
+    with_timeout(()->rmproc(testvm; session=session), 120; msg="rmproc")
 end
 
 @testset "environment, addprocs" begin
@@ -259,7 +259,7 @@ end
     @test "Manifest.toml" ∈ files
 
     @info "[$(elapsed())s] environment addprocs test: cleaning up..."
-    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
+    with_timeout(()->rmprocs(workers()), 120; msg="rmprocs")
 
 end
 
@@ -301,7 +301,7 @@ end
     @test r["tags"]["foo"] == "bar"
 
     @info "[$(elapsed())s] tags test: cleaning up..."
-    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
+    with_timeout(()->rmprocs(workers()), 120; msg="rmprocs")
 end
 
 @testset "AzManagers, addproc, and test if nthreads propagates properly" begin
@@ -314,11 +314,11 @@ end
         write(stdout, "write to stdout\n")
         write(stderr, "nthreads: $(Threads.nthreads()),$(Threads.nthreads(:interactive))\n")
     end
-    with_timeout(300; msg="wait(testjob)") do wait(testjob) end
+    with_timeout(()->wait(testjob), 300; msg="wait(testjob)")
     @test read(testjob) == "write to stdout\n"
     @test read(testjob; stdio=stderr) == "nthreads: 1,2\n"
     @info "[$(elapsed())s] nthreads test: cleaning up first VM..."
-    with_timeout(120; msg="rmproc") do rmproc(testvm; session=session) end
+    with_timeout(()->rmproc(testvm; session=session), 120; msg="rmproc")
 
     @info "[$(elapsed())s] nthreads test: provisioning VM (reusing name=$basename)..."
     testvm = addproc(templatename, name=basename, session=session)
@@ -327,11 +327,11 @@ end
         write(stdout, "write to stdout\n")
         write(stderr, "write to stderr\n")
     end
-    with_timeout(300; msg="wait(testjob)") do wait(testjob) end
+    with_timeout(()->wait(testjob), 300; msg="wait(testjob)")
     @test read(testjob) == "write to stdout\n"
     @test read(testjob; stdio=stderr) == "write to stderr\n"
     @info "[$(elapsed())s] nthreads test: cleaning up..."
-    with_timeout(120; msg="rmproc") do rmproc(testvm; session=session) end
+    with_timeout(()->rmproc(testvm; session=session), 120; msg="rmproc")
 end
 
 @testset "AzManagers, detach" for kwargs in ( (dummy="dummy"), )
@@ -349,8 +349,8 @@ end
     end
 
     @info "[$(elapsed())s] detach test: waiting for jobs..."
-    with_timeout(300; msg="wait(job1)") do wait(job1) end
-    with_timeout(300; msg="wait(job2)") do wait(job2) end
+    with_timeout(()->wait(job1), 300; msg="wait(job1)")
+    with_timeout(()->wait(job2), 300; msg="wait(job2)")
 
     @test status(job1) == "done"
     @test read(job1;stdio=stdout) == "job1 - stdout string"
@@ -361,7 +361,7 @@ end
     @test read(job2;stdio=stderr) == "job2 - stderr string"
 
     @info "[$(elapsed())s] detach test: shutting down detached server..."
-    with_timeout(120; msg="rmproc") do rmproc(job1.vm; session=session) end
+    with_timeout(()->rmproc(job1.vm; session=session), 120; msg="rmproc")
 
     @info "[$(elapsed())s] detach test: creating auto-destruct detached job..."
     job3 = @detach vm(;vm_template=templatename, session=session, persist=false) begin
@@ -382,7 +382,7 @@ end
             write(stdout, "failed")
         end
     end
-    with_timeout(300; msg="wait(testjob)") do wait(testjob) end
+    with_timeout(()->wait(testjob), 300; msg="wait(testjob)")
     @test contains(read(testjob), "passed")
 end
 
@@ -417,7 +417,7 @@ end
     end
 
     @info "[$(elapsed())s] physical_hostname test: cleaning up..."
-    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
+    with_timeout(()->rmprocs(workers()), 120; msg="rmprocs")
 
 end
 
@@ -437,7 +437,7 @@ end
     @test name !== "unknown" && match(r"[A-Z0-9]", name) !== nothing
 
     @info "[$(elapsed())s] addproc physical_hostname test: cleaning up..."
-    with_timeout(120; msg="rmproc") do rmproc(testvm; session=session) end
+    with_timeout(()->rmproc(testvm; session=session), 120; msg="rmproc")
 end
 
 @testset "AzManagers, nphysical_cores $machine_name" for machine_name in ("cbox96","cbox64","ussc/t107/v4/amd/cbox176")
