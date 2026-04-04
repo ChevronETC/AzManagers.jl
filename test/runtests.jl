@@ -1,6 +1,18 @@
 using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
 using MPI
 
+function with_timeout(f, seconds; msg="operation")
+    t = @async f()
+    deadline = time() + seconds
+    while !istaskdone(t) && time() < deadline
+        sleep(1)
+    end
+    if !istaskdone(t)
+        error("$msg timed out after $(seconds)s")
+    end
+    fetch(t)
+end
+
 session = AzSession(;protocal=AzClientCredentials)
 
 azmanagers_pinfo = Pkg.project()
@@ -86,7 +98,7 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     @test _r.status == 200
 
     @info "Deleting cluster..."
-    rmprocs(workers())
+    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
 
     # Last, verify that the scale set has been deleted
     itry = 0
@@ -119,7 +131,7 @@ end
     if VERSION >= v"1.9"
         @test remotecall_fetch(Threads.nthreads, workers()[1], :interactive) == 0
     end
-    rmprocs(workers())
+    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
 
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "2,0" : "2"
@@ -132,7 +144,7 @@ end
             @test remotecall_fetch(Threads.nthreads, workers()[1], :interactive) == 1
         end
     end
-    rmprocs(workers())
+    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
 
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "3,2" : "3"
@@ -143,7 +155,7 @@ end
     if VERSION >= v"1.9"
         @test remotecall_fetch(Threads.nthreads, workers()[1], :interactive) == 2
     end
-    rmprocs(workers())
+    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
 end
 
 if VERSION >= v"1.9"
@@ -163,7 +175,7 @@ if VERSION >= v"1.9"
             sleep(10)
         end
         @test nprocs() < 3
-        rmprocs(workers())
+        with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
     end
 end
 
@@ -202,7 +214,7 @@ end
             sleep(10)
         end
     end
-    wait(testjob)
+    with_timeout(300; msg="wait(testjob)") do wait(testjob) end
     testjob_stdout = read(testjob)
     @test contains(testjob_stdout, "myproject")
 
@@ -211,7 +223,7 @@ end
     @test contains(testjob_stdout, "Manifest.toml")
     @test contains(testjob_stdout, "Project.toml")
 
-    rmproc(testvm; session=session)
+    with_timeout(120; msg="rmproc") do rmproc(testvm; session=session) end
 end
 
 @testset "environment, addprocs" begin
@@ -240,7 +252,7 @@ end
     @test "Project.toml" ∈ files
     @test "Manifest.toml" ∈ files
 
-    rmprocs(workers())
+    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
 
 end
 
@@ -278,7 +290,7 @@ end
     r = JSON.parse(String(_r.body))
     @test r["tags"]["foo"] == "bar"
 
-    rmprocs(workers())
+    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
 end
 
 @testset "AzManagers, addproc, and test if nthreads propagates properly" begin
@@ -289,20 +301,20 @@ end
         write(stdout, "write to stdout\n")
         write(stderr, "nthreads: $(Threads.nthreads()),$(Threads.nthreads(:interactive))\n")
     end
-    wait(testjob)
+    with_timeout(300; msg="wait(testjob)") do wait(testjob) end
     @test read(testjob) == "write to stdout\n"
     @test read(testjob; stdio=stderr) == "nthreads: 1,2\n"
-    rmproc(testvm; session=session)
+    with_timeout(120; msg="rmproc") do rmproc(testvm; session=session) end
 
     testvm = addproc(templatename, name=basename, session=session)
     testjob = @detachat testvm begin
         write(stdout, "write to stdout\n")
         write(stderr, "write to stderr\n")
     end
-    wait(testjob)
+    with_timeout(300; msg="wait(testjob)") do wait(testjob) end
     @test read(testjob) == "write to stdout\n"
     @test read(testjob; stdio=stderr) == "write to stderr\n"
-    rmproc(testvm; session=session)
+    with_timeout(120; msg="rmproc") do rmproc(testvm; session=session) end
 end
 
 @testset "AzManagers, detach" for kwargs in ( (dummy="dummy"), )
@@ -324,8 +336,8 @@ end
     end
 
     # Wait for jobs to finish
-    wait(job1)
-    wait(job2)
+    with_timeout(300; msg="wait(job1)") do wait(job1) end
+    with_timeout(300; msg="wait(job2)") do wait(job2) end
 
     @test status(job1) == "done"
     @test read(job1;stdio=stdout) == "job1 - stdout string"
@@ -338,7 +350,7 @@ end
     #
     # Unit Test 3 - shut-down the detached server
     #
-    rmproc(job1.vm; session=session)
+    with_timeout(120; msg="rmproc") do rmproc(job1.vm; session=session) end
 
     #
     # Unit Test 4 - create a new job on a new detached server that auto-destructs upon completion of its work
@@ -359,7 +371,7 @@ end
             write(stdout, "failed")
         end
     end
-    wait(testjob)
+    with_timeout(300; msg="wait(testjob)") do wait(testjob) end
     @test contains(read(testjob), "passed")
 end
 
@@ -392,7 +404,7 @@ end
     end
 
     @info "Deleting cluster..."
-    rmprocs(workers())
+    with_timeout(120; msg="rmprocs") do rmprocs(workers()) end
 
 end
 
@@ -410,7 +422,7 @@ end
     name = r["physical_hostname"]
     @test name !== "unknown" && match(r"[A-Z0-9]", name) !== nothing
 
-    rmproc(testvm; session=session)
+    with_timeout(120; msg="rmproc") do rmproc(testvm; session=session) end
 end
 
 @testset "AzManagers, nphysical_cores $machine_name" for machine_name in ("cbox96","cbox64","ussc/t107/v4/amd/cbox176")
