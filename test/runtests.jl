@@ -15,7 +15,7 @@ procs = Dict{String, Base.Process}()
 for g in test_groups
     path = joinpath(@__DIR__, g)
     cmd = `$julia_cmd --project=$project $path`
-    procs[g] = open(pipeline(cmd; stdout, stderr); read=false).process
+    procs[g] = run(pipeline(cmd; stdout, stderr); wait=false)
 end
 
 failed = String[]

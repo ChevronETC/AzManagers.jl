@@ -33,7 +33,15 @@ elapsed() = round(time() - test_start_time; digits=1)
 const session = AzSession(;protocal=AzClientCredentials)
 
 const azmanagers_pinfo = Pkg.project()
-const _pkgs = TOML.parse(read(joinpath(dirname(azmanagers_pinfo.path), "Manifest.toml"), String))
+const _manifest_dir = dirname(azmanagers_pinfo.path)
+const _manifest_path = if isfile(joinpath(_manifest_dir, "Manifest.toml"))
+    joinpath(_manifest_dir, "Manifest.toml")
+elseif isfile(joinpath(_manifest_dir, "JuliaManifest.toml"))
+    joinpath(_manifest_dir, "JuliaManifest.toml")
+else
+    error("No Manifest.toml found in $_manifest_dir. Contents: $(readdir(_manifest_dir))")
+end
+const _pkgs = TOML.parse(read(_manifest_path, String))
 const _pkg = VERSION < v"1.7.0" ? _pkgs["AzManagers"][1] : _pkgs["deps"]["AzManagers"][1]
 const azmanagers_rev = get(_pkg, "repo-rev", "")
 

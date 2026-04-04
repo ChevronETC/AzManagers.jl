@@ -33,13 +33,13 @@ jobs:
 
       - name: Create Azure Resources
         run: |
-          az login --service-principal -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
-          az group create                -g "$RESOURCE_GROUP" -l southcentralus --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com"
+          az login --service-principal -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID" -o none
+          az group create                -g "$RESOURCE_GROUP" -l southcentralus --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com" -o none
           az group wait                  -g "$RESOURCE_GROUP" --created
-          az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME"
-          az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22
-          az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
-          az network vnet subnet update  -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" --vnet-name "$VNET_NAME" --network-security-group "$NSG_NAME"
+          az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME" -o none
+          az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22 -o none
+          az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME" -o none
+          az network vnet subnet update  -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" --vnet-name "$VNET_NAME" --network-security-group "$NSG_NAME" -o none
 
       - name: Check for cached image
         run: |
