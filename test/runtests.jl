@@ -184,11 +184,23 @@ end
     bname = "test$r"
 
     testvm = addproc(templatename; basename=bname, session=session, customenv=true)
-    testjob = @detachat testvm begin
-        using Pkg
-        pinfo = Pkg.project()
-        write(stdout, "project path is $(dirname(pinfo.path))\n")
-        write(stdout, "$(readdir(dirname(pinfo.path)))")
+    testjob = nothing
+    for attempt in 1:5
+        try
+            testjob = @detachat testvm begin
+                using Pkg
+                pinfo = Pkg.project()
+                write(stdout, "project path is $(dirname(pinfo.path))\n")
+                write(stdout, "$(readdir(dirname(pinfo.path)))")
+            end
+            break
+        catch e
+            if attempt == 5
+                rethrow()
+            end
+            @warn "detachat attempt $attempt failed, retrying in 10s..." exception=e
+            sleep(10)
+        end
     end
     wait(testjob)
     testjob_stdout = read(testjob)
