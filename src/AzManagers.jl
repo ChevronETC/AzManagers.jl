@@ -715,6 +715,8 @@ function spinner(n_target_workers)
         @warn "error during startup:"
         logerror(e, Logging.Warn)
     end
+    isatty = isa(stdout, Base.TTY)
+    last_print = starttime
     while nprocs() == 1 || nworkers() != n_target_workers
         try
             elapsed_time = time() - starttime
@@ -722,8 +724,13 @@ function spinner(n_target_workers)
                 _nworkers = nprocs() == 1 ? 0 : nworkers()
                 tic = time()
             end
-            write(stdout, spin(spincount, elapsed_time)*", $_nworkers/$n_target_workers up. $ws\r")
-            flush(stdout)
+            if isatty
+                write(stdout, spin(spincount, elapsed_time)*", $_nworkers/$n_target_workers up. $ws\r")
+                flush(stdout)
+            elseif time() - last_print >= 30
+                @info "$(spin(spincount, elapsed_time)), $_nworkers/$n_target_workers up."
+                last_print = time()
+            end
             spincount = spincount == 4 ? 1 : spincount + 1
             yield()
             sleep(.25)
@@ -733,8 +740,12 @@ function spinner(n_target_workers)
         end
     end
     _nworkers = nprocs() == 1 ? 0 : nworkers()
-    write(stdout, spin(5, elapsed_time)*", $_nworkers/$n_target_workers are running. $ws\r")
-    write(stdout,"\n")
+    if isatty
+        write(stdout, spin(5, elapsed_time)*", $_nworkers/$n_target_workers are running. $ws\r")
+        write(stdout,"\n")
+    else
+        @info "$(spin(5, elapsed_time)), $_nworkers/$n_target_workers are running."
+    end
     nothing
 end
 
@@ -743,7 +754,7 @@ function nthreads_filter(nthreads)
     nthreads_default = length(_nthreads) > 0 ? parse(Int, _nthreads[1]) : 1
     nthreads_interactive = length(_nthreads) > 1 ? parse(Int, _nthreads[2]) : 0
 
-    nthreads_interactive > 0 ? string("$nthreads_default,$nthreads_interactive") : string(nthreads_default)
+    length(_nthreads) > 1 ? string("$nthreads_default,$nthreads_interactive") : string(nthreads_default)
 end
 
 """
@@ -3283,6 +3294,8 @@ function detached_service_wait(vm, custom_environment)
     elapsed_time = 0.0
     tic = starttime - 20
     spincount = 1
+    isatty = isa(stdout, Base.TTY)
+    last_print = starttime
     waitfor = custom_environment ? "Julia package instantiation and COFII detached service" : "COFII detached service"
     while true
         if time() - tic > 5
@@ -3300,15 +3313,24 @@ function detached_service_wait(vm, custom_environment)
             @error "reached timeout ($timeout seconds) while waiting for $waitfor to start."
             throw(DetachedServiceTimeoutException(vm))
         end
-        
-        write(stdout, spin(spincount, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
-        flush(stdout)
+
+        if isatty
+            write(stdout, spin(spincount, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
+            flush(stdout)
+        elseif time() - last_print >= 30
+            @info "$(spin(spincount, elapsed_time)), waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start."
+            last_print = time()
+        end
         spincount = spincount == 4 ? 1 : spincount + 1
-        
+
         sleep(0.5)
     end
-    write(stdout, spin(5, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
-    write(stdout, "\n")
+    if isatty
+        write(stdout, spin(5, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
+        write(stdout, "\n")
+    else
+        @info "$(spin(5, elapsed_time)), waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start."
+    end
 end
 
 const VARIABLE_BUNDLE = Dict()
