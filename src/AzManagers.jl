@@ -703,6 +703,7 @@ function process_pending_connections()
                         manager.preempt_channel_futures[pid] = remotecall(Channel{Bool}, pid, 1)
                         remotecall_fetch(machine_preempt_loop, pid, manager.preempt_channel_futures[pid])
                     catch e
+                        @info "preempt loop catch for pid=$pid: exception type=$(typeof(e))"
                         ex = _extract_preempt_exception(e)
                         if ex !== nothing
                             notbefore = DateTime(ex.notbefore, dateformat"e, dd u yyyy HH:MM:SS \G\M\T")
@@ -1324,20 +1325,30 @@ Walk an exception chain to find a SpotPreemptException, regardless of how
 it is wrapped (RemoteException, TaskFailedException, etc.). Returns the
 SpotPreemptException if found, or nothing.
 """
-function _extract_preempt_exception(e)
+function _extract_preempt_exception(e, depth=0)
+    @info "  _extract_preempt_exception depth=$depth type=$(typeof(e))"
     e isa SpotPreemptException && return e
     if e isa RemoteException
-        return _extract_preempt_exception(e.captured.ex)
+        return _extract_preempt_exception(e.captured.ex, depth+1)
     end
-    if e isa TaskFailedException && isdefined(e, :task) && istaskdone(e.task) && e.task.result isa Exception
-        return _extract_preempt_exception(e.task.result)
+    if e isa TaskFailedException
+        if isdefined(e, :task) && istaskdone(e.task)
+            result = e.task.result
+            @info "  TaskFailedException task.result type=$(typeof(result))"
+            if result isa Exception
+                return _extract_preempt_exception(result, depth+1)
+            elseif result isa CapturedException
+                return _extract_preempt_exception(result.ex, depth+1)
+            end
+        end
     end
     if hasproperty(e, :captured) && e.captured isa CapturedException
-        return _extract_preempt_exception(e.captured.ex)
+        return _extract_preempt_exception(e.captured.ex, depth+1)
     end
     if e isa CapturedException
-        return _extract_preempt_exception(e.ex)
+        return _extract_preempt_exception(e.ex, depth+1)
     end
+    @info "  _extract_preempt_exception: no match at depth=$depth"
     return nothing
 end
 Base.showerror(io::IO, e::SpotPreemptException) = print(io, "spot preemption on process '$(e.clusterid)' ($(e.instanceid)), not before '$(e.notbefore)'")

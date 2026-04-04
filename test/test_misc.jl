@@ -55,7 +55,7 @@ end
 
 @testset "AzManagers, nphysical_cores $machine_name" for machine_name in ("cbox96","cbox64","ussc/t107/v4/amd/cbox176")
     @info "[$(elapsed())s] nphysical_cores test: checking $machine_name..."
-    ncores = nphysical_cores(machine_name)
+    ncores = nphysical_cores(machine_name; session=session)
 
     if machine_name == "cbox96"
         @test ncores == 96
@@ -68,9 +68,9 @@ end
 
 @testset "AzManagers, nphysical_cores $templatename"
     @info "[$(elapsed())s] nphysical_cores template test: checking $templatename..."
-    templates_scaleset = JSON.parse(read(AzManagers.templates_filename_vm(), String); dicttype=Dict)
+    templates_vm = JSON.parse(read(AzManagers.templates_filename_vm(), String); dicttype=Dict)
     template = templates_vm[templatename]
-    ncores = nphysical_cores(template)
+    ncores = nphysical_cores(template; session=session)
 
     @test ncores == 2
 end

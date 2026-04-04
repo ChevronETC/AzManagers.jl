@@ -7,20 +7,35 @@ test_groups = [
 
 println("Launching $(length(test_groups)) test groups in parallel...")
 
-# Inherit the current project environment so subprocesses have access to AzManagers
 julia_cmd = Base.julia_cmd()
 project = Base.active_project()
 
+function prefix_stream(io::IO, prefix::String, out::IO)
+    @async for line in eachline(io)
+        println(out, "[$prefix] $line")
+        flush(out)
+    end
+end
+
 procs = Dict{String, Base.Process}()
+tasks = Dict{String, Vector{Task}}()
 for g in test_groups
     path = joinpath(@__DIR__, g)
-    cmd = `$julia_cmd --project=$project $path`
-    procs[g] = run(pipeline(cmd; stdout, stderr); wait=false)
+    label = replace(g, "test_" => "", ".jl" => "")
+    proc = open(`$julia_cmd --project=$project $path`; read=false, write=false)
+    procs[g] = proc
+    tasks[g] = Task[
+        prefix_stream(proc.out, label, stdout),
+        prefix_stream(proc.err, label, stderr),
+    ]
 end
 
 failed = String[]
 for (g, p) in procs
     wait(p)
+    for t in tasks[g]
+        wait(t)
+    end
     if p.exitcode != 0
         push!(failed, g)
         println("FAILED: $g (exit code $(p.exitcode))")
