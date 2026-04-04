@@ -1,6 +1,6 @@
 module AzManagers
 
-using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, JSON, JSONWebTokens, LibCURL, LibGit2, Logging, Pkg, Printf, Random, Serialization, Sockets, TOML
+using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, JSON, JWTs, LibCURL, LibGit2, Logging, Pkg, Printf, Random, Serialization, Sockets, TOML
 
 function logerror(e, loglevel=Logging.Info)
     io = IOBuffer()
@@ -324,7 +324,11 @@ function delete_pending_down_vms()
             delete!(pending_down(manager), scaleset)
         catch e
             if status(e) == 404
-                # the resource is already deleted, nothing else to do
+                @debug "scaleset $(scaleset.scalesetname) not found when attempting to delete vms, assuming it was already deleted."
+                # the resource is already deleted, nothing else to do except empty the pending down list for this scaleset
+                if haskey(pending_down(manager), scaleset)
+                    delete!(pending_down(manager), scaleset)
+                end
             else
                 @error "error deleting scaleset vms, manual clean-up may be required."
                 logerror(e, Logging.Error)
@@ -866,7 +870,7 @@ end
 function Distributed.addprocs(template::AbstractString, n::Int; kwargs...)
     isfile(templates_filename_scaleset()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
 
-    templates_scaleset = JSON.parse(read(templates_filename_scaleset(), String))
+    templates_scaleset = JSON.parse(read(templates_filename_scaleset(), String); dicttype=Dict)
     haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
 
     addprocs(templates_scaleset[template], n; kwargs...)
@@ -1036,7 +1040,10 @@ function nworkers_provisioned(service=false)
             n += N
         end
     end
-    n
+
+    _pending_down = pending_down(manager)
+    pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
+    max(0, n - pending_down_count)
 end
 
 """
@@ -2177,14 +2184,14 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     ncores_available - (ncores_per_machine * δn), ncores_spot_available - (ncores_per_machine * δn)
 end
 
-function nphysical_cores(template::Dict)
+function nphysical_cores(template::Dict; session=AzSession())
     ssid = template["subscriptionid"]
     region = template["value"]["location"]
     sku_name = template["value"]["properties"]["hardwareProfile"]["vmSize"]
 
     _r = HTTP.request("GET", 
         "https://management.azure.com/subscriptions/$ssid/providers/Microsoft.Compute/skus?api-version=2022-11-01", 
-        ["Authorization" => "Bearer $(token(AzSession(;lazy=true)))"])
+        ["Authorization" => "Bearer $(token(session))"])
     r = JSON.parse(String(_r.body))
 
 
@@ -2198,14 +2205,14 @@ function nphysical_cores(template::Dict)
     pCPU = hyperthreading ? div(parse(Int,vCPU),2) : parse(Int,vCPU)
 end
 
-function nphysical_cores(template::AbstractString)
+function nphysical_cores(template::AbstractString; session=AzSession())
     isfile(templates_filename_vm()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
 
-    templates_scaleset = JSON.parse(read(templates_filename_vm(), String))
+    templates_scaleset = JSON.parse(read(templates_filename_vm(), String); dicttype=Dict)
     haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
     template = templates_scaleset[template]
 
-    nphysical_cores(template)
+    nphysical_cores(template; session)
 end
 
 function getnextlinks!(manager::AzManager, _r, value, nextlink, nretry, verbose)
@@ -2373,8 +2380,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     _template["properties"]["virtualMachineProfile"]["storageProfile"]["osDisk"]["diskSizeGB"] = osdisksize
 
     _t = token(manager.session)
-    _e = JSONWebTokens.None()
-    _decoded = JSONWebTokens.decode(_e, _t)
+    _decoded = claims(JWT(;jwt=_t))
     if haskey(_decoded, "unique_name")
         _user = _decoded["unique_name"]
 
@@ -3137,7 +3143,7 @@ end
 
 function addproc(vm_template::AbstractString, nic_template=nothing; kwargs...)
     isfile(templates_filename_vm()) || error("if vm_template is a string, then the file $(templates_filename_vm()) must exist.  See AzManagers.save_template_vm.")
-    vm_templates = JSON.parse(read(templates_filename_vm(), String))
+    vm_templates = JSON.parse(read(templates_filename_vm(), String); dicttype=Dict)
     vm_template = vm_templates[vm_template]
 
     addproc(vm_template, nic_template; kwargs...)
