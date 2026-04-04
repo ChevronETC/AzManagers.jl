@@ -639,6 +639,8 @@ function process_pending_connections()
                             finally
                                 unlock(Distributed.worker_lock)
                             end
+                        elseif e isa ProcessExitedException || (e isa RemoteException && e.captured.ex isa ProcessExitedException)
+                            @debug "preempt loop for pid=$pid exited (worker removed)"
                         else
                             @warn "preempt loop for pid=$pid exited with unexpected exception" exception=e
                         end
@@ -1866,10 +1868,28 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
             project_compressed, manifest_compressed, localpreferences_compressed = compress_environment(julia_environment_folder)
 
             cmd *= """
-            
+
             sudo su - $user << 'EOF'
             $exename -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$localpreferences_compressed", "$remote_julia_environment_name")'
-            $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.Registry.update(); Pkg.activate(path); (retry(Pkg.instantiate))(); Pkg.precompile()'
+            $exename -e '
+                using Pkg, Logging
+                status_file = "/tmp/azmanagers_setup_status"
+                path = joinpath(Pkg.envdir(), "$remote_julia_environment_name")
+                write(status_file, "updating registry")
+                @info "customenv: updating registry..."
+                Pkg.Registry.update()
+                write(status_file, "activating environment")
+                @info "customenv: activating environment at \$path"
+                Pkg.activate(path)
+                write(status_file, "instantiating packages")
+                @info "customenv: instantiating packages..."
+                (retry(Pkg.instantiate))()
+                write(status_file, "precompiling")
+                @info "customenv: precompiling..."
+                Pkg.precompile()
+                write(status_file, "done")
+                @info "customenv: done"
+            '
             EOF
             """
         catch e
@@ -3126,6 +3146,8 @@ function addproc(vm_template::Dict, nic_template=nothing;
     spincount = 1
     starttime = tic = time()
     elapsed_time = 0.0
+    isatty = isa(stdout, Base.TTY)
+    last_print = starttime
     while true
         if time() - tic > 10
             _r = @retry nretry azrequest(
@@ -3148,14 +3170,23 @@ function addproc(vm_template::Dict, nic_template=nothing;
             error("reached timeout ($timeout seconds) while creating head VM.")
         end
 
-        write(stdout, spin(spincount, elapsed_time)*", waiting for VM, $vmname, to start.\r")
-        flush(stdout)
+        if isatty
+            write(stdout, spin(spincount, elapsed_time)*", waiting for VM, $vmname, to start.\r")
+            flush(stdout)
+        elseif time() - last_print >= 30
+            @info "$(spin(spincount, elapsed_time)), waiting for VM, $vmname, to start."
+            last_print = time()
+        end
         spincount = spincount == 4 ? 1 : spincount + 1
 
         sleep(0.5)
     end
-    write(stdout, spin(5, elapsed_time)*", waiting for VM, $vmname, to start.\r")
-    write(stdout, "\n")
+    if isatty
+        write(stdout, spin(5, elapsed_time)*", waiting for VM, $vmname, to start.\r")
+        write(stdout, "\n")
+    else
+        @info "$(spin(5, elapsed_time)), waiting for VM, $vmname, to start."
+    end
 
     _r = @retry nretry azrequest(
         "GET",
@@ -3226,6 +3257,8 @@ function rmproc(vm;
     elapsed_time = 0.0
     tic = time() - 20
     spincount = 1
+    isatty = isa(stdout, Base.TTY)
+    last_print = starttime
     while true
         if time() - tic > 10
             _r = @retry nretry azrequest(
@@ -3251,14 +3284,23 @@ function rmproc(vm;
         elapsed_time = time() - starttime
         elapsed_time > timeout && @warn "Unable to delete virtual machine in $timeout seconds"
 
-        write(stdout, spin(spincount, elapsed_time)*", waiting for VM, $vmname, to delete.\r")
-        flush(stdout)
+        if isatty
+            write(stdout, spin(spincount, elapsed_time)*", waiting for VM, $vmname, to delete.\r")
+            flush(stdout)
+        elseif time() - last_print >= 30
+            @info "$(spin(spincount, elapsed_time)), waiting for VM, $vmname, to delete."
+            last_print = time()
+        end
         spincount = spincount == 4 ? 1 : spincount + 1
 
         sleep(0.5)
     end
-    write(stdout, spin(5, elapsed_time)*", waiting for VM, $vmname, to delete.\r")
-    write(stdout, "\n")
+    if isatty
+        write(stdout, spin(5, elapsed_time)*", waiting for VM, $vmname, to delete.\r")
+        write(stdout, "\n")
+    else
+        @info "$(spin(5, elapsed_time)), waiting for VM, $vmname, to delete."
+    end
 
     nothing
 end
@@ -3323,6 +3365,10 @@ function detached_service_wait(vm, custom_environment)
     spincount = 1
     isatty = isa(stdout, Base.TTY)
     last_print = starttime
+    last_status_check = starttime
+    last_worker_status = ""
+    ssh_user = get(_manifest, "ssh_user", "")
+    ssh_key = get(_manifest, "ssh_private_key_file", joinpath(homedir(), ".ssh", "azmanagers_rsa"))
     waitfor = custom_environment ? "Julia package instantiation and COFII detached service" : "COFII detached service"
     while true
         if time() - tic > 5
@@ -3337,15 +3383,44 @@ function detached_service_wait(vm, custom_environment)
         elapsed_time = time() - starttime
 
         if elapsed_time > timeout
-            @error "reached timeout ($timeout seconds) while waiting for $waitfor to start."
+            # Attempt to read worker status before giving up
+            worker_status_on_timeout = ""
+            if custom_environment && ssh_user != ""
+                try
+                    worker_status_on_timeout = strip(read(`ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o LogLevel=ERROR -i $ssh_key $(ssh_user)@$(vm["ip"]) cat /tmp/azmanagers_setup_status`, String))
+                catch
+                end
+                # Also try to grab cloud-init output for diagnostics
+                try
+                    cloud_init_tail = strip(read(`ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o LogLevel=ERROR -i $ssh_key $(ssh_user)@$(vm["ip"]) tail -30 /var/log/cloud-init-output.log`, String))
+                    @error "cloud-init output (last 30 lines):\n$cloud_init_tail"
+                catch
+                end
+            end
+            status_detail = worker_status_on_timeout != "" ? " (worker last status: $worker_status_on_timeout)" : ""
+            @error "reached timeout ($timeout seconds) while waiting for $waitfor to start.$status_detail"
             throw(DetachedServiceTimeoutException(vm))
         end
 
+        # Check worker setup status via SSH
+        if custom_environment && ssh_user != "" && time() - last_status_check >= 30
+            try
+                worker_status = strip(read(`ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o LogLevel=ERROR -i $ssh_key $(ssh_user)@$(vm["ip"]) cat /tmp/azmanagers_setup_status`, String))
+                if worker_status != last_worker_status
+                    last_worker_status = worker_status
+                end
+            catch
+                # SSH not ready yet or status file doesn't exist
+            end
+            last_status_check = time()
+        end
+
+        status_msg = custom_environment && last_worker_status != "" ? " [worker: $last_worker_status]" : ""
         if isatty
-            write(stdout, spin(spincount, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
+            write(stdout, spin(spincount, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.$status_msg\r")
             flush(stdout)
         elseif time() - last_print >= 30
-            @info "$(spin(spincount, elapsed_time)), waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start."
+            @info "$(spin(spincount, elapsed_time)), waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.$status_msg"
             last_print = time()
         end
         spincount = spincount == 4 ? 1 : spincount + 1
