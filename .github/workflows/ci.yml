@@ -6,47 +6,34 @@ on:
   pull_request:
 jobs:
   test:
-    name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - ${{ github.event_name }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        version:
-          - 1.6
-          - 1
-        os:
-          - ubuntu-latest
-        arch:
-          - x64
+    name: Julia tests
+    runs-on: ubuntu-latest
     env:
-      TENANT_ID: "${{ secrets.TENANT_ID }}" 
+      TENANT_ID: "${{ secrets.TENANT_ID }}"
       SUBSCRIPTION_ID: "${{ secrets.SUBSCRIPTION_ID }}"
-      RESOURCE_GROUP: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}"
+      RESOURCE_GROUP: "AzureBackupRG-azman-${{ github.run_id }}"
       CLIENT_ID: "${{ secrets.CLIENT_ID }}"
       CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
-      GALLERY_NAME: "${{ github.run_id }}${{ matrix.version }}gallery"
-      IMAGE_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-image"
       PERSISTENT_RG: "AzureBackupRG-azman-imgcache"
       PERSISTENT_GALLERY: "azmanciimages"
       CACHE_MAX_AGE_DAYS: 30
-      VM_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vm"
-      PUBLIC_IP_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-pubip"
-      VNET_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vnet"
-      NSG_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-nsg"
+      VM_NAME: "azman-${{ github.run_id }}-vm"
+      PUBLIC_IP_NAME: "azman-${{ github.run_id }}-pubip"
+      VNET_NAME: "azman-${{ github.run_id }}-vnet"
+      NSG_NAME: "azman-${{ github.run_id }}-nsg"
       SUBNET_NAME: "default"
-      COMMIT_SHA: "${{ github.sha }}"
     steps:
       - uses: actions/checkout@v3
       - uses: julia-actions/setup-julia@v1
         with:
-          version: ${{ matrix.version }}
+          version: '1'
 
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
 
-      - name: Create Prereq. Azure Resources
+      - name: Create Azure Resources
         run: |
-          az login --service-principal   -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
+          az login --service-principal -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
           az group create                -g "$RESOURCE_GROUP" -l southcentralus --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com"
           az group wait                  -g "$RESOURCE_GROUP" --created
           az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME"
@@ -65,7 +52,7 @@ jobs:
           echo "JULIA_VERSION_PATCH=$JULIA_VERSION_PATCH" >> $GITHUB_ENV
           echo "CACHE_IMAGE_DEF=$CACHE_IMAGE_DEF" >> $GITHUB_ENV
 
-          # Ensure persistent resource group and gallery exist (these are idempotent)
+          # Ensure persistent resource group and gallery exist
           az group create -g "$PERSISTENT_RG" -l southcentralus \
             --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" \
                    "OwnerEmail=sam.kaplan@chevron.com" "purpose=ci-image-cache"
@@ -131,7 +118,10 @@ jobs:
 
       - name: Create coordinator VM
         run: |
-          az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "$CACHED_IMAGE_ID" --public-ip-sku Standard --public-ip-address "$PUBLIC_IP_NAME" --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --nsg "$NSG_NAME" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub --admin-username cvx
+          az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "$CACHED_IMAGE_ID" \
+            --public-ip-sku Standard --public-ip-address "$PUBLIC_IP_NAME" \
+            --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --nsg "$NSG_NAME" \
+            --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub --admin-username cvx
 
       - name: Update AzManagers and regenerate templates
         run: |
@@ -178,7 +168,8 @@ jobs:
           ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq -r '.ipAddress')
 
           echo "Running the Unit Tests and Code Coverage..."
-          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true); using AzManagers; include(joinpath(pkgdir(AzManagers), \"test\", \"julia-codecov.jl\"))'"
+          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress \
+            "julia -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true); using AzManagers; include(joinpath(pkgdir(AzManagers), \"test\", \"julia-codecov.jl\"))'"
           echo ""
 
           echo "scp-ing the Coverage Report..."
