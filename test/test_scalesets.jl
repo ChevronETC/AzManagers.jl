@@ -9,12 +9,12 @@ include(joinpath(@__DIR__, "test_utils.jl"))
 
     @info "[$(elapsed())s] addprocs test: provisioning $ninstances instances (ppi=$ppi, flexible=$flexible, group=$group)..."
     if flexible
-        addprocs(templatename, ninstances;
-            waitfor = true, ppi, group, session,
+        addprocs(AzManager(session), templatename, ninstances;
+            waitfor = true, ppi, group,
             spot = true, spot_base_regular_priority_count = 2)
     else
-        addprocs(templatename, ninstances;
-            waitfor = true, ppi, group, session)
+        addprocs(AzManager(session), templatename, ninstances;
+            waitfor = true, ppi, group)
     end
     @info "[$(elapsed())s] addprocs test: cluster up, $(nworkers()) workers running"
 
@@ -65,7 +65,7 @@ end
     @info "[$(elapsed())s] spot test: provisioning 1 instance (threads=2,0, spot=false)..."
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "2,0" : "2"
-    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads)
+    addprocs(AzManager(session), templatename, 1; waitfor = true, group, julia_num_threads)
 
     @test remotecall_fetch(Threads.nthreads, workers()[1]) == 2
     if VERSION >= v"1.9"
@@ -77,7 +77,7 @@ end
     @info "[$(elapsed())s] spot test: provisioning 1 instance (threads=2,0, spot=true)..."
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "2,0" : "2"
-    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads, spot = true)
+    addprocs(AzManager(session), templatename, 1; waitfor = true, group, julia_num_threads, spot = true)
 
     @test remotecall_fetch(Threads.nthreads, workers()[1]) == 2
     if VERSION >= v"1.9"
@@ -91,7 +91,7 @@ end
     @info "[$(elapsed())s] spot test: provisioning 1 instance (threads=3,2, spot=true)..."
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "3,2" : "3"
-    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads, spot=true)
+    addprocs(AzManager(session), templatename, 1; waitfor = true, group, julia_num_threads, spot=true)
 
     @test remotecall_fetch(Threads.nthreads, workers()[1]) == 3
     if VERSION >= v"1.9"
@@ -106,7 +106,7 @@ if VERSION >= v"1.9"
         @info "[$(elapsed())s] spot eviction test: provisioning 2 instances..."
         group = "test$(randstring('a':'z',4))"
         julia_num_threads = "2,1"
-        addprocs(templatename, 2; waitfor = true, group, session, julia_num_threads, spot = true)
+        addprocs(AzManager(session), templatename, 2; waitfor = true, group, julia_num_threads, spot = true)
 
         @info "[$(elapsed())s] spot eviction test: simulating eviction on worker $(workers()[1])..."
         AzManagers.simulate_spot_eviction(workers()[1])

@@ -85,7 +85,7 @@ end
     group = "test$(randstring('a':'z',4))"
 
     @info "[$(elapsed())s] environment addprocs test: provisioning 1 instance (customenv=true)..."
-    addprocs(templatename, 1; waitfor=true, group=group, session=session, customenv=true)
+    addprocs(AzManager(session), templatename, 1; waitfor=true, group=group, customenv=true)
     @info "[$(elapsed())s] environment addprocs test: cluster up"
     @everywhere using Pkg
     pinfo = remotecall_fetch(Pkg.project, workers()[1])
@@ -116,7 +116,7 @@ end
 
     group = "test$(randstring('a':'z',4))"
 
-    templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))
+    templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String); dicttype=Dict)
     template = templates_scaleset[templatename]
 
     _template = template["value"]
@@ -127,7 +127,7 @@ end
     end
 
     @info "[$(elapsed())s] tags test: provisioning 1 instance..."
-    addprocs(template, 1; waitfor=true, group=group, session=session)
+    addprocs(AzManager(session), template, 1; waitfor=true, group=group)
     @info "[$(elapsed())s] tags test: verifying tags..."
 
     _r = HTTP.request(

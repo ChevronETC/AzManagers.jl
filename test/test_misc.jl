@@ -15,10 +15,10 @@ end
     @info "[$(elapsed())s] physical_hostname test: provisioning 2 instances..."
     group = "test$(randstring('a':'z',4))"
 
-    templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))
+    templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String); dicttype=Dict)
     template = templates_scaleset[templatename]
 
-    addprocs(template, 2; waitfor=true, group=group, session=session)
+    addprocs(AzManager(session), template, 2; waitfor=true, group=group)
     @info "[$(elapsed())s] physical_hostname test: cluster up, checking hostnames..."
 
     wrkers = Distributed.map_pid_wrkr
@@ -68,7 +68,7 @@ end
 
 @testset "AzManagers, nphysical_cores $templatename"
     @info "[$(elapsed())s] nphysical_cores template test: checking $templatename..."
-    templates_scaleset = JSON.parse(read(AzManagers.templates_filename_vm(), String))
+    templates_scaleset = JSON.parse(read(AzManagers.templates_filename_vm(), String); dicttype=Dict)
     template = templates_vm[templatename]
     ncores = nphysical_cores(template)
 

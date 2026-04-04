@@ -176,11 +176,20 @@ end
 Base.Dict(scaleset::ScaleSet) = Dict("subscriptionid"=>scaleset.subscriptionid, "resourcegroup"=>scaleset.resourcegroup, "name"=>scaleset.scalesetname)
 
 mutable struct AzManager <: ClusterManager
+    # Cloud configuration (set by constructor)
     session::AzSessionAbstract
+    subscriptionid::String
+    resourcegroup::String
+    ssh_user::String
+    sigimagename::String
+    sigimageversion::String
+    imagename::String
     nretry::Int
     verbose::Int
     save_cloud_init_failures::Bool
     show_quota::Bool
+
+    # Runtime state (set by azmanager!)
     scalesets::Dict{ScaleSet,Int}
     pending_up::Channel{TCPSocket}
     pending_down::Dict{ScaleSet,Set{String}}
@@ -195,13 +204,93 @@ mutable struct AzManager <: ClusterManager
     task_process::Task
     lock::ReentrantLock
     scaleset_request_counter::Int
-    ssh_user::String
 
     AzManager() = new()
 end
 
+"""
+    AzManager(session; kwargs...)
+
+Construct an AzManager with cloud configuration. Unset fields are populated
+from the AzManagers manifest (`~/.azmanagers/manifest.json`) at call time.
+
+# Keyword arguments
+- `subscriptionid=""` Azure subscription ID
+- `resourcegroup=""` Azure resource group
+- `user=""` SSH username for worker VMs
+- `sigimagename=""` shared image gallery image name
+- `sigimageversion=""` shared image gallery image version
+- `imagename=""` managed image name
+- `nretry=20` number of retries for Azure API calls
+- `verbose=0` verbosity level for Azure API calls
+- `save_cloud_init_failures=false` save cloud-init logs on failure
+- `show_quota=false` show Azure quota information
+"""
+function AzManager(session::AzSessionAbstract;
+        subscriptionid = "",
+        resourcegroup = "",
+        user = "",
+        sigimagename = "",
+        sigimageversion = "",
+        imagename = "",
+        nretry = 20,
+        verbose = 0,
+        save_cloud_init_failures = false,
+        show_quota = false)
+    m = AzManager()
+    m.session = session
+    m.subscriptionid = subscriptionid
+    m.resourcegroup = resourcegroup
+    m.ssh_user = user
+    m.sigimagename = sigimagename
+    m.sigimageversion = sigimageversion
+    m.imagename = imagename
+    m.nretry = nretry
+    m.verbose = verbose
+    m.save_cloud_init_failures = save_cloud_init_failures
+    m.show_quota = show_quota
+    m
+end
+
 const _manager = AzManager()
 
+function azmanager!(manager::AzManager)
+    _manager.session = manager.session
+    _manager.subscriptionid = manager.subscriptionid
+    _manager.resourcegroup = manager.resourcegroup
+    _manager.ssh_user = manager.ssh_user
+    _manager.sigimagename = manager.sigimagename
+    _manager.sigimageversion = manager.sigimageversion
+    _manager.imagename = manager.imagename
+    _manager.nretry = manager.nretry
+    _manager.verbose = manager.verbose
+    _manager.save_cloud_init_failures = manager.save_cloud_init_failures
+    _manager.show_quota = manager.show_quota
+
+    if isdefined(_manager, :pending_up)
+        return _manager
+    end
+
+    _manager.port,_manager.server = listenany(getipaddr(), 9000)
+    _manager.pending_up = Channel{TCPSocket}(64)
+    _manager.pending_down = Dict{ScaleSet,Set{String}}()
+    _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
+    _manager.pruned = Dict{ScaleSet,Set{String}}()
+    _manager.preempted = Dict{ScaleSet,Set{String}}()
+    _manager.preempt_channel_futures = Dict{Int,Future}()
+    _manager.scalesets = Dict{ScaleSet,Int}()
+    _manager.task_add = @async add_pending_connections()
+    _manager.task_process = @async process_pending_connections()
+    _manager.lock = ReentrantLock()
+    _manager.scaleset_request_counter = 0
+
+    @async scaleset_pruning()
+    @async scaleset_cleaning()
+
+    _manager
+end
+
+# Legacy compat for internal callers
 function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures, show_quota)
     _manager.session = session
     _manager.nretry = nretry
@@ -209,6 +298,11 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.save_cloud_init_failures = save_cloud_init_failures
     _manager.show_quota = show_quota
     _manager.ssh_user = ssh_user
+    isdefined(_manager, :subscriptionid) || (_manager.subscriptionid = "")
+    isdefined(_manager, :resourcegroup) || (_manager.resourcegroup = "")
+    isdefined(_manager, :sigimagename) || (_manager.sigimagename = "")
+    isdefined(_manager, :sigimageversion) || (_manager.sigimageversion = "")
+    isdefined(_manager, :imagename) || (_manager.imagename = "")
 
     if isdefined(_manager, :pending_up)
         return _manager
@@ -763,66 +857,54 @@ function nthreads_filter(nthreads)
 end
 
 """
-    addprocs(template, ninstances[; kwargs...])
+    addprocs(manager::AzManager, template, n[; kwargs...])
 
-Add Azure scale set instances where template is either a dictionary produced via the `AzManagers.build_sstemplate`
-method or a string corresponding to a template stored in `~/.azmanagers/templates_scaleset.json.`
+Add Azure scale set instances where `manager` is an `AzManager` (carries Azure credentials and
+cloud configuration), and `template` is either a dictionary produced via `AzManagers.build_sstemplate`
+or a string corresponding to a template stored in `~/.azmanagers/templates_scaleset.json`.
 
-# key word arguments:
-* `subscriptionid=template["subscriptionid"]` if exists, or `AzManagers._manifest["subscriptionid"]` otherwise.
-* `resourcegroup=template["resourcegroup"]` if exists, or `AzManagers._manifest["resourcegroup"]` otherwise.
-* `sigimagename=""` The name of the SIG image[1].
-* `sigimageversion=""` The version of the `sigimagename`[1].
-* `imagename=""` The name of the image (alternative to `sigimagename` and `sigimageversion` used for development work).
+# Example
+```julia
+session = AzSession(;protocal=AzClientCredentials)
+manager = AzManager(session)
+addprocs(manager, "cbox02", 4; waitfor=true, group="mygroup")
+```
+
+# Keyword arguments (workload configuration):
 * `osdisksize=60` The size of the OS disk in GB.
 * `customenv=false` If true, then send the current project environment to the workers where it will be instantiated.
-* `session=AzSession(;lazy=true)` The Azure session used for authentication.
 * `group="cbox"` The name of the Azure scale set.  If the scale set does not yet exist, it will be created.
-* `overprovision=true` Use Azure scle-set overprovisioning?
+* `overprovision=true` Use Azure scale-set overprovisioning?
 * `ppi=1` The number of Julia processes to start per Azure scale set instance.
-* `julia_num_threads="\$(Threads.nthreads(),\$(Threads.nthreads(:interactive))"` set the number of julia threads for the detached process.[2]
+* `julia_num_threads` set the number of julia threads for the workers.[1]
 * `omp_num_threads=get(ENV, "OMP_NUM_THREADS", 1)` set the number of OpenMP threads to run on each worker
 * `exename="\$(Sys.BINDIR)/julia"` name of the julia executable.
-* `exeflags=""` set additional command line start-up flags for Julia workers.  For example, `--heap-size-hint=1G`.
-* `env=Dict()` each dictionary entry is an environment variable set on the worker before Julia starts. e.g. `env=Dict("OMP_PROC_BIND"=>"close")`
-* `nretry=20` Number of retries for HTTP REST calls to Azure services.
-* `verbose=0` verbose flag used in HTTP requests.
-* `save_cloud_init_failures=false` set to true to copy cloud init logs (/var/log/clout-init-output.log) from workers that fail to join the cluster.
-* `show_quota=false` after various operation, show the "x-ms-rate-remaining-resource" response header.  Useful for debugging/understanding Azure quota's.
-* `user=AzManagers._manifest["ssh_user"]` ssh user.
+* `exeflags=""` set additional command line start-up flags for Julia workers.
+* `env=Dict()` each dictionary entry is an environment variable set on the worker before Julia starts.
 * `spot=false` use Azure SPOT VMs for the scale-set
 * `maxprice=-1` set maximum price per hour for a VM in the scale-set.  `-1` uses the market price.
 * `spot_base_regular_priority_count=0` If spot is true, only start adding spot machines once there are this many non-spot machines added.
-* `spot_regular_percentage_above_base` If spot is true, then when ading new machines (above `spot_base_reqular_priority_count`) use regular (non-spot) priority for this percent of new machines.
-* `waitfor=false` wait for the cluster to be provisioned before returning, or return control to the caller immediately[3]
-* `mpi_ranks_per_worker=0` set the number of MPI ranks per Julia worker[4]
-* `mpi_flags="-bind-to core:\$(ENV["OMP_NUM_THREADS"]) -map-by numa"` extra flags to pass to mpirun (has effect when `mpi_ranks_per_worker>0`)
-* `nvidia_enable_ecc=true` on NVIDIA machines, ensure that ECC is set to `true` or `false` for all GPUs[5]
-* `nvidia_enable_mig=false` on NVIDIA machines, ensure that MIG is set to `true` or `false` for all GPUs[5]
-* `hyperthreading=nothing` Turn on/off hyperthreading on supported machine sizes.  The default uses the setting in the template.  To override the template setting, use `true` (on) or `false` (off).
-* `use_lvm=false` For SKUs that have 1 or more nvme disks, combines all disks as a single mount point /scratch vs /scratch, /scratch1, /scratch2, etc..
+* `spot_regular_percentage_above_base=0` percent of new machines to use regular priority above base count.
+* `waitfor=false` wait for the cluster to be provisioned before returning[2]
+* `mpi_ranks_per_worker=0` set the number of MPI ranks per Julia worker[3]
+* `mpi_flags` extra flags to pass to mpirun (has effect when `mpi_ranks_per_worker>0`)
+* `nvidia_enable_ecc=true` on NVIDIA machines, ensure that ECC is set to `true` or `false` for all GPUs[4]
+* `nvidia_enable_mig=false` on NVIDIA machines, ensure that MIG is set to `true` or `false` for all GPUs[4]
+* `hyperthreading=nothing` Turn on/off hyperthreading on supported machine sizes.
+* `use_lvm=false` For SKUs with nvme disks, combine all disks as a single mount point /scratch.
+
+Cloud-specific configuration (subscriptionid, resourcegroup, user, image, session, etc.)
+is set on the `AzManager` constructor.  See `AzManager(session; kwargs...)`.
 
 # Notes
-[1] If `addprocs` is called from an Azure VM, then the default `imagename`,`imageversion` are the
-image/version the VM was built with; otherwise, it is the latest version of the image specified in the scale-set template.
-[2] Interactive threads are supported beginning in version 1.9 of Julia.  For earlier versions, the default for `julia_num_threads` is `Threads.nthreads()`.
-[3] `waitfor=false` reflects the fact that the cluster manager is dynamic.  After the call to `addprocs` returns, use `workers()`
-to monitor the size of the cluster.
-[4] This is inteneded for use with Devito.  In particular, it allows Devito to gain performance by using
-MPI to do domain decomposition using MPI within a single VM.  If `mpi_ranks_per_worker=0`, then MPI is not
-used on the Julia workers.  This feature makes use of package extensions, meaning that you need to ensure
-that `using MPI` is somewhere in your calling script.
-[5] This may result in a re-boot of the VMs
+[1] Interactive threads are supported beginning in version 1.9 of Julia.
+[2] `waitfor=false` reflects the fact that the cluster manager is dynamic.  After the call to `addprocs` returns, use `workers()` to monitor the size of the cluster.
+[3] This is intended for use with Devito.  This feature makes use of package extensions, meaning that you need to ensure that `using MPI` is somewhere in your calling script.
+[4] This may result in a re-boot of the VMs
 """
-function Distributed.addprocs(template::Dict, n::Int;
-        subscriptionid = "",
-        resourcegroup = "",
-        sigimagename = "",
-        sigimageversion = "",
-        imagename = "",
+function Distributed.addprocs(manager::AzManager, template::Dict, n::Int;
         osdisksize = 60,
         customenv = false,
-        session = AzSession(;lazy=true),
         group = "cbox",
         overprovision = true,
         ppi = 1,
@@ -831,11 +913,6 @@ function Distributed.addprocs(template::Dict, n::Int;
         exename = "$(Sys.BINDIR)/julia",
         exeflags = "",
         env = Dict(),
-        nretry = 20,
-        verbose = 0,
-        save_cloud_init_failures = false,
-        show_quota = false,
-        user = "",
         spot = false,
         maxprice = -1,
         spot_base_regular_priority_count = 0,
@@ -849,12 +926,22 @@ function Distributed.addprocs(template::Dict, n::Int;
         use_lvm = false)
     n_current_workers = nprocs() == 1 ? 0 : nworkers()
 
+    # Resolve cloud config from manager, falling back to template and manifest
+    subscriptionid = manager.subscriptionid
+    resourcegroup = manager.resourcegroup
+    user = manager.ssh_user
+    sigimagename = manager.sigimagename
+    sigimageversion = manager.sigimageversion
+    imagename = manager.imagename
+    nretry = manager.nretry
+    verbose = manager.verbose
+
     (subscriptionid == "" || resourcegroup == "" || user == "") && load_manifest()
     subscriptionid == "" && (subscriptionid = get(template, "subscriptionid", _manifest["subscriptionid"]))
     resourcegroup == "" && (resourcegroup = get(template, "resourcegroup", _manifest["resourcegroup"]))
     user == "" && (user = _manifest["ssh_user"])
 
-    manager = azmanager!(session, user, nretry, verbose, save_cloud_init_failures, show_quota)
+    manager = azmanager!(manager)
     sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
@@ -883,13 +970,13 @@ function Distributed.addprocs(template::Dict, n::Int;
     nothing
 end
 
-function Distributed.addprocs(template::AbstractString, n::Int; kwargs...)
+function Distributed.addprocs(manager::AzManager, template::AbstractString, n::Int; kwargs...)
     isfile(templates_filename_scaleset()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
 
     templates_scaleset = JSON.parse(read(templates_filename_scaleset(), String); dicttype=Dict)
     haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
 
-    addprocs(templates_scaleset[template], n; kwargs...)
+    Distributed.addprocs(manager, templates_scaleset[template], n; kwargs...)
 end
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)
