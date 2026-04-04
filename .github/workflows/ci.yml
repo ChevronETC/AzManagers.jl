@@ -26,6 +26,9 @@ jobs:
       CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
       GALLERY_NAME: "${{ github.run_id }}${{ matrix.version }}gallery"
       IMAGE_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-image"
+      PERSISTENT_RG: "AzureBackupRG-azman-imgcache"
+      PERSISTENT_GALLERY: "azmanciimages"
+      CACHE_MAX_AGE_DAYS: 30
       VM_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vm"
       PUBLIC_IP_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-pubip"
       VNET_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vnet"
@@ -45,51 +48,90 @@ jobs:
         run: |
           az login --service-principal   -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
           az group create                -g "$RESOURCE_GROUP" -l southcentralus --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com"
-          az group wait                  -g "$RESOURCE_GROUP" --created 
-          az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
-          az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-jammy" -s "22_04-lts-gen2" --os-type linux --hyper-v-generation V2
+          az group wait                  -g "$RESOURCE_GROUP" --created
           az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME"
           az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22
           az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
           az network vnet subnet update  -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" --vnet-name "$VNET_NAME" --network-security-group "$NSG_NAME"
 
+      - name: Check for cached image
+        run: |
+          JULIA_VERSION_MAJOR=$(julia -e 'print(stdout, VERSION.major)')
+          JULIA_VERSION_MINOR=$(julia -e 'print(stdout, VERSION.minor)')
+          JULIA_VERSION_PATCH=$(julia -e 'print(stdout, VERSION.patch)')
+          CACHE_IMAGE_DEF="julia-${JULIA_VERSION_MAJOR}-${JULIA_VERSION_MINOR}-${JULIA_VERSION_PATCH}"
+          echo "JULIA_VERSION_MAJOR=$JULIA_VERSION_MAJOR" >> $GITHUB_ENV
+          echo "JULIA_VERSION_MINOR=$JULIA_VERSION_MINOR" >> $GITHUB_ENV
+          echo "JULIA_VERSION_PATCH=$JULIA_VERSION_PATCH" >> $GITHUB_ENV
+          echo "CACHE_IMAGE_DEF=$CACHE_IMAGE_DEF" >> $GITHUB_ENV
+
+          # Ensure persistent resource group and gallery exist
+          az group create -g "$PERSISTENT_RG" -l southcentralus \
+            --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" \
+                   "OwnerEmail=sam.kaplan@chevron.com" "purpose=ci-image-cache" 2>/dev/null || true
+          az sig create -g "$PERSISTENT_RG" -r "$PERSISTENT_GALLERY" 2>/dev/null || true
+          az sig image-definition create -g "$PERSISTENT_RG" -r "$PERSISTENT_GALLERY" \
+            -i "$CACHE_IMAGE_DEF" -p "canonical" -f "0001-com-ubuntu-server-jammy" \
+            -s "22_04-lts-gen2" --os-type linux --hyper-v-generation V2 2>/dev/null || true
+
+          # Check for a recent image version
+          CUTOFF_DATE=$(date -d "-${CACHE_MAX_AGE_DAYS} days" -u +%Y-%m-%dT%H:%M:%S)
+          LATEST_VERSION=$(az sig image-version list \
+            -g "$PERSISTENT_RG" -r "$PERSISTENT_GALLERY" -i "$CACHE_IMAGE_DEF" \
+            --query "[?publishingProfile.publishedDate >= '$CUTOFF_DATE'] | sort_by(@, &publishingProfile.publishedDate) | [-1].id" \
+            -o tsv 2>/dev/null || echo "")
+
+          if [ -n "$LATEST_VERSION" ] && [ "$LATEST_VERSION" != "None" ]; then
+            echo "Found cached image: $LATEST_VERSION"
+            echo "CACHE_HIT=true" >> $GITHUB_ENV
+            echo "CACHED_IMAGE_ID=$LATEST_VERSION" >> $GITHUB_ENV
+          else
+            echo "No cached image found, will build new one"
+            echo "CACHE_HIT=false" >> $GITHUB_ENV
+          fi
+
       - name: Install Packer
+        if: env.CACHE_HIT != 'true'
         run: |
           curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
           sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
           sudo apt-get update && sudo apt-get install packer
 
       - name: Build Packer Image
+        if: env.CACHE_HIT != 'true'
         run: |
-          export JULIA_VERSION_MAJOR=$(julia -e 'print(stdout, VERSION.major)')
-          export JULIA_VERSION_MINOR=$(julia -e 'print(stdout, VERSION.minor)')
-          export JULIA_VERSION_PATCH=$(julia -e 'print(stdout, VERSION.patch)')
+          IMAGE_VERSION="1.0.$(date +%s)"
           packer init ${GITHUB_WORKSPACE}/test/image.pkr.hcl
           packer build -color=false -timestamp-ui \
             -var "subscription_id=${SUBSCRIPTION_ID}" \
             -var "tenant_id=${TENANT_ID}" \
             -var "client_id=${CLIENT_ID}" \
             -var "client_secret=${CLIENT_SECRET}" \
-            -var "resource_group=${RESOURCE_GROUP}" \
-            -var "image_name=${IMAGE_NAME}" \
+            -var "resource_group=${PERSISTENT_RG}" \
+            -var "build_resource_group=${RESOURCE_GROUP}" \
+            -var "image_name=${CACHE_IMAGE_DEF}" \
             -var "virtual_network=${VNET_NAME}" \
             -var "virtual_subnet=default" \
-            -var "gallery=${GALLERY_NAME}" \
+            -var "gallery=${PERSISTENT_GALLERY}" \
+            -var "image_version=${IMAGE_VERSION}" \
             -var "julia_version_major=${JULIA_VERSION_MAJOR}" \
             -var "julia_version_minor=${JULIA_VERSION_MINOR}" \
             -var "julia_version_patch=${JULIA_VERSION_PATCH}" \
-            -var "azmanagers_version=${{ github.sha }}" \
+            -var "azmanagers_version=master" \
             ${GITHUB_WORKSPACE}/test/image.pkr.hcl
+
+          CACHED_IMAGE_ID=$(az sig image-version list \
+            -g "$PERSISTENT_RG" -r "$PERSISTENT_GALLERY" -i "$CACHE_IMAGE_DEF" \
+            --query "sort_by(@, &publishingProfile.publishedDate) | [-1].id" -o tsv)
+          echo "CACHED_IMAGE_ID=$CACHED_IMAGE_ID" >> $GITHUB_ENV
 
       - name: Create coordinator VM
         run: |
-          az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "$IMAGE_NAME" --public-ip-sku Standard --public-ip-address "$PUBLIC_IP_NAME" --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --nsg "$NSG_NAME" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub --admin-username cvx
+          az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "$CACHED_IMAGE_ID" --public-ip-sku Standard --public-ip-address "$PUBLIC_IP_NAME" --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --nsg "$NSG_NAME" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub --admin-username cvx
 
-      - name: Run the unit tests
+      - name: Update AzManagers and regenerate templates
         run: |
-          echo "Grabbing the coordinator VM's Pubic IP Address..."
-          ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq '.ipAddress' | cut -d "\"" -f 2)
-          echo ""
+          ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq -r '.ipAddress')
 
           echo "Waiting for SSH to become available on $ipaddress..."
           for i in $(seq 1 30); do
@@ -104,7 +146,32 @@ jobs:
             echo "Attempt $i: SSH not ready, retrying in 10 seconds..."
             sleep 10
           done
-          echo ""
+
+          echo "Updating AzManagers to ${{ github.sha }}..."
+          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress \
+            "julia -e 'using Pkg; Pkg.add(PackageSpec(name=\"AzManagers\", rev=\"${{ github.sha }}\"))'"
+
+          echo "Copying templates.jl to VM..."
+          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa \
+            ${GITHUB_WORKSPACE}/test/templates.jl cvx@$ipaddress:/tmp/templates.jl
+
+          echo "Regenerating templates..."
+          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress \
+            "TENANT_ID='${TENANT_ID}' \
+             SUBSCRIPTION_ID='${SUBSCRIPTION_ID}' \
+             RESOURCE_GROUP='${RESOURCE_GROUP}' \
+             CLIENT_ID='${CLIENT_ID}' \
+             CLIENT_SECRET='${CLIENT_SECRET}' \
+             IMAGE_NAME='${CACHE_IMAGE_DEF}' \
+             VNET_NAME='${VNET_NAME}' \
+             SUBNET_NAME='${SUBNET_NAME}' \
+             GALLERY_NAME='${PERSISTENT_GALLERY}' \
+             GALLERY_RG='${PERSISTENT_RG}' \
+             julia /tmp/templates.jl"
+
+      - name: Run the unit tests
+        run: |
+          ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq -r '.ipAddress')
 
           echo "Running the Unit Tests and Code Coverage..."
           ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true); using AzManagers; include(joinpath(pkgdir(AzManagers), \"test\", \"julia-codecov.jl\"))'"

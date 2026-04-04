@@ -6,6 +6,7 @@ resourcegroup = ENV["RESOURCE_GROUP"]
 client_id = ENV["CLIENT_ID"]
 client_secret = ENV["CLIENT_SECRET"]
 imagename = ENV["IMAGE_NAME"]
+gallery_rg = get(ENV, "GALLERY_RG", resourcegroup)
 
 templatename = "cbox02"
 
@@ -16,6 +17,7 @@ sstemplate = AzManagers.build_sstemplate(
         location             = "southcentralus",
         resourcegroup        = resourcegroup,
         resourcegroup_vnet   = resourcegroup,
+        resourcegroup_image  = gallery_rg,
         vnet                 = ENV["VNET_NAME"],
         subnet               = ENV["SUBNET_NAME"],
         imagegallery         = ENV["GALLERY_NAME"],
@@ -42,6 +44,7 @@ vmtemplate = AzManagers.build_vmtemplate(
         location             = "southcentralus",
         resourcegroup        = resourcegroup,
         resourcegroup_vnet   = resourcegroup,
+        resourcegroup_image  = gallery_rg,
         imagegallery         = ENV["GALLERY_NAME"],
         imagename            = imagename,
         vmsize               = "Standard_D2s_v5")
