@@ -4,6 +4,9 @@ on:
     branches: [master]
     tags: ["*"]
   pull_request:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     name: Julia tests
