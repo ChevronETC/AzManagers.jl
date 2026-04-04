@@ -171,7 +171,24 @@ if VERSION >= v"1.9"
         end
         @test nprocs() < 3
         @info "[$(elapsed())s] spot eviction test: cleaning up..."
-        with_timeout(()->rmprocs(workers()), 120; msg="rmprocs")
+        try
+            with_timeout(()->rmprocs(workers()), 120; msg="rmprocs")
+        catch
+            # Workers may be unreachable after eviction — force-deregister
+            @warn "[$(elapsed())s] spot eviction test: rmprocs timed out, force-deregistering workers..."
+            for pid in workers()
+                try
+                    lock(Distributed.worker_lock)
+                    if haskey(Distributed.map_pid_wrkr, pid)
+                        Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
+                        Distributed.deregister_worker(pid)
+                    end
+                catch
+                finally
+                    unlock(Distributed.worker_lock)
+                end
+            end
+        end
     end
 end
 
