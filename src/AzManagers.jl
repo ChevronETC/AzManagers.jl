@@ -369,8 +369,7 @@ function scaleset_cleaning()
             delete_empty_scalesets()
             scaleset_sync()
         catch e
-            @error "scaleset cleaning error"
-            logerror(e, Logging.Error)
+            @debug "scaleset cleaning error" exception=e
         end
     end
 end
