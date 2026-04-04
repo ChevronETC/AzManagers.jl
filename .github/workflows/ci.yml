@@ -138,9 +138,10 @@ jobs:
             sleep 10
           done
 
-          echo "Updating AzManagers to ${{ github.sha }}..."
+          AZMANAGERS_REV="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "Updating AzManagers to $AZMANAGERS_REV..."
           ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress \
-            "julia -e 'using Pkg; Pkg.add(PackageSpec(name=\"AzManagers\", rev=\"${{ github.sha }}\"))'"
+            "julia -e 'using Pkg; Pkg.add(PackageSpec(name=\"AzManagers\", rev=\"$AZMANAGERS_REV\"))'"
 
           echo "Copying templates.jl to VM..."
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa \
