@@ -11,7 +11,7 @@ mkpath(TEST_REPORT_DIR)
 Run the test function `f` inside a ReportingTestSet and write a JUnit XML report
 to `\$TEST_REPORT_DIR/<name>.xml`. Returns the testset.
 """
-function run_group(name::String, f)
+function run_group(f, name::String)
     ts = nothing
     try
         ts = @testset ReportingTestSet "$name" begin
