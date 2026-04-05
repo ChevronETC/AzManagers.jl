@@ -54,10 +54,6 @@ variable "azmanagers_version" {
     default = "master"
 }
 
-variable "build_resource_group" {
-    default = ""
-}
-
 packer {
     required_plugins {
         azure = {
@@ -85,13 +81,13 @@ source "azure-arm" "cofii" {
         replication_regions = ["South Central US"]
     }
     shared_image_gallery_timeout = "120m"
-    build_resource_group_name = var.build_resource_group != "" ? var.build_resource_group : var.resource_group
+    build_resource_group_name = var.resource_group
     managed_image_resource_group_name = var.resource_group
     managed_image_name = var.image_name
     managed_image_storage_account_type = "Premium_LRS"
     virtual_network_name = var.virtual_network
     virtual_network_subnet_name = var.virtual_subnet
-    virtual_network_resource_group_name = var.build_resource_group != "" ? var.build_resource_group : var.resource_group
+    virtual_network_resource_group_name = var.resource_group
     private_virtual_network_with_public_ip = true
     ssh_username = "cvx"
 }

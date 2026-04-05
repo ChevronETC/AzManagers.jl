@@ -702,7 +702,6 @@ function process_pending_connections()
                         manager.preempt_channel_futures[pid] = remotecall(Channel{Bool}, pid, 1)
                         remotecall_fetch(machine_preempt_loop, pid, manager.preempt_channel_futures[pid])
                     catch e
-                        @info "preempt loop catch for pid=$pid: exception type=$(typeof(e))"
                         ex = _extract_preempt_exception(e)
                         if ex !== nothing
                             notbefore = DateTime(ex.notbefore, dateformat"e, dd u yyyy HH:MM:SS \G\M\T")
@@ -734,7 +733,27 @@ function process_pending_connections()
                                 unlock(Distributed.worker_lock)
                             end
                         elseif e isa ProcessExitedException || (e isa RemoteException && e.captured.ex isa ProcessExitedException)
-                            @debug "preempt loop for pid=$pid exited (worker removed)"
+                            # Spot worker died unexpectedly - Azure likely deallocated the VM (preemption)
+                            # before the SpotPreemptException could propagate over TCP. Treat as preemption.
+                            @info "spot worker pid=$pid exited unexpectedly, treating as preemption and deregistering"
+                            u = wrkr.config.userdata
+                            try
+                                scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
+                                add_instance_to_preempted_list(manager, scaleset, u["instanceid"])
+                            catch e
+                                @warn "error adding instance to preempted list" exception=e
+                            end
+                            try
+                                lock(Distributed.worker_lock)
+                                if haskey(Distributed.map_pid_wrkr, pid)
+                                    Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
+                                    Distributed.deregister_worker(pid)
+                                end
+                            catch e
+                                @error "error during worker deregistration for pid=$pid" exception=e
+                            finally
+                                unlock(Distributed.worker_lock)
+                            end
                         else
                             @warn "preempt loop for pid=$pid exited with unexpected exception" exception=e
                         end
@@ -1324,30 +1343,25 @@ Walk an exception chain to find a SpotPreemptException, regardless of how
 it is wrapped (RemoteException, TaskFailedException, etc.). Returns the
 SpotPreemptException if found, or nothing.
 """
-function _extract_preempt_exception(e, depth=0)
-    @info "  _extract_preempt_exception depth=$depth type=$(typeof(e))"
+function _extract_preempt_exception(e)
     e isa SpotPreemptException && return e
     if e isa RemoteException
-        return _extract_preempt_exception(e.captured.ex, depth+1)
+        return _extract_preempt_exception(e.captured.ex)
     end
-    if e isa TaskFailedException
-        if isdefined(e, :task) && istaskdone(e.task)
-            result = e.task.result
-            @info "  TaskFailedException task.result type=$(typeof(result))"
-            if result isa Exception
-                return _extract_preempt_exception(result, depth+1)
-            elseif result isa CapturedException
-                return _extract_preempt_exception(result.ex, depth+1)
-            end
+    if e isa TaskFailedException && isdefined(e, :task) && istaskdone(e.task)
+        result = e.task.result
+        if result isa Exception
+            return _extract_preempt_exception(result)
+        elseif result isa CapturedException
+            return _extract_preempt_exception(result.ex)
         end
     end
     if hasproperty(e, :captured) && e.captured isa CapturedException
-        return _extract_preempt_exception(e.captured.ex, depth+1)
+        return _extract_preempt_exception(e.captured.ex)
     end
     if e isa CapturedException
-        return _extract_preempt_exception(e.ex, depth+1)
+        return _extract_preempt_exception(e.ex)
     end
-    @info "  _extract_preempt_exception: no match at depth=$depth"
     return nothing
 end
 Base.showerror(io::IO, e::SpotPreemptException) = print(io, "spot preemption on process '$(e.clusterid)' ($(e.instanceid)), not before '$(e.notbefore)'")

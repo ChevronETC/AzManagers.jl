@@ -53,20 +53,13 @@ end
     with_timeout(()->rmproc(testvm; session=session), 120; msg="rmproc")
 end
 
-@testset "AzManagers, nphysical_cores $machine_name" for machine_name in ("cbox96","cbox64","ussc/t107/v4/amd/cbox176")
-    @info "[$(elapsed())s] nphysical_cores test: checking $machine_name..."
-    ncores = nphysical_cores(machine_name; session=session)
-
-    if machine_name == "cbox96"
-        @test ncores == 96
-    elseif machine_name == "cbox64"
-        @test ncores == 64
-    elseif machine_name == "ussc/t107/v4/amd/cbox176"
-        @test ncores == 176
-    end
+@testset "AzManagers, nphysical_cores $name" for (name, expected) in [("cbox02", 2), ("cbox04", 4), ("cbox08", 8)]
+    @info "[$(elapsed())s] nphysical_cores test: checking $name..."
+    ncores = nphysical_cores(name; session=session)
+    @test ncores == expected
 end
 
-@testset "AzManagers, nphysical_cores $templatename"
+@testset "AzManagers, nphysical_cores Dict $templatename" begin
     @info "[$(elapsed())s] nphysical_cores template test: checking $templatename..."
     templates_vm = JSON.parse(read(AzManagers.templates_filename_vm(), String); dicttype=Dict)
     template = templates_vm[templatename]

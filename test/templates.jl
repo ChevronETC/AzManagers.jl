@@ -6,7 +6,6 @@ resourcegroup = ENV["RESOURCE_GROUP"]
 client_id = ENV["CLIENT_ID"]
 client_secret = ENV["CLIENT_SECRET"]
 imagename = ENV["IMAGE_NAME"]
-gallery_rg = get(ENV, "GALLERY_RG", resourcegroup)
 
 templatename = "cbox02"
 
@@ -17,7 +16,6 @@ sstemplate = AzManagers.build_sstemplate(
         location             = "southcentralus",
         resourcegroup        = resourcegroup,
         resourcegroup_vnet   = resourcegroup,
-        resourcegroup_image  = gallery_rg,
         vnet                 = ENV["VNET_NAME"],
         subnet               = ENV["SUBNET_NAME"],
         imagegallery         = ENV["GALLERY_NAME"],
@@ -44,7 +42,6 @@ vmtemplate = AzManagers.build_vmtemplate(
         location             = "southcentralus",
         resourcegroup        = resourcegroup,
         resourcegroup_vnet   = resourcegroup,
-        resourcegroup_image  = gallery_rg,
         imagegallery         = ENV["GALLERY_NAME"],
         imagename            = imagename,
         vmsize               = "Standard_D2s_v5")
@@ -57,10 +54,25 @@ nictemplate = AzManagers.build_nictemplate(
         resourcegroup_vnet   = resourcegroup,
         vnet                 = ENV["VNET_NAME"],
         subnet               = ENV["SUBNET_NAME"])
-        
+
 AzManagers.save_template_scaleset(templatename, sstemplate)
 AzManagers.save_template_vm(templatename, vmtemplate)
 AzManagers.save_template_nic(templatename, nictemplate)
+
+# Additional VM templates for nphysical_cores tests
+for (name, sku) in [("cbox04", "Standard_D4s_v5"), ("cbox08", "Standard_D8s_v5")]
+    tmpl = AzManagers.build_vmtemplate(
+        name,
+        subscriptionid       = subscriptionid,
+        admin_username       = "cvx",
+        location             = "southcentralus",
+        resourcegroup        = resourcegroup,
+        resourcegroup_vnet   = resourcegroup,
+        imagegallery         = ENV["GALLERY_NAME"],
+        imagename            = imagename,
+        vmsize               = sku)
+    AzManagers.save_template_vm(name, tmpl)
+end
 
 AzSessions.write_manifest(;client_id=client_id, client_secret=client_secret, tenant=tenant_id)
 AzManagers.write_manifest(;resourcegroup=resourcegroup, subscriptionid=subscriptionid, ssh_user="cvx")
