@@ -7,28 +7,38 @@ on:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 jobs:
   test:
-    name: Julia tests
+    name: Julia ${{ matrix.version }} tests
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: 'lts'
+            suffix: 'lts'
+          - version: '1'
+            suffix: 'latest'
     env:
       TENANT_ID: "${{ secrets.TENANT_ID }}"
       SUBSCRIPTION_ID: "${{ secrets.SUBSCRIPTION_ID }}"
-      RESOURCE_GROUP: "AzureBackupRG-azman-${{ github.run_id }}"
+      RESOURCE_GROUP: "AzureBackupRG-azman-${{ matrix.suffix }}-${{ github.run_id }}"
       CLIENT_ID: "${{ secrets.CLIENT_ID }}"
       CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
-      GALLERY_NAME: "azman${{ github.run_id }}gallery"
-      IMAGE_NAME: "azman-${{ github.run_id }}-image"
-      VM_NAME: "azman-${{ github.run_id }}-vm"
-      PUBLIC_IP_NAME: "azman-${{ github.run_id }}-pubip"
-      VNET_NAME: "azman-${{ github.run_id }}-vnet"
-      NSG_NAME: "azman-${{ github.run_id }}-nsg"
+      GALLERY_NAME: "azman${{ github.run_id }}${{ matrix.suffix }}gallery"
+      IMAGE_NAME: "azman-${{ matrix.suffix }}-${{ github.run_id }}-image"
+      VM_NAME: "azman-${{ matrix.suffix }}-${{ github.run_id }}-vm"
+      PUBLIC_IP_NAME: "azman-${{ matrix.suffix }}-${{ github.run_id }}-pubip"
+      VNET_NAME: "azman-${{ matrix.suffix }}-${{ github.run_id }}-vnet"
+      NSG_NAME: "azman-${{ matrix.suffix }}-${{ github.run_id }}-nsg"
       SUBNET_NAME: "default"
     steps:
       - uses: actions/checkout@v5
       - uses: julia-actions/setup-julia@v2
         with:
-          version: '1'
+          version: ${{ matrix.version }}
 
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
@@ -141,7 +151,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
-          name: test-reports
+          name: test-reports-${{ matrix.suffix }}
           path: test-reports/*.xml
           if-no-files-found: warn
 
@@ -150,12 +160,13 @@ jobs:
         if: ${{ always() }}
         with:
           files: test-reports/*.xml
-          check_name: "Julia Test Results"
+          check_name: "Julia ${{ matrix.version }} Test Results"
           comment_mode: off
 
       - uses: codecov/codecov-action@v5
         with:
           files: lcov.info
+          flags: julia-${{ matrix.suffix }}
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Delete CI Resource Group
