@@ -1,5 +1,7 @@
 include(joinpath(@__DIR__, "test_utils.jl"))
 
+run_group("misc") do
+
 @testset "AzManagers, retrywarn" begin
     @info "[$(elapsed())s] retrywarn test: testing retry warning output..."
     r = HTTP.Response(
@@ -67,3 +69,5 @@ end
 
     @test ncores == 2
 end
+
+end  # run_group

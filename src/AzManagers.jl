@@ -369,7 +369,12 @@ function scaleset_cleaning()
             delete_empty_scalesets()
             scaleset_sync()
         catch e
-            @debug "scaleset cleaning error" exception=e
+            # 404s are expected during teardown when scalesets/groups are being deleted
+            if e isa HTTP.StatusError && e.status == 404
+                @debug "scaleset cleaning: resource not found (likely being torn down)" exception=e
+            else
+                @warn "scaleset cleaning error" exception=e
+            end
         end
     end
 end
@@ -683,8 +688,12 @@ function process_pending_connections()
                 @debug "triggered adding machines" elapsedtime min_cadence instances_per_second min_instances_per_second length(sockets) max_sockets nworkers_provisioned()
             end
         catch e
-            @error "AzManagers, error retrieving pending connection"
-            logerror(e, Logging.Error)
+            if e isa InvalidStateException
+                # Channel closed — process shutting down
+                @debug "pending_up channel closed, exiting process_pending_connections"
+                break
+            end
+            @warn "AzManagers, error retrieving pending connection" exception=e
             continue
         end
 
@@ -2741,19 +2750,35 @@ function simulate_spot_eviction(pid)
         rethrow()
     end
 
-    # Query the VM instance view to confirm eviction was triggered
-    try
-        view_url = "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/virtualMachines/$instanceid/instanceView?api-version=2023-03-01"
-        rv = HTTP.request("GET", view_url, ["Authorization" => "Bearer $(token(session))"]; status_exception=false)
-        if rv.status == 200
-            rjson = JSON.parse(String(rv.body))
-            statuses = get(rjson, "statuses", [])
-            @info "simulate_spot_eviction: instance view statuses" statuses
-        else
-            @warn "simulate_spot_eviction: could not fetch instanceView, status=$(rv.status)"
+    # Poll the VM instance view to observe state transitions after simulated eviction
+    view_url = "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/virtualMachines/$instanceid/instanceView?api-version=2023-03-01"
+    last_powerstate = ""
+    tic = time()
+    for i in 1:7  # poll at 0, 10, 20, 30, 40, 50, 60 seconds
+        try
+            rv = HTTP.request("GET", view_url, ["Authorization" => "Bearer $(token(session))"]; status_exception=false)
+            if rv.status == 200
+                rjson = JSON.parse(String(rv.body))
+                statuses = get(rjson, "statuses", [])
+                codes = [get(s, "code", "") for s in statuses]
+                powerstate = something(findfirst(c -> startswith(c, "PowerState/"), codes), 0) > 0 ?
+                    codes[findfirst(c -> startswith(c, "PowerState/"), codes)] : "unknown"
+                if powerstate != last_powerstate
+                    @info "simulate_spot_eviction: instance state at $(round(time() - tic; digits=1))s" powerstate all_codes=codes
+                    last_powerstate = powerstate
+                end
+                # Stop polling early if VM is being deallocated or is gone
+                (occursin("deallocat", powerstate) || occursin("stopp", powerstate)) && break
+            elseif rv.status == 404
+                @info "simulate_spot_eviction: VM instance no longer exists (404) at $(round(time() - tic; digits=1))s"
+                break
+            else
+                @warn "simulate_spot_eviction: instanceView returned status=$(rv.status)"
+            end
+        catch e
+            @warn "simulate_spot_eviction: failed to query instanceView" exception=e
         end
-    catch e
-        @warn "simulate_spot_eviction: failed to query instanceView" exception=e
+        i < 7 && sleep(10)
     end
     nothing
 end

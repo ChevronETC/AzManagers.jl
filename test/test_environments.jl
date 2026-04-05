@@ -1,5 +1,7 @@
 include(joinpath(@__DIR__, "test_utils.jl"))
 
+run_group("environments") do
+
 @testset "environment, addproc" begin
     @info "[$(elapsed())s] environment addproc test: setting up project..."
     mkpath("myproject")
@@ -142,3 +144,5 @@ end
     @info "[$(elapsed())s] tags test: cleaning up..."
     with_timeout(()->rmprocs(workers()), 120; msg="rmprocs")
 end
+
+end  # run_group

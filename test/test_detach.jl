@@ -1,5 +1,7 @@
 include(joinpath(@__DIR__, "test_utils.jl"))
 
+run_group("detach") do
+
 @testset "AzManagers, addproc, and test if nthreads propagates properly" begin
     @info "[$(elapsed())s] nthreads test: provisioning VM (threads=1,2)..."
     r = randstring('a':'z',4)
@@ -81,3 +83,5 @@ end
     with_timeout(()->wait(testjob), 300; msg="wait(testjob)")
     @test contains(read(testjob), "passed")
 end
+
+end  # run_group

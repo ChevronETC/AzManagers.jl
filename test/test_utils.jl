@@ -1,5 +1,37 @@
 using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
 using MPI
+using TestReports
+
+const TEST_REPORT_DIR = get(ENV, "AZMANAGERS_TEST_REPORT_DIR", joinpath(homedir(), "test-reports"))
+mkpath(TEST_REPORT_DIR)
+
+"""
+    run_group(name, f)
+
+Run the test function `f` inside a ReportingTestSet and write a JUnit XML report
+to `\$TEST_REPORT_DIR/<name>.xml`. Returns the testset.
+"""
+function run_group(name::String, f)
+    ts = nothing
+    try
+        ts = @testset ReportingTestSet "$name" begin
+            f()
+        end
+    finally
+        if ts !== nothing
+            report_path = joinpath(TEST_REPORT_DIR, "$name.xml")
+            try
+                open(report_path, "w") do io
+                    print(io, report(ts))
+                end
+                @info "Wrote JUnit report to $report_path"
+            catch e
+                @warn "Failed to write JUnit report" exception=e
+            end
+        end
+    end
+    ts
+end
 
 function with_timeout(f, seconds; msg="operation")
     t = @async f()

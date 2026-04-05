@@ -1,5 +1,7 @@
 include(joinpath(@__DIR__, "test_utils.jl"))
 
+run_group("scalesets") do
+
 @testset "AzManagers, addprocs, ppi=$ppi, flexible=$flexible" for ppi in (1,), flexible in (false,)
     ninstances = 4
     group = "test$(randstring('a':'z',4))"
@@ -140,3 +142,5 @@ if VERSION >= v"1.9"
         end
     end
 end
+
+end  # run_group
