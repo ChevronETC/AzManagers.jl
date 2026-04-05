@@ -54,7 +54,11 @@ for (g, p) in procs
 end
 
 if !isempty(failed)
-    error("Test groups failed: $(join(failed, ", "))")
+    println("\n=== FAILED TEST GROUPS ===")
+    for g in failed
+        println("  - $g")
+    end
+    exit(1)
 end
 
-println("All test groups passed.")
+println("\nAll test groups passed.")

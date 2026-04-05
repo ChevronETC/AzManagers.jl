@@ -2723,10 +2723,38 @@ function simulate_spot_eviction(pid)
     manager = azmanager()
     session = manager.session
 
-    HTTP.request(
-        "POST",
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/virtualMachines/$instanceid/simulateEviction?api-version=2023-03-01",
-        ["Authorization" => "Bearer $(token(session))"])
+    url = "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/virtualMachines/$instanceid/simulateEviction?api-version=2023-03-01"
+    @info "simulate_spot_eviction: pid=$pid, scaleset=$scalesetname, instanceid=$instanceid"
+    try
+        r = HTTP.request(
+            "POST",
+            url,
+            ["Authorization" => "Bearer $(token(session))"];
+            status_exception=false)
+        body = String(r.body)
+        @info "simulate_spot_eviction: POST returned status=$(r.status)" body=(isempty(body) ? "(empty)" : body)
+        if r.status >= 400
+            @warn "simulate_spot_eviction: Azure API returned error status $(r.status)" body
+        end
+    catch e
+        @error "simulate_spot_eviction: HTTP request failed" exception=e
+        rethrow()
+    end
+
+    # Query the VM instance view to confirm eviction was triggered
+    try
+        view_url = "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/virtualMachines/$instanceid/instanceView?api-version=2023-03-01"
+        rv = HTTP.request("GET", view_url, ["Authorization" => "Bearer $(token(session))"]; status_exception=false)
+        if rv.status == 200
+            rjson = JSON.parse(String(rv.body))
+            statuses = get(rjson, "statuses", [])
+            @info "simulate_spot_eviction: instance view statuses" statuses
+        else
+            @warn "simulate_spot_eviction: could not fetch instanceView, status=$(rv.status)"
+        end
+    catch e
+        @warn "simulate_spot_eviction: failed to query instanceView" exception=e
+    end
     nothing
 end
 
