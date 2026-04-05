@@ -89,7 +89,7 @@ end
     @info "[$(elapsed())s] environment addprocs test: provisioning 1 instance (customenv=true)..."
     addprocs(AzManager(session), templatename, 1; waitfor=true, group=group, customenv=true)
     @info "[$(elapsed())s] environment addprocs test: cluster up"
-    @everywhere using Pkg
+    Distributed.remotecall_eval(Main, procs(), :(using Pkg))
     pinfo = remotecall_fetch(Pkg.project, workers()[1])
     @test contains(pinfo.path, "myproject")
 
