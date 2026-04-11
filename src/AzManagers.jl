@@ -499,9 +499,9 @@ function add_pending_connections()
     while true
         try
             let s = accept(manager.server)
-                @debug "pushing new socket onto manger.pending_up" length(manager.pending_up.data)
-                push!(manager.pending_up, s)
-                @debug "done pushing new socket onto manger.pending_up" length(manager.pending_up.data)
+                @debug "pushing new socket onto manger.pending_up" manager.pending_up.n_avail_items
+                put!(manager.pending_up, s)
+                @debug "done pushing new socket onto manger.pending_up" manager.pending_up.n_avail_items
             end
         catch e
             @error "AzManagers, error adding pending connection"
@@ -570,13 +570,13 @@ function process_pending_connections()
     while true
         try
             if isempty(sockets)
-                @debug "taking from manager.pending_up" length(manager.pending_up.data)
+                @debug "taking from manager.pending_up" manager.pending_up.n_avail_items
                 push!(sockets, take!(manager.pending_up))
-                @debug "done taking from manager.pending_up" length(manager.pending_up.data)
+                @debug "done taking from manager.pending_up" manager.pending_up.n_avail_items length(sockets)
             elseif isready(manager.pending_up) && length(sockets) < max_sockets
-                @debug "taking from manager.pending_up" length(manager.pending_up.data)
+                @debug "taking from manager.pending_up" manager.pending_up.n_avail_items
                 push!(sockets, take!(manager.pending_up))
-                @debug "done taking from manager.pending_up" length(manager.pending_up.data)
+                @debug "done taking from manager.pending_up" manager.pending_up.n_avail_items length(sockets)
             else
                 sleep(0.1)
             end
