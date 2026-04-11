@@ -98,8 +98,13 @@ function retrywarn(i, retries, s, e)
             b = JSON.parse(String(e.response.body))
             errorcode = get(get(b, "error", Dict()), "code", "")
             @warn "errorcode: $errorcode, retry $i, retrying in $s seconds"
+        elseif e.status == 409
+            b = JSON.parse(String(e.response.body))
+            errorcode = get(get(b, "error", Dict()), "code", "")
+            errormessage = get(get(b, "error", Dict()), "message", "")
+            @warn "($errorcode): $errormessage; retry $i of $retries, retrying in $s seconds"
         else
-            @warn "status=$(e.status), retry $i, retrying in $s seconds"
+            @warn "status=$(e.status): $(String(e.response.body)), retry $i of $retries, retrying in $s seconds"
         end
     else
         @warn "warn: $(typeof(e)) -- retry $i, retrying in $s seconds"
