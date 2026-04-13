@@ -98,12 +98,17 @@ function retrywarn(i, retries, s, e)
             b = JSON.parse(String(e.response.body))
             errorcode = get(get(b, "error", Dict()), "code", "")
             @warn "errorcode: $errorcode, retry $i, retrying in $s seconds"
+        elseif e.status == 409
+            b = JSON.parse(String(e.response.body))
+            errorcode = get(get(b, "error", Dict()), "code", "")
+            errormessage = get(get(b, "error", Dict()), "message", "")
+            @warn "($errorcode): $errormessage; retry $i of $retries, retrying in $s seconds"
         else
-            @warn "status=$(e.status), retry $i, retrying in $s seconds"
+            @warn "status=$(e.status): $(String(e.response.body)), retry $i of $retries, retrying in $s seconds"
         end
     else
         @warn "warn: $(typeof(e)) -- retry $i, retrying in $s seconds"
-        logerror(e, Logging.Warn)
+        logerror(e, Logging.Debug)
     end
 end
 
@@ -258,7 +263,7 @@ function scaleset_pruning()
             prune_scalesets()
         catch e
             @error "scaleset pruning error"
-            logerror(e, Logging.Error)
+            logerror(e, Logging.Debug)
         finally
             sleep(interval)
         end
@@ -276,7 +281,7 @@ function scaleset_cleaning()
             scaleset_sync()
         catch e
             @error "scaleset cleaning error"
-            logerror(e, Logging.Error)
+            logerror(e, Logging.Debug)
         end
     end
 end
@@ -331,7 +336,7 @@ function delete_pending_down_vms()
                 end
             else
                 @error "error deleting scaleset vms, manual clean-up may be required."
-                logerror(e, Logging.Error)
+                logerror(e, Logging.Debug)
             end
         end
     end
@@ -355,7 +360,7 @@ function scaleset_sync()
         end
     catch e
         @error "scaleset syncing error"
-        logerror(e)
+        logerror(e, Logging.Debug)
     end
     unlock(manager.lock)
 end
@@ -477,7 +482,7 @@ function prune_scalesets()
                         run(`scp -i $(homedir())/.ssh/azmanagers_rsa $(manager.ssh_user)@$(ipaddress):/var/log/cloud-init-output.log ./cloud-init-output-$(instanceid).log`)
                     catch e
                         @warn "failed to copy cloud init log from VM $(instanceid)."
-                        logerror(e, Logging.Warn)
+                        logerror(e, Logging.Debug)
                     end
                 end
                 add_instance_to_pruned_list(manager, scaleset, instanceid)
@@ -505,7 +510,7 @@ function add_pending_connections()
             end
         catch e
             @error "AzManagers, error adding pending connection"
-            logerror(e, Logging.Error)
+            logerror(e, Logging.Debug)
         end
     end
 end
@@ -545,7 +550,7 @@ function addprocs_with_timeout(manager; sockets)
             try
                 fetch(tsk_addprocs)
             catch e
-                logerror(e, Logging.Warn)
+                logerror(e, Logging.Debug)
             finally
                 break
             end
@@ -591,7 +596,7 @@ function process_pending_connections()
             end
         catch e
             @error "AzManagers, error retrieving pending connection"
-            logerror(e, Logging.Error)
+            logerror(e, Logging.Debug)
             continue
         end
 
@@ -669,7 +674,7 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
         end
     catch e
         @warn "unable to create worker within $timeout seconds, adding vm to pending down list"
-        logerror(e, Logging.Warn)
+        logerror(e, Logging.Debug)
         u = wconfig.userdata
         scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
         add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
@@ -713,7 +718,7 @@ function spinner(n_target_workers)
         _nworkers = nprocs() == 1 ? 0 : nworkers()
     catch e
         @warn "error during startup:"
-        logerror(e, Logging.Warn)
+        logerror(e, Logging.Debug)
     end
     while nprocs() == 1 || nworkers() != n_target_workers
         try
@@ -729,7 +734,7 @@ function spinner(n_target_workers)
             sleep(.25)
         catch e
             @warn "error during startup:"
-            logerror(e, Logging.Warn)
+            logerror(e, Logging.Debug)
         end
     end
     _nworkers = nprocs() == 1 ? 0 : nworkers()
@@ -884,7 +889,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
             Distributed.launch_on_machine(manager, launched, c, socket)
         catch e
             @error "failed to launch on machine for socket=$socket"
-            logerror(e, Logging.Error)
+            logerror(e, Logging.Debug)
         end
     end
     notify(c)
@@ -896,7 +901,7 @@ function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
         _cookie = read(socket, Distributed.HDR_COOKIE_LEN)
     catch e
         @error "unable to read cookie from socket"
-        logerror(e, Logging.Error)
+        logerror(e, Logging.Debug)
         return
     end
 
@@ -1443,7 +1448,7 @@ function azure_worker(cookie, master_address, master_port, ppi, exeflags)
             azure_worker_start(c, cookie)
         catch e
             @error "error starting worker, attempt $itry, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
-            logerror(e, Logging.Error)
+            logerror(e, Logging.Debug)
             if itry > 10
                 throw(e)
             end
@@ -1836,7 +1841,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
             """
         catch e
             @warn "Unable to use a custom environment."
-            logerror(e, Logging.Warn)
+            logerror(e, Logging.Debug)
         end
     end
 
@@ -2530,15 +2535,15 @@ function mount_datadisks()
                         @info "done mounting data disk with lun $lun ($name)"
                     catch e
                         @error "caught error formatting mounting data disk lun=$lun ($name)"
-                        logerror(e, Logging.Error)
+                        logerror(e, Logging.Debug)
                         run(`sudo rm -rf /scratch$lun`)
                     end
                 end
             end
         end
-    catch
+    catch e
         @error "caught error formatting/mounting data disks"
-        logerror(e, Logging.Error)
+        logerror(e, Logging.Debug)
     end
 end
 
@@ -2717,7 +2722,8 @@ function detachedrun(request::HTTP.Request)
         DETACHED_JOBS[string(id)] = Dict("process"=>process, "request"=>request, "stdout"=>outfile, "stderr"=>errfile, "codefile"=>_tempname, "code"=>code)
     catch e
         io = IOBuffer()
-        logerror(e, Logging.Warn)
+        @error "caught error in detachedrun"
+        logerror(e, Logging.Debug)
         return HTTP.Response(500, ["Content-Type"=>"application/json"], JSON.json(Dict("error"=>String(take!(io)))); request)
     end
 
@@ -2848,7 +2854,8 @@ function detachedwait(request::HTTP.Request)
         process = DETACHED_JOBS[id]["process"]
         wait(process)
     catch e
-        logerror(e, Logging.Error)
+        @error "caught error waiting for process for job $id to finish"
+        logerror(e, Logging.Debug)
 
         write(io, "\n\n")
 
