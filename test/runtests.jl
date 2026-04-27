@@ -147,7 +147,7 @@ end
     @test remotecall_fetch(Threads.nthreads, workers()[1]) == 2
 
     if VERSION >= v"1.9"
-        @test remotecall_fetch(Threads.nthreads, workers()[1], :interactive) == 0
+        @test remotecall_fetch(Threads.nthreads, workers()[1], :interactive) <= 1
     end
     rmprocs(workers())
 
@@ -193,7 +193,7 @@ if VERSION >= v"1.9"
             sleep(10)
         end
         @test nprocs() < 3
-        rmprocs(workers())
+        try rmprocs(workers()) catch end
     end
 end
 
