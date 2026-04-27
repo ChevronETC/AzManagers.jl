@@ -413,7 +413,7 @@ end
     end
 end
 
-@testset "AzManagers, nphysical_cores $templatename"
+@testset "AzManagers, nphysical_cores $templatename" begin
     templates_scaleset = JSON.parse(read(AzManagers.templates_filename_vm(), String))
     template = templates_vm[templatename] 
     ncores = nphysical_cores(template)
