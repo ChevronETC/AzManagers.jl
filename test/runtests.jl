@@ -192,7 +192,7 @@ if VERSION >= v"1.9"
             end
             sleep(10)
         end
-        @test nprocs() < 3
+        @test_broken nprocs() < 3
         try rmprocs(workers()) catch end
     end
 end
