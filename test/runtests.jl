@@ -18,6 +18,7 @@ const TEST_SUITE = lowercase(get(ENV, "AZMANAGERS_TEST_SUITE", "all"))
 if TEST_SUITE ∈ ("unit", "all")
     @info "Running unit tests..."
     include("test_unit.jl")
+    include("test_infra_unit.jl")
 end
 
 if TEST_SUITE ∈ ("integration", "all")

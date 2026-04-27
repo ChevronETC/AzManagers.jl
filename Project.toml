@@ -1,12 +1,13 @@
 name = "AzManagers"
 uuid = "db05ebb0-6096-11e9-199b-87b703361841"
-authors = ["samtkaplan <sam.kaplan@chevron.com>"]
 version = "4.0.0"
+authors = ["samtkaplan <sam.kaplan@chevron.com>"]
 
 [deps]
 AzSessions = "f239b30d-ae6b-58be-a2d5-7e9f30e280a9"
 Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
+Coverage = "a2441757-f6aa-5fb2-8edb-039e3f45d037"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
@@ -32,6 +33,7 @@ MPIExt = "MPI"
 [compat]
 AzSessions = "2"
 CodecZlib = "0.7"
+Coverage = "1.8.1"
 HTTP = "1"
 JSON = "0.21, 1"
 JWTs = "0.3"

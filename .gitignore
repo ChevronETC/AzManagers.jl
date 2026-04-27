@@ -1,4 +1,5 @@
 *.swp
+*.cov
 Manifest.toml
 deps/build.log
 deps/usr
