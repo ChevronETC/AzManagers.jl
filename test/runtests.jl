@@ -142,7 +142,7 @@ end
 @testset "addprocs, spot" begin
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "2,0" : "2"
-    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads)
+    addprocs(AzManager(), templatename, 1; waitfor = true, group, session, julia_num_threads)
 
     @test remotecall_fetch(Threads.nthreads, workers()[1]) == 2
 
@@ -153,7 +153,7 @@ end
 
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "2,0" : "2"
-    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads, spot = true)
+    addprocs(AzManager(), templatename, 1; waitfor = true, group, session, julia_num_threads, spot = true)
 
     @test remotecall_fetch(Threads.nthreads, workers()[1]) == 2
 
@@ -166,7 +166,7 @@ end
 
     group = "test$(randstring('a':'z',4))"
     julia_num_threads = VERSION >= v"1.9" ? "3,2" : "3"
-    addprocs(templatename, 1; waitfor = true, group, session, julia_num_threads, spot=true)
+    addprocs(AzManager(), templatename, 1; waitfor = true, group, session, julia_num_threads, spot=true)
 
     @test remotecall_fetch(Threads.nthreads, workers()[1]) == 3
 
@@ -180,7 +180,7 @@ if VERSION >= v"1.9"
     @testset "spot eviction" begin
         group = "test$(randstring('a':'z',4))"
         julia_num_threads = "2,1"
-        addprocs(templatename, 2; waitfor = true, group, session, julia_num_threads, spot = true)
+        addprocs(AzManager(), templatename, 2; waitfor = true, group, session, julia_num_threads, spot = true)
 
         AzManagers.simulate_spot_eviction(workers()[1])
 
@@ -247,7 +247,7 @@ end
 
     group = "test$(randstring('a':'z',4))"
 
-    addprocs(templatename, 1; waitfor=true, group=group, session=session, customenv=true)
+    addprocs(AzManager(), templatename, 1; waitfor=true, group=group, session=session, customenv=true)
     @everywhere using Pkg
     pinfo = remotecall_fetch(Pkg.project, workers()[1])
     @test contains(pinfo.path, "myproject")
@@ -285,7 +285,7 @@ end
         _template["tags"] = Dict("foo"=>"bar")
     end
 
-    addprocs(template, 1; waitfor=true, group=group, session=session)
+    addprocs(AzManager(), template, 1; waitfor=true, group=group, session=session)
 
     _r = HTTP.request(
         "GET",
@@ -398,7 +398,7 @@ end
     templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))
     template = templates_scaleset[templatename]
     
-    addprocs(template, 2; waitfor=true, group=group, session=session)
+    addprocs(AzManager(), template, 2; waitfor=true, group=group, session=session)
 
     wrkers = Distributed.map_pid_wrkr
     for i in workers()
