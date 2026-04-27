@@ -708,6 +708,7 @@ include("templates.jl")
 
 spin(spincount, elapsed_time) = ['◐','◓','◑','◒','✓'][spincount]*@sprintf(" %.2f",elapsed_time)*" seconds"
 function spinner(n_target_workers)
+    quiet = get(ENV, "CI", "") != "" || !isa(stdout, Base.TTY)
     local ws,spincount,starttime,elapsed_time,tic,_nworkers
     try
         ws = repeat(" ", 5)
@@ -727,8 +728,10 @@ function spinner(n_target_workers)
                 _nworkers = nprocs() == 1 ? 0 : nworkers()
                 tic = time()
             end
-            write(stdout, spin(spincount, elapsed_time)*", $_nworkers/$n_target_workers up. $ws\r")
-            flush(stdout)
+            if !quiet
+                write(stdout, spin(spincount, elapsed_time)*", $_nworkers/$n_target_workers up. $ws\r")
+                flush(stdout)
+            end
             spincount = spincount == 4 ? 1 : spincount + 1
             yield()
             sleep(.25)
@@ -738,8 +741,12 @@ function spinner(n_target_workers)
         end
     end
     _nworkers = nprocs() == 1 ? 0 : nworkers()
-    write(stdout, spin(5, elapsed_time)*", $_nworkers/$n_target_workers are running. $ws\r")
-    write(stdout,"\n")
+    if !quiet
+        write(stdout, spin(5, elapsed_time)*", $_nworkers/$n_target_workers are running. $ws\r")
+        write(stdout,"\n")
+    else
+        @info "Cluster ready: $_nworkers/$n_target_workers workers up in $(round(elapsed_time, digits=1))s"
+    end
     nothing
 end
 
