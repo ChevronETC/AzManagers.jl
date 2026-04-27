@@ -804,7 +804,7 @@ used on the Julia workers.  This feature makes use of package extensions, meanin
 that `using MPI` is somewhere in your calling script.
 [5] This may result in a re-boot of the VMs
 """
-function Distributed.addprocs(_::AzManager, template::Dict, n::Int;
+function Distributed.addprocs(::AzManager, template::Dict, n::Int;
         subscriptionid = "",
         resourcegroup = "",
         sigimagename = "",
