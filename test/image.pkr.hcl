@@ -124,12 +124,12 @@ build {
 
     provisioner "shell" {
         inline = [
-            "echo \"**** installing Julia ****\"",
-            "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/${var.julia_version_major}.${var.julia_version_minor}/julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz",
-            "sudo mkdir -p /opt/julia",
-            "sudo tar --strip-components=1 -xzvf julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz -C /opt/julia",
-            "sudo rm -f julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz",
-            "sed -i '1 i export PATH=\"/opt/julia/bin:$${PATH}\"' ~/.bashrc",
+            "echo \"**** installing Julia via juliaup ****\"",
+            "curl -fsSL https://install.julialang.org | sh -s -- --yes",
+            "echo 'export PATH=\"$HOME/.juliaup/bin:$PATH\"' >> ~/.bashrc",
+            "export PATH=\"$HOME/.juliaup/bin:$PATH\"",
+            "juliaup add ${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}",
+            "juliaup default ${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}",
             "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"720\"' ~/.bashrc"
         ]
     }
@@ -137,6 +137,7 @@ build {
     provisioner "shell" {
         inline = [
             "echo \"**** installing julia packages ****\"",
+            "export PATH=\"$HOME/.juliaup/bin:$PATH\"",
             "julia -e 'using Pkg; Pkg.add([\"AzSessions\", \"Coverage\", \"Distributed\", \"HTTP\", \"JSON\", \"MPI\", \"MPIPreferences\", \"Random\", \"Test\"])'",
             "julia -e 'using MPIPreferences; MPIPreferences.use_jll_binary(\"MPICH_jll\")'",
             "julia -e 'using Pkg; Pkg.add(PackageSpec(name=\"AzManagers\", rev=\"${var.azmanagers_version}\"))'"
@@ -151,6 +152,7 @@ build {
     provisioner "shell" {
         inline = [
             "echo \"**** building AzManagers manifest and templates ****\"",
+            "export PATH=\"$HOME/.juliaup/bin:$PATH\"",
             "export TENANT_ID=\"${var.tenant_id}\"",
             "export SUBSCRIPTION_ID=\"${var.subscription_id}\"",
             "export RESOURCE_GROUP=\"${var.resource_group}\"",
