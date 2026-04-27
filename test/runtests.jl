@@ -1,4 +1,33 @@
 using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
+
+# ── Test dispatch ─────────────────────────────────────────────────────────────
+# AZMANAGERS_TEST_SUITE controls which tests to run:
+#   "unit"        — pure logic, no mocking, no infra (fast, <30s)
+#   "integration" — mock-based tests with local subprocesses (no Azure, ~30s)
+#   "infra"       — full Azure infrastructure tests (requires credentials)
+#   "all"         — run everything (default for CI on Azure VMs)
+#
+# Examples:
+#   AZMANAGERS_TEST_SUITE=unit       julia --project -e 'using Pkg; Pkg.test()'
+#   AZMANAGERS_TEST_SUITE=integration julia --project -e 'using Pkg; Pkg.test()'
+#   julia --project -e 'using Pkg; Pkg.test()'    # defaults to "all"
+# ──────────────────────────────────────────────────────────────────────────────
+
+const TEST_SUITE = lowercase(get(ENV, "AZMANAGERS_TEST_SUITE", "all"))
+
+if TEST_SUITE ∈ ("unit", "all")
+    @info "Running unit tests..."
+    include("test_unit.jl")
+end
+
+if TEST_SUITE ∈ ("integration", "all")
+    @info "Running integration tests (mock-based, no Azure)..."
+    include("test_integration.jl")
+end
+
+if TEST_SUITE ∈ ("infra", "all")
+    @info "Running infrastructure tests (requires Azure credentials)..."
+
 using MPI
 
 session = AzSession(;protocal=AzClientCredentials)
@@ -420,3 +449,5 @@ end
 
     @test ncores == 2
 end
+
+end # if TEST_SUITE ∈ ("infra", "all")
