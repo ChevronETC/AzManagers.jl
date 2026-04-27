@@ -31,7 +31,7 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     # Unit Test 1 - Create scale set and start Julia processes
     #
     if flexible
-        addprocs(templatename, ninstances;
+        addprocs(AzManager(), templatename, ninstances;
             waitfor = true,
             ppi,
             group,
@@ -39,7 +39,7 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
             spot = true,
             spot_base_regular_priority_count = 2)
     else
-        addprocs(templatename, ninstances;
+        addprocs(AzManager(), templatename, ninstances;
             waitfor = true,
             ppi,
             group,

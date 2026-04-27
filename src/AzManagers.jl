@@ -752,9 +752,10 @@ function nthreads_filter(nthreads)
 end
 
 """
-    addprocs(template, ninstances[; kwargs...])
+    addprocs(mgr::AzManager, template, ninstances[; kwargs...])
 
-Add Azure scale set instances where template is either a dictionary produced via the `AzManagers.build_sstemplate`
+Add Azure scale set instances where `mgr` is an `AzManager` instance (e.g. `AzManager()`),
+and template is either a dictionary produced via the `AzManagers.build_sstemplate`
 method or a string corresponding to a template stored in `~/.azmanagers/templates_scaleset.json.`
 
 # key word arguments:
@@ -803,7 +804,7 @@ used on the Julia workers.  This feature makes use of package extensions, meanin
 that `using MPI` is somewhere in your calling script.
 [5] This may result in a re-boot of the VMs
 """
-function Distributed.addprocs(template::Dict, n::Int;
+function Distributed.addprocs(_::AzManager, template::Dict, n::Int;
         subscriptionid = "",
         resourcegroup = "",
         sigimagename = "",
@@ -872,13 +873,13 @@ function Distributed.addprocs(template::Dict, n::Int;
     nothing
 end
 
-function Distributed.addprocs(template::AbstractString, n::Int; kwargs...)
+function Distributed.addprocs(mgr::AzManager, template::AbstractString, n::Int; kwargs...)
     isfile(templates_filename_scaleset()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
 
     templates_scaleset = JSON.parse(read(templates_filename_scaleset(), String); dicttype=Dict)
     haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
 
-    addprocs(templates_scaleset[template], n; kwargs...)
+    addprocs(mgr, templates_scaleset[template], n; kwargs...)
 end
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)

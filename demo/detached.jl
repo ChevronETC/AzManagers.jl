@@ -67,7 +67,7 @@ sessionbundle!(
 
 job4 = @detach vm(;session=sessionbundle(:management),persist=true) begin
     using Distributed, AzManagers, AzStorage, AzSessions
-    addprocs("cbox04", 4; session=sessionbundle(:management))
+    addprocs(AzManager(), "cbox04", 4; session=sessionbundle(:management))
 
     for pid in workers()
         hostname = remotecall_fetch(gethostname, pid)
