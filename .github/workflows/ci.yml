@@ -128,7 +128,7 @@ jobs:
           echo ""
 
           echo "Running the Infrastructure Tests and Code Coverage..."
-          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "AZMANAGERS_TEST_SUITE=infra julia -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true); using AzManagers; include(joinpath(pkgdir(AzManagers), \"test\", \"julia-codecov.jl\"))'"
+          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "export PATH=\$HOME/.juliaup/bin:\$PATH && AZMANAGERS_TEST_SUITE=infra julia -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true); using AzManagers; include(joinpath(pkgdir(AzManagers), \"test\", \"julia-codecov.jl\"))'"
           echo ""
 
           echo "scp-ing the Coverage Report..."
