@@ -234,10 +234,6 @@ function logging()
     nothing
 end
 
-if VERSION < v"1.7"
-    errormonitor = identity
-end
-
 function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
     Distributed.init_multi()
 

@@ -3,9 +3,7 @@ function logerror(e, loglevel=Logging.Info)
     showerror(io, e)
     write(io, "\n\terror type: $(typeof(e))\n")
 
-    my_catch_stack = VERSION < v"1.7" ? Base.catch_stack : current_exceptions
-
-    for (exc, bt) in my_catch_stack()
+    for (exc, bt) in current_exceptions()
         showerror(io, exc, bt)
         println(io)
     end
@@ -167,3 +165,5 @@ function scaleset_request_counter()
         return 1
     end
 end
+
+spin(spincount, elapsed_time) = ['◐','◓','◑','◒','✓'][spincount]*@sprintf(" %.2f",elapsed_time)*" seconds"
