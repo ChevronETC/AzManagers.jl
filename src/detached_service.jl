@@ -275,6 +275,7 @@ function detachedwait(request::HTTP.Request)
         @error "caught error waiting for process for job $id to finish"
         logerror(e, Logging.Debug)
 
+        io = IOBuffer()
         write(io, "\n\n")
 
         title = "Code listing ($(DETACHED_JOBS[id]["codefile"]))"

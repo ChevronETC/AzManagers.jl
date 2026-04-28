@@ -3,9 +3,7 @@ function logerror(e, loglevel=Logging.Info)
     showerror(io, e)
     write(io, "\n\terror type: $(typeof(e))\n")
 
-    my_catch_stack = VERSION < v"1.7" ? Base.catch_stack : current_exceptions
-
-    for (exc, bt) in my_catch_stack()
+    for (exc, bt) in current_exceptions()
         showerror(io, exc, bt)
         println(io)
     end
@@ -175,7 +173,7 @@ function software_sanity_check(manager, imagename, custom_environment)
     envpath = normpath(joinpath(projectinfo.path, ".."))
     _packages = TOML.parse(read(joinpath(envpath, "Manifest.toml"), String))
 
-    packages = VERSION < v"1.7" ? _packages : _packages["deps"]
+    packages = _packages["deps"]
 
     if custom_environment
         for (packagename, packageinfo) in packages
