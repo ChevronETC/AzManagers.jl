@@ -27,6 +27,7 @@ mutable struct AzManager <: ClusterManager
     lock::ReentrantLock
     scaleset_request_counter::Int
     ssh_user::String
+    workers_changed::Threads.Condition
 
     AzManager() = new()
 end
@@ -57,6 +58,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.task_process = @async process_pending_connections()
     _manager.lock = ReentrantLock()
     _manager.scaleset_request_counter = 0
+    _manager.workers_changed = Threads.Condition()
 
     @async scaleset_pruning()
     @async scaleset_cleaning()
