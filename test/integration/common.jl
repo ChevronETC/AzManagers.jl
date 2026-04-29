@@ -41,6 +41,13 @@ const RESOURCEGROUP  = get(ENV, "AZMANAGERS_TEST_RESOURCE_GROUP",  TEMPLATE["res
 # Default to plain "julia" so the worker uses PATH lookup on the remote VM.
 const EXENAME = get(ENV, "AZMANAGERS_TEST_EXENAME", "julia")
 
+# ── Worker timeout ────────────────────────────────────────────────────────────
+# Custom environments need extra time for Pkg.add + instantiate + precompile
+# before the detached service starts.  Default 60s is too short.
+if !haskey(ENV, "JULIA_WORKER_TIMEOUT")
+    ENV["JULIA_WORKER_TIMEOUT"] = "300"
+end
+
 @info "Integration test config" TEST_ENV TEMPLATENAME SUBSCRIPTIONID RESOURCEGROUP EXENAME
 
 """

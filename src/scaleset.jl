@@ -591,10 +591,12 @@ function software_sanity_check(manager, imagename, custom_environment)
     packages = _packages["deps"]
 
     if custom_environment
-        dev_packages = [name for (name, info) in packages if haskey(info[1], "path")]
+        dev_packages = _detect_dev_packages(read(joinpath(envpath, "Manifest.toml"), String), envpath)
         if !isempty(dev_packages)
-            @warn "Project has dev'd packages ($(join(dev_packages, ", "))). " *
-                  "Workers will install these from their git repositories using the current branch."
+            dev_names = join([name for (name, _, _) in dev_packages], ", ")
+            error("Project has Pkg.develop'd packages ($dev_names). " *
+                  "Workers cannot resolve local paths. Please Pkg.add these packages " *
+                  "and push all code changes before using customenv=true.")
         end
     end
 end
@@ -648,24 +650,13 @@ function sanitize_manifest(manifest_text)
     manifest = TOML.parse(manifest_text)
     if haskey(manifest, "deps")
         for (pkg, entries) in manifest["deps"]
-            filter!(entry -> !haskey(entry, "path"), entries)
+            for entry in entries
+                delete!(entry, "path")
+            end
         end
-        filter!(kv -> !isempty(kv.second), manifest["deps"])
     end
     io = IOBuffer()
     TOML.print(io, manifest)
-    String(take!(io))
-end
-
-function sanitize_project(project_text, dev_package_names)
-    project = TOML.parse(project_text)
-    if haskey(project, "deps")
-        for name in dev_package_names
-            delete!(project["deps"], name)
-        end
-    end
-    io = IOBuffer()
-    TOML.print(io, project)
     String(take!(io))
 end
 
@@ -673,12 +664,6 @@ function compress_environment(julia_environment_folder)
     project_text = read(joinpath(julia_environment_folder, "Project.toml"), String)
     manifest_text = read(joinpath(julia_environment_folder, "Manifest.toml"), String)
 
-    # Detect dev'd packages and get their git info before sanitizing
-    dev_pkgs = _detect_dev_packages(manifest_text, julia_environment_folder)
-    dev_pkg_names = [name for (name, _, _) in dev_pkgs]
-
-    # Remove dev'd packages from both Project and Manifest
-    project_text = sanitize_project(project_text, dev_pkg_names)
     manifest_text = sanitize_manifest(manifest_text)
 
     localpreferences_text = isfile(joinpath(julia_environment_folder, "LocalPreferences.toml")) ? read(joinpath(julia_environment_folder, "LocalPreferences.toml"), String) : ""
@@ -689,13 +674,7 @@ function compress_environment(julia_environment_folder)
         localpreferences_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(localpreferences_text)))
     end
 
-    # Build Pkg.add calls for dev'd packages (workers will clone from git)
-    dev_pkg_adds = ""
-    for (name, url, rev) in dev_pkgs
-        dev_pkg_adds *= """Pkg.add(url="$url", rev="$rev"); """
-    end
-
-    project_compressed, manifest_compressed, localpreferences_compressed, dev_pkg_adds
+    project_compressed, manifest_compressed, localpreferences_compressed
 end
 
 function decompress_environment(project_compressed, manifest_compressed, localpreferences_compressed, remote_julia_environment_name)

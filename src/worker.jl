@@ -454,13 +454,13 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
             =#
             remote_julia_environment_name = splitpath(julia_environment_folder)[end]
 
-            project_compressed, manifest_compressed, localpreferences_compressed, dev_pkg_adds = compress_environment(julia_environment_folder)
+            project_compressed, manifest_compressed, localpreferences_compressed = compress_environment(julia_environment_folder)
 
             cmd *= """
             
             sudo su - $user << 'EOF'
             $exename -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$localpreferences_compressed", "$remote_julia_environment_name")'
-            $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.Registry.update(); Pkg.activate(path); $(dev_pkg_adds)(retry(Pkg.instantiate))(); Pkg.precompile()'
+            $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.Registry.update(); Pkg.activate(path); (retry(Pkg.instantiate))(); Pkg.precompile()'
             EOF
             """
         catch e
