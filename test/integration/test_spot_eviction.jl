@@ -6,17 +6,23 @@ include(joinpath(@__DIR__, "common.jl"))
     try
         addprocs(AzManager(), TEMPLATENAME, 2; waitfor=true, group=group, session=SESSION, julia_num_threads="2,1", spot=true, exename=EXENAME, overprovision=false)
 
-        AzManagers.simulate_spot_eviction(workers()[1])
+        evicted_worker = workers()[1]
+        AzManagers.simulate_spot_eviction(evicted_worker)
 
         tic = time()
+        eviction_detected = false
         while time() - tic < 300
             if nprocs() < 3
                 @info "Cluster responded to spot eviction in $(round(time()-tic, digits=1))s"
+                eviction_detected = true
                 break
             end
-            sleep(10)
+            sleep(5)
         end
-        @test nprocs() < 3
+        if !eviction_detected
+            @warn "Eviction not detected after 300s. nprocs=$(nprocs()), workers=$(workers())"
+        end
+        @test eviction_detected
     finally
         cleanup_workers()
         wait_for_scaleset_deletion(group)

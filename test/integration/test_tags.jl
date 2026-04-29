@@ -5,7 +5,7 @@ include(joinpath(@__DIR__, "common.jl"))
     @info "Tag propagation: 1 VM with custom tag foo=bar → expect tag on scale set resource" group
     try
         templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String))
-        template = deepcopy(templates_scaleset[TEMPLATENAME])
+        template = Dict{Any,Any}(deepcopy(templates_scaleset[TEMPLATENAME]))
 
         _template = template["value"]
         if haskey(_template, "tags")

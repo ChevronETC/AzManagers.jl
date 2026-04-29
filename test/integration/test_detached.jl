@@ -80,12 +80,17 @@ include(joinpath(@__DIR__, "common.jl"))
 
     @testset "@detach with persist=false" begin
         @info "@detach persist=false: provision VM, run job → expect auto-cleanup"
-        job3 = @detach vm(;vm_template=TEMPLATENAME, session=SESSION, persist=false, exename=EXENAME) begin
-            write(stdout, "auto-destruct")
+        job3 = nothing
+        try
+            job3 = @detach vm(;vm_template=TEMPLATENAME, session=SESSION, persist=false, exename=EXENAME) begin
+                write(stdout, "auto-destruct")
+            end
+            wait(job3)
+            @test status(job3) == "done"
+            @test read(job3) == "auto-destruct"
+        finally
+            # Safety cleanup in case persist=false auto-delete doesn't work
+            job3 !== nothing && cleanup_vm(job3.vm)
         end
-        wait(job3)
-        @test status(job3) == "done"
-        @test read(job3) == "auto-destruct"
-        # VM should self-delete — no cleanup needed
     end
 end

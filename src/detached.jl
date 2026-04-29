@@ -487,6 +487,7 @@ function detached_run(code, ip::String="", port=detached_port();
         sigimagename = "",
         sigimageversion = "",
         imagename = "",
+        exename = "$(Sys.BINDIR)/julia",
         nretry = 10,
         verbose = 0,
         detachedservice = true)
@@ -503,6 +504,7 @@ function detached_run(code, ip::String="", port=detached_port();
             sigimagename = sigimagename,
             sigimageversion = sigimageversion,
             imagename = imagename,
+            exename = exename,
             nretry = nretry,
             verbose = verbose)
     else
