@@ -77,7 +77,7 @@ jobs:
           set -euo pipefail
           az group create -g "$RESOURCE_GROUP" -l southcentralus \
             --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=ci" \
-                   "OwnerEmail=sam.kaplan@chevron.com" "ServiceID=YWED10528906" \
+                   "OwnerEmail=sam.kaplan@chevron.com" "ServiceID=5038614" \
                    "GitHubRun=${{ github.run_id }}"
           az group wait -g "$RESOURCE_GROUP" --created
 
