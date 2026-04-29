@@ -79,6 +79,7 @@ source "azure-arm" "cofii" {
         image_name = var.image_name
         image_version = var.image_version
         replication_regions = ["South Central US"]
+        storage_account_type = "Premium_LRS"
     }
     shared_image_gallery_timeout = "120m"
     build_resource_group_name = var.resource_group
