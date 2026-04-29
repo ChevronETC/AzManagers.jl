@@ -14,8 +14,10 @@ function scaleset_pruning()
             =#
             prune_scalesets()
         catch e
-            @error "scaleset pruning error"
-            logerror(e, Logging.Debug)
+            if e isa InterruptException
+                break
+            end
+            @debug "scaleset pruning error" exception=(e, catch_backtrace())
         finally
             sleep(interval)
         end
@@ -31,9 +33,12 @@ function scaleset_cleaning()
             delete_pending_down_vms()
             delete_empty_scalesets()
             scaleset_sync()
+            prune_cluster()
         catch e
-            @error "scaleset cleaning error"
-            logerror(e, Logging.Debug)
+            if e isa InterruptException
+                break
+            end
+            @debug "scaleset cleaning error" exception=(e, catch_backtrace())
         end
     end
 end

@@ -154,6 +154,8 @@ build {
             "export TENANT_ID=\"${var.tenant_id}\"",
             "export SUBSCRIPTION_ID=\"${var.subscription_id}\"",
             "export RESOURCE_GROUP=\"${var.resource_group}\"",
+            "export RESOURCE_GROUP_VNET=\"${var.resource_group}\"",
+            "export RESOURCE_GROUP_IMAGE=\"${var.resource_group}\"",
             "export CLIENT_ID=\"${var.client_id}\"",
             "export CLIENT_SECRET=\"${var.client_secret}\"",
             "export IMAGE_NAME=\"${var.image_name}\"",

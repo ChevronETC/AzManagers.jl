@@ -88,15 +88,23 @@ function wait_for_scaleset_deletion(group; timeout=120)
 end
 
 """
-    cleanup_workers()
+    cleanup_workers(; timeout=60)
 
-Remove all workers, suppressing errors.
+Remove all workers, suppressing errors.  If `rmprocs` doesn't finish
+within `timeout` seconds, interrupt it and move on.
 """
-function cleanup_workers()
+function cleanup_workers(; timeout=60)
     try
         wrkrs = workers()
         if length(wrkrs) > 0 && !(length(wrkrs) == 1 && wrkrs[1] == 1)
-            rmprocs(wrkrs)
+            t = @async rmprocs(wrkrs)
+            tic = time()
+            while !istaskdone(t) && (time() - tic < timeout)
+                sleep(1)
+            end
+            if !istaskdone(t)
+                @warn "cleanup_workers: rmprocs timed out after $(timeout)s, moving on"
+            end
         end
     catch e
         @warn "cleanup_workers failed" exception=e

@@ -151,8 +151,12 @@ function detachedrun(request::HTTP.Request)
         catch
         end
         if !r["persist"]
-            vm = AzManagers.DETACHED_VM[]
-            rmproc(vm; session=sessionbundle(:management))
+            try
+                vm = AzManagers.DETACHED_VM[]
+                rmproc(vm; session=AzSession(;protocal=AzClientCredentials))
+            catch e
+                @error "persist=false auto-delete failed" exception=(e, catch_backtrace())
+            end
         end
     end
     HTTP.Response(200, ["Content-Type"=>"application/json"], JSON.json(Dict("id"=>id, "pid"=>pid)); request)
