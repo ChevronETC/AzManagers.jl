@@ -6,6 +6,7 @@ using Pkg
 Pkg.activate(joinpath(@__DIR__, ".."))
 
 ENV["JULIA_DEBUG"] = "AzManagers"
+ENV["JULIA_WORKER_TIMEOUT"] = "300"
 
 using AzManagers, AzSessions, Distributed, TOML, HTTP, JSON, Random, Test
 
@@ -192,13 +193,10 @@ try
         session=SESSION,
         customenv=true,
         exename=EXENAME,
-        detachedservice=false  # Don't wait for detached service — we'll do our own wait
+        detachedservice=true
     )
     
-    @info "VM created successfully" testvm
-    
-    # Now do our own wait with debug diagnostics
-    debug_detached_service_wait(testvm, true; timeout=180.0)
+    @info "VM created successfully, detached service is up" testvm
     
     @info "Service is up! Running detached job..."
     testjob = @detachat testvm begin

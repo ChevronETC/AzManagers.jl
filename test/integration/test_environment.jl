@@ -15,19 +15,24 @@ include(joinpath(@__DIR__, "common.jl"))
         Pkg.add("JSON")
         Pkg.add("HTTP")
 
-        # Determine the AzManagers revision for Pkg.add
-        parent_manifest = joinpath(dirname(Pkg.project().path), "..", "Manifest.toml")
+        # Determine the AzManagers revision for Pkg.add.
+        # CI: read repo-rev from parent Manifest (set by pipeline).
+        # Local: detect current branch from git.
+        azmanagers_repo = "https://github.com/ChevronETC/AzManagers.jl.git"
         azmanagers_rev = ""
+        parent_manifest = joinpath(dirname(Pkg.project().path), "..", "Manifest.toml")
         if isfile(parent_manifest)
             pkgs = TOML.parse(read(parent_manifest, String))
             azmanagers_pkg = get(get(pkgs, "deps", Dict()), "AzManagers", [Dict()])[1]
             azmanagers_rev = get(azmanagers_pkg, "repo-rev", "")
         end
-        if azmanagers_rev != ""
-            Pkg.add(PackageSpec(name="AzManagers", rev=azmanagers_rev))
-        else
-            Pkg.develop(PackageSpec(path=joinpath(@__DIR__, "..", "..")))
+        if azmanagers_rev == ""
+            # Local dev box — detect branch from the AzManagers source tree
+            azmanagers_src = joinpath(@__DIR__, "..", "..")
+            azmanagers_rev = readchomp(Cmd(["git", "-C", azmanagers_src, "rev-parse", "--abbrev-ref", "HEAD"]))
+            @info "Local dev: using AzManagers from git" repo=azmanagers_repo rev=azmanagers_rev
         end
+        Pkg.add(url=azmanagers_repo, rev=azmanagers_rev)
 
         write("LocalPreferences.toml", "[FooPackage]\nfoo = \"bar\"\n")
 

@@ -200,11 +200,10 @@ end
         write(joinpath(srcdir, "LocalPreferences.toml"), localprefs_text)
 
         # Compress
-        pc, mc, lc, dev_adds = AzManagers.compress_environment(srcdir)
+        pc, mc, lc = AzManagers.compress_environment(srcdir)
         @test !isempty(pc)
         @test !isempty(mc)
         @test !isempty(lc)
-        @test dev_adds == ""  # no dev'd packages
 
         # Decompress to a temp location
         mktempdir() do dstdir
@@ -231,15 +230,14 @@ end
         write(joinpath(srcdir, "Project.toml"), "name = \"Test\"\n")
         write(joinpath(srcdir, "Manifest.toml"), "# empty\n")
 
-        pc, mc, lc, dev_adds = AzManagers.compress_environment(srcdir)
+        pc, mc, lc = AzManagers.compress_environment(srcdir)
         @test !isempty(pc)
         @test !isempty(mc)
-        @test dev_adds == ""
         # lc should be compressed empty string
     end
 end
 
-@testset "sanitize_manifest removes dev'd packages" begin
+@testset "sanitize_manifest strips path keys" begin
     manifest = """
     manifest_format = "2.0"
     [deps]
@@ -254,23 +252,12 @@ end
     """
     result = AzManagers.sanitize_manifest(manifest)
     parsed = TOML.parse(result)
-    # Foo (dev'd) should be removed entirely
-    @test !haskey(parsed["deps"], "Foo")
-    # Bar (registry) should remain
+    # Foo should still exist but without path key
+    @test haskey(parsed["deps"], "Foo")
+    @test !haskey(parsed["deps"]["Foo"][1], "path")
+    # Bar should remain unchanged
     @test haskey(parsed["deps"], "Bar")
     @test !haskey(parsed["deps"]["Bar"][1], "path")
-end
-
-@testset "sanitize_project removes dev'd packages" begin
-    project = """
-    [deps]
-    Foo = "abc123"
-    Bar = "def456"
-    """
-    result = AzManagers.sanitize_project(project, ["Foo"])
-    parsed = TOML.parse(result)
-    @test !haskey(parsed["deps"], "Foo")
-    @test haskey(parsed["deps"], "Bar")
 end
 
 @testset "add_instance_to helpers" begin
