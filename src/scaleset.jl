@@ -80,9 +80,8 @@ function delete_pending_down_vms()
             scalesets(manager)[scaleset] = new_capacity
             delete!(pending_down(manager), scaleset)
         catch e
-            if status(e) == 404
-                @debug "scaleset $(scaleset.scalesetname) not found when attempting to delete vms, assuming it was already deleted."
-                # the resource is already deleted, nothing else to do except empty the pending down list for this scaleset
+            if status(e) in (404, 409)
+                @debug "scaleset $(scaleset.scalesetname) not found or already being deleted when attempting to delete vms, skipping."
                 if haskey(pending_down(manager), scaleset)
                     delete!(pending_down(manager), scaleset)
                 end
@@ -340,7 +339,21 @@ end
 #
 # Azure scale-set methods
 #
-function scaleset_image(manager::AzManager, sigimagename, sigimageversion, imagename)
+function _parse_image_ref(imageref_id::AbstractString)
+    parts = split(imageref_id, "/")
+    k_galleries = findfirst(x -> x == "galleries", parts)
+    k_images = findfirst(x -> x == "images", parts)
+    k_versions = findfirst(x -> x == "versions", parts)
+
+    gallery = k_galleries !== nothing ? parts[k_galleries+1] : ""
+    sigimagename = (k_galleries !== nothing && k_images !== nothing) ? parts[k_images+1] : ""
+    imagename = (k_galleries === nothing && k_images !== nothing) ? parts[k_images+1] : ""
+    sigimageversion = k_versions !== nothing ? parts[k_versions+1] : ""
+
+    sigimagename, sigimageversion, imagename
+end
+
+function scaleset_image(manager::AzManager, sigimagename, sigimageversion, imagename, template=nothing)
     # early exit
     if imagename != "" || (sigimagename != "" && sigimageversion != "")
         return sigimagename, sigimageversion, imagename
@@ -361,10 +374,21 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
 
     local _image
     if !isa(r, HTTP.Messages.Response)
+        # IMDS unavailable — fall back to template
+        if template !== nothing
+            return _scaleset_image_from_template(manager, sigimagename, sigimageversion, imagename, template)
+        end
         return sigimagename, sigimageversion, imagename
     else
         r = fetch(t)
         image = JSON.parse(String(r.body))["id"]
+        if image == ""
+            # Marketplace image (no gallery id) — fall back to template
+            if template !== nothing
+                return _scaleset_image_from_template(manager, sigimagename, sigimageversion, imagename, template)
+            end
+            return sigimagename, sigimageversion, imagename
+        end
         _image = split(image,"/")
     end
 
@@ -412,6 +436,54 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
 
     @debug "after inspecting the VM metaddata, imagename=$imagename, sigimagename=$sigimagename, sigimageversion=$sigimageversion"
 
+    sigimagename, sigimageversion, imagename
+end
+
+function _scaleset_image_from_template(manager::AzManager, sigimagename, sigimageversion, imagename, template)
+    # Extract image reference from the template
+    local imageref_id
+    if haskey(template, "properties") && haskey(template["properties"], "virtualMachineProfile")
+        imageref_id = get(template["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"], "id", "")
+    elseif haskey(template, "properties") && haskey(template["properties"], "storageProfile")
+        imageref_id = get(template["properties"]["storageProfile"]["imageReference"], "id", "")
+    else
+        return sigimagename, sigimageversion, imagename
+    end
+
+    imageref_id == "" && return sigimagename, sigimageversion, imagename
+
+    t_sigimagename, t_sigimageversion, t_imagename = _parse_image_ref(imageref_id)
+
+    sigimagename == "" && (sigimagename = t_sigimagename)
+    imagename == "" && (imagename = t_imagename)
+
+    # If no version in template, query for the latest
+    if sigimagename != "" && sigimageversion == "" && t_sigimageversion == ""
+        parts = split(imageref_id, "/")
+        k_subscriptions = findfirst(x -> x == "subscriptions", parts)
+        k_resourcegroups = findfirst(x -> x == "resourceGroups", parts)
+        k_galleries = findfirst(x -> x == "galleries", parts)
+        if k_subscriptions !== nothing && k_resourcegroups !== nothing && k_galleries !== nothing
+            subscription = parts[k_subscriptions+1]
+            resourcegroup = parts[k_resourcegroups+1]
+            gallery = parts[k_galleries+1]
+            _r = @retry manager.nretry azrequest(
+                "GET",
+                manager.verbose,
+                "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions?api-version=2022-03-03",
+                ["Authorization"=>"Bearer $(token(manager.session))"])
+            r = JSON.parse(String(_r.body))
+            _versions, _r = getnextlinks!(manager, _r, get(r, "value", String[]), get(r, "nextLink", ""), manager.nretry, manager.verbose)
+            versions = VersionNumber.(get.(_versions, "name", ""))
+            if length(versions) > 0
+                sigimageversion = string(maximum(versions))
+            end
+        end
+    elseif t_sigimageversion != ""
+        sigimageversion = t_sigimageversion
+    end
+
+    @debug "from template: imagename=$imagename, sigimagename=$sigimagename, sigimageversion=$sigimageversion"
     sigimagename, sigimageversion, imagename
 end
 
@@ -519,17 +591,96 @@ function software_sanity_check(manager, imagename, custom_environment)
     packages = _packages["deps"]
 
     if custom_environment
-        for (packagename, packageinfo) in packages
-            if haskey(packageinfo[1], "path")
-                error("Project/environment has dev'd packages that will not be accessible from workers.")
+        dev_packages = [name for (name, info) in packages if haskey(info[1], "path")]
+        if !isempty(dev_packages)
+            @warn "Project has dev'd packages ($(join(dev_packages, ", "))). " *
+                  "Workers will install these from their git repositories using the current branch."
+        end
+    end
+end
+
+"""
+    _detect_dev_packages(manifest_text, base_path) -> Vector{Tuple{String,String,String}}
+
+Detect Pkg.develop'd packages in a Manifest and return their git info as
+`(name, repo_url, repo_rev)` tuples. Packages without a discoverable git repo
+are logged as warnings and omitted.
+"""
+function _detect_dev_packages(manifest_text, base_path)
+    manifest = TOML.parse(manifest_text)
+    dev_pkgs = Tuple{String,String,String}[]
+
+    if !haskey(manifest, "deps")
+        return dev_pkgs
+    end
+
+    for (pkg_name, entries) in manifest["deps"]
+        for entry in entries
+            if haskey(entry, "path")
+                pkg_path = entry["path"]
+                pkg_path = isabspath(pkg_path) ? normpath(pkg_path) : normpath(joinpath(base_path, pkg_path))
+
+                try
+                    repo_url = readchomp(Cmd(["git", "-C", pkg_path, "remote", "get-url", "origin"]))
+                    repo_rev = readchomp(Cmd(["git", "-C", pkg_path, "rev-parse", "--abbrev-ref", "HEAD"]))
+                    if repo_rev == "HEAD"  # detached HEAD → use commit SHA
+                        repo_rev = readchomp(Cmd(["git", "-C", pkg_path, "rev-parse", "HEAD"]))
+                    end
+                    # Convert SSH URLs to HTTPS so workers can authenticate via .git-credentials
+                    m = match(r"^git@([^:]+):(.+)$", repo_url)
+                    if m !== nothing
+                        repo_url = "https://$(m.captures[1])/$(m.captures[2])"
+                    end
+                    push!(dev_pkgs, (pkg_name, repo_url, repo_rev))
+                    @debug "Dev'd package '$pkg_name' at $pkg_path → $repo_url#$repo_rev"
+                catch e
+                    @warn "Cannot determine git info for dev'd package '$pkg_name' at $pkg_path; " *
+                          "it will be removed from the worker environment" exception=e
+                end
             end
         end
     end
+
+    dev_pkgs
+end
+
+function sanitize_manifest(manifest_text)
+    manifest = TOML.parse(manifest_text)
+    if haskey(manifest, "deps")
+        for (pkg, entries) in manifest["deps"]
+            filter!(entry -> !haskey(entry, "path"), entries)
+        end
+        filter!(kv -> !isempty(kv.second), manifest["deps"])
+    end
+    io = IOBuffer()
+    TOML.print(io, manifest)
+    String(take!(io))
+end
+
+function sanitize_project(project_text, dev_package_names)
+    project = TOML.parse(project_text)
+    if haskey(project, "deps")
+        for name in dev_package_names
+            delete!(project["deps"], name)
+        end
+    end
+    io = IOBuffer()
+    TOML.print(io, project)
+    String(take!(io))
 end
 
 function compress_environment(julia_environment_folder)
     project_text = read(joinpath(julia_environment_folder, "Project.toml"), String)
     manifest_text = read(joinpath(julia_environment_folder, "Manifest.toml"), String)
+
+    # Detect dev'd packages and get their git info before sanitizing
+    dev_pkgs = _detect_dev_packages(manifest_text, julia_environment_folder)
+    dev_pkg_names = [name for (name, _, _) in dev_pkgs]
+
+    # Remove dev'd packages from both Project and Manifest
+    project_text = sanitize_project(project_text, dev_pkg_names)
+    manifest_text = sanitize_manifest(manifest_text)
+
     localpreferences_text = isfile(joinpath(julia_environment_folder, "LocalPreferences.toml")) ? read(joinpath(julia_environment_folder, "LocalPreferences.toml"), String) : ""
     local project_compressed,manifest_compressed,localpreferences_compressed
     with_logger(ConsoleLogger(stdout, Logging.Info)) do
@@ -538,7 +689,13 @@ function compress_environment(julia_environment_folder)
         localpreferences_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(localpreferences_text)))
     end
 
-    project_compressed, manifest_compressed, localpreferences_compressed
+    # Build Pkg.add calls for dev'd packages (workers will clone from git)
+    dev_pkg_adds = ""
+    for (name, url, rev) in dev_pkgs
+        dev_pkg_adds *= """Pkg.add(url="$url", rev="$rev"); """
+    end
+
+    project_compressed, manifest_compressed, localpreferences_compressed, dev_pkg_adds
 end
 
 function decompress_environment(project_compressed, manifest_compressed, localpreferences_compressed, remote_julia_environment_name)

@@ -75,17 +75,29 @@ function process_pending_connections()
         end
         sockets = TCPSocket[first_socket]
 
-        # Drain additional sockets until deadline or batch full
-        drain_with_deadline!(sockets, manager.pending_up, max_sockets, flush_delay)
+        try
+            # Drain additional sockets until deadline or batch full
+            drain_with_deadline!(sockets, manager.pending_up, max_sockets, flush_delay)
 
-        @debug "flushing batch" length(sockets)
-        pids = addprocs_with_timeout(manager; sockets)
+            @debug "flushing batch" length(sockets)
+            pids = addprocs_with_timeout(manager; sockets)
+            @debug "batch done" pids
 
-        if isdefined(manager, :workers_changed)
-            notify(manager.workers_changed)
+            if isdefined(manager, :workers_changed)
+                lock(manager.workers_changed)
+                try
+                    notify(manager.workers_changed)
+                finally
+                    unlock(manager.workers_changed)
+                end
+            end
+
+            start_preempt_monitors(manager, pids)
+            @debug "loop iteration complete, waiting for next socket"
+        catch e
+            @error "AzManagers, error processing connection batch"
+            logerror(e, Logging.Debug)
         end
-
-        start_preempt_monitors(manager, pids)
     end
 end
 
@@ -138,6 +150,8 @@ end
 
 function handle_preempt_exception(manager, pid, wrkr, e)
     if isa(e, RemoteException) && isa(e.captured.ex, TaskFailedException) && isa(e.captured.ex.task.result.ex, SpotPreemptException)
+        # Graceful preemption: IMDS scheduled event was detected before the VM was killed.
+        # Honor the NotBefore window before deregistering.
         ex = e.captured.ex.task.result.ex
         notbefore = DateTime(ex.notbefore, dateformat"e, dd u yyyy HH:MM:SS \G\M\T")
         @info "caught preempt exception for $(ex.clusterid), removing not before $notbefore UTC"
@@ -153,19 +167,25 @@ function handle_preempt_exception(manager, pid, wrkr, e)
         catch e
             @info "error adding instance to preempted list"
         end
-
-        try
-            lock(Distributed.worker_lock)
-            if haskey(Distributed.map_pid_wrkr, pid)
-                # We can't use rmprocs here since the worker process might already be gone due to preemption.  The
-                # worker process would usually do the following two lines (see the Distributed.message_handler_loop function)
-                Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
-                Distributed.deregister_worker(pid)
-            end
-        catch
-        finally
-            unlock(Distributed.worker_lock)
+    else
+        # Worker connection dropped — could be an ungraceful eviction, crash, or
+        # normal cleanup (rmprocs killed the process while preempt monitor was running).
+        # Only warn if the worker is still registered (i.e. not already cleaned up by rmprocs).
+        if haskey(Distributed.map_pid_wrkr, pid)
+            @warn "worker $pid lost unexpectedly (not a graceful preemption), deregistering" exception=(e, catch_backtrace())
         end
+    end
+
+    # Always deregister the worker — whether graceful preemption or unexpected death.
+    try
+        lock(Distributed.worker_lock)
+        if haskey(Distributed.map_pid_wrkr, pid)
+            Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
+            Distributed.deregister_worker(pid)
+        end
+    catch
+    finally
+        unlock(Distributed.worker_lock)
     end
 end
 
@@ -352,7 +372,7 @@ function Distributed.addprocs(::AzManager, template::Dict, n::Int;
     user == "" && (user = _manifest["ssh_user"])
 
     manager = azmanager!(session, user, nretry, verbose, save_cloud_init_failures, show_quota)
-    sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
+    sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename, template["value"])
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
 
