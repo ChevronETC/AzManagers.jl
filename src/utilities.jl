@@ -171,12 +171,18 @@ spin(spincount, elapsed_time) = ['◐','◓','◑','◒','✓'][spincount]*@spri
 function software_sanity_check(manager, imagename, custom_environment)
     projectinfo = Pkg.project()
     envpath = normpath(joinpath(projectinfo.path, ".."))
-    _packages = TOML.parse(read(joinpath(envpath, "Manifest.toml"), String))
+    manifest_path = joinpath(envpath, "Manifest.toml")
 
+    if !isfile(manifest_path)
+        @debug "No Manifest.toml found at $manifest_path — skipping software sanity check"
+        return
+    end
+
+    _packages = TOML.parse(read(manifest_path, String))
     packages = _packages["deps"]
 
     if custom_environment
-        dev_packages = _detect_dev_packages(read(joinpath(envpath, "Manifest.toml"), String), envpath)
+        dev_packages = _detect_dev_packages(read(manifest_path, String), envpath)
         if !isempty(dev_packages)
             dev_names = join([name for (name, _, _) in dev_packages], ", ")
             error("Project has Pkg.develop'd packages ($dev_names). " *

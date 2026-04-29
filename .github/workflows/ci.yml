@@ -141,6 +141,7 @@ jobs:
           ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$IP \
             "export AZMANAGERS_TEST_SUITE=integration && \
              export AZMANAGERS_TEST_ENV=ci && \
+             export AZMANAGERS_VERSION=${{ github.sha }} && \
              export JULIA_WORKER_TIMEOUT=300 && \
              export JULIA_NUM_THREADS=4 && \
              julia -t4 -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true)'"

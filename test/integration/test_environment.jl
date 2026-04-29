@@ -27,10 +27,16 @@ include(joinpath(@__DIR__, "common.jl"))
             azmanagers_rev = get(azmanagers_pkg, "repo-rev", "")
         end
         if azmanagers_rev == ""
-            # Local dev box — detect branch from the AzManagers source tree
+            # Try to detect branch from git (works on local dev, not in CI installs)
             azmanagers_src = joinpath(@__DIR__, "..", "..")
-            azmanagers_rev = readchomp(Cmd(["git", "-C", azmanagers_src, "rev-parse", "--abbrev-ref", "HEAD"]))
-            @info "Local dev: using AzManagers from git" repo=azmanagers_repo rev=azmanagers_rev
+            try
+                azmanagers_rev = readchomp(Cmd(["git", "-C", azmanagers_src, "rev-parse", "--abbrev-ref", "HEAD"]))
+                @info "Local dev: using AzManagers from git" repo=azmanagers_repo rev=azmanagers_rev
+            catch
+                # Not a git repo (CI install) — use the commit SHA from the package source
+                azmanagers_rev = get(ENV, "AZMANAGERS_VERSION", "master")
+                @info "CI: using AzManagers revision" repo=azmanagers_repo rev=azmanagers_rev
+            end
         end
         Pkg.add(url=azmanagers_repo, rev=azmanagers_rev)
 
