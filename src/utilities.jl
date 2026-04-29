@@ -176,17 +176,96 @@ function software_sanity_check(manager, imagename, custom_environment)
     packages = _packages["deps"]
 
     if custom_environment
-        for (packagename, packageinfo) in packages
-            if haskey(packageinfo[1], "path")
-                error("Project/environment has dev'd packages that will not be accessible from workers.")
+        dev_packages = [name for (name, info) in packages if haskey(info[1], "path")]
+        if !isempty(dev_packages)
+            @warn "Project has dev'd packages ($(join(dev_packages, ", "))). " *
+                  "Workers will install these from their git repositories using the current branch."
+        end
+    end
+end
+
+"""
+    _detect_dev_packages(manifest_text, base_path) -> Vector{Tuple{String,String,String}}
+
+Detect Pkg.develop'd packages in a Manifest and return their git info as
+`(name, repo_url, repo_rev)` tuples. Packages without a discoverable git repo
+are logged as warnings and omitted.
+"""
+function _detect_dev_packages(manifest_text, base_path)
+    manifest = TOML.parse(manifest_text)
+    dev_pkgs = Tuple{String,String,String}[]
+
+    if !haskey(manifest, "deps")
+        return dev_pkgs
+    end
+
+    for (pkg_name, entries) in manifest["deps"]
+        for entry in entries
+            if haskey(entry, "path")
+                pkg_path = entry["path"]
+                pkg_path = isabspath(pkg_path) ? normpath(pkg_path) : normpath(joinpath(base_path, pkg_path))
+
+                try
+                    repo_url = readchomp(Cmd(["git", "-C", pkg_path, "remote", "get-url", "origin"]))
+                    repo_rev = readchomp(Cmd(["git", "-C", pkg_path, "rev-parse", "--abbrev-ref", "HEAD"]))
+                    if repo_rev == "HEAD"  # detached HEAD → use commit SHA
+                        repo_rev = readchomp(Cmd(["git", "-C", pkg_path, "rev-parse", "HEAD"]))
+                    end
+                    # Convert SSH URLs to HTTPS so workers can authenticate via .git-credentials
+                    m = match(r"^git@([^:]+):(.+)$", repo_url)
+                    if m !== nothing
+                        repo_url = "https://$(m.captures[1])/$(m.captures[2])"
+                    end
+                    push!(dev_pkgs, (pkg_name, repo_url, repo_rev))
+                    @debug "Dev'd package '$pkg_name' at $pkg_path → $repo_url#$repo_rev"
+                catch e
+                    @warn "Cannot determine git info for dev'd package '$pkg_name' at $pkg_path; " *
+                          "it will be removed from the worker environment" exception=e
+                end
             end
         end
     end
+
+    dev_pkgs
+end
+
+function sanitize_manifest(manifest_text)
+    manifest = TOML.parse(manifest_text)
+    if haskey(manifest, "deps")
+        for (pkg, entries) in manifest["deps"]
+            filter!(entry -> !haskey(entry, "path"), entries)
+        end
+        filter!(kv -> !isempty(kv.second), manifest["deps"])
+    end
+    io = IOBuffer()
+    TOML.print(io, manifest)
+    String(take!(io))
+end
+
+function sanitize_project(project_text, dev_package_names)
+    project = TOML.parse(project_text)
+    if haskey(project, "deps")
+        for name in dev_package_names
+            delete!(project["deps"], name)
+        end
+    end
+    io = IOBuffer()
+    TOML.print(io, project)
+    String(take!(io))
 end
 
 function compress_environment(julia_environment_folder)
     project_text = read(joinpath(julia_environment_folder, "Project.toml"), String)
     manifest_text = read(joinpath(julia_environment_folder, "Manifest.toml"), String)
+
+    # Detect dev'd packages and get their git info before sanitizing
+    dev_pkgs = _detect_dev_packages(manifest_text, julia_environment_folder)
+    dev_pkg_names = [name for (name, _, _) in dev_pkgs]
+
+    # Remove dev'd packages from both Project and Manifest
+    project_text = sanitize_project(project_text, dev_pkg_names)
+    manifest_text = sanitize_manifest(manifest_text)
+
     localpreferences_text = isfile(joinpath(julia_environment_folder, "LocalPreferences.toml")) ? read(joinpath(julia_environment_folder, "LocalPreferences.toml"), String) : ""
     local project_compressed,manifest_compressed,localpreferences_compressed
     with_logger(ConsoleLogger(stdout, Logging.Info)) do
@@ -195,7 +274,13 @@ function compress_environment(julia_environment_folder)
         localpreferences_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(localpreferences_text)))
     end
 
-    project_compressed, manifest_compressed, localpreferences_compressed
+    # Build Pkg.add calls for dev'd packages (workers will clone from git)
+    dev_pkg_adds = ""
+    for (name, url, rev) in dev_pkgs
+        dev_pkg_adds *= """Pkg.add(url="$url", rev="$rev"); """
+    end
+
+    project_compressed, manifest_compressed, localpreferences_compressed, dev_pkg_adds
 end
 
 function decompress_environment(project_compressed, manifest_compressed, localpreferences_compressed, remote_julia_environment_name)

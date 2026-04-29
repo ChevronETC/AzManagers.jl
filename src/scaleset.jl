@@ -80,9 +80,8 @@ function delete_pending_down_vms()
             scalesets(manager)[scaleset] = new_capacity
             delete!(pending_down(manager), scaleset)
         catch e
-            if status(e) == 404
-                @debug "scaleset $(scaleset.scalesetname) not found when attempting to delete vms, assuming it was already deleted."
-                # the resource is already deleted, nothing else to do except empty the pending down list for this scaleset
+            if status(e) in (404, 409)
+                @debug "scaleset $(scaleset.scalesetname) not found or already being deleted when attempting to delete vms, skipping."
                 if haskey(pending_down(manager), scaleset)
                     delete!(pending_down(manager), scaleset)
                 end
@@ -340,7 +339,21 @@ end
 #
 # Azure scale-set methods
 #
-function scaleset_image(manager::AzManager, sigimagename, sigimageversion, imagename)
+function _parse_image_ref(imageref_id::AbstractString)
+    parts = split(imageref_id, "/")
+    k_galleries = findfirst(x -> x == "galleries", parts)
+    k_images = findfirst(x -> x == "images", parts)
+    k_versions = findfirst(x -> x == "versions", parts)
+
+    gallery = k_galleries !== nothing ? parts[k_galleries+1] : ""
+    sigimagename = (k_galleries !== nothing && k_images !== nothing) ? parts[k_images+1] : ""
+    imagename = (k_galleries === nothing && k_images !== nothing) ? parts[k_images+1] : ""
+    sigimageversion = k_versions !== nothing ? parts[k_versions+1] : ""
+
+    sigimagename, sigimageversion, imagename
+end
+
+function scaleset_image(manager::AzManager, sigimagename, sigimageversion, imagename, template=nothing)
     # early exit
     if imagename != "" || (sigimagename != "" && sigimageversion != "")
         return sigimagename, sigimageversion, imagename
@@ -361,10 +374,21 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
 
     local _image
     if !isa(r, HTTP.Messages.Response)
+        # IMDS unavailable — fall back to template
+        if template !== nothing
+            return _scaleset_image_from_template(manager, sigimagename, sigimageversion, imagename, template)
+        end
         return sigimagename, sigimageversion, imagename
     else
         r = fetch(t)
         image = JSON.parse(String(r.body))["id"]
+        if image == ""
+            # Marketplace image (no gallery id) — fall back to template
+            if template !== nothing
+                return _scaleset_image_from_template(manager, sigimagename, sigimageversion, imagename, template)
+            end
+            return sigimagename, sigimageversion, imagename
+        end
         _image = split(image,"/")
     end
 
@@ -412,6 +436,54 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
 
     @debug "after inspecting the VM metaddata, imagename=$imagename, sigimagename=$sigimagename, sigimageversion=$sigimageversion"
 
+    sigimagename, sigimageversion, imagename
+end
+
+function _scaleset_image_from_template(manager::AzManager, sigimagename, sigimageversion, imagename, template)
+    # Extract image reference from the template
+    local imageref_id
+    if haskey(template, "properties") && haskey(template["properties"], "virtualMachineProfile")
+        imageref_id = get(template["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"], "id", "")
+    elseif haskey(template, "properties") && haskey(template["properties"], "storageProfile")
+        imageref_id = get(template["properties"]["storageProfile"]["imageReference"], "id", "")
+    else
+        return sigimagename, sigimageversion, imagename
+    end
+
+    imageref_id == "" && return sigimagename, sigimageversion, imagename
+
+    t_sigimagename, t_sigimageversion, t_imagename = _parse_image_ref(imageref_id)
+
+    sigimagename == "" && (sigimagename = t_sigimagename)
+    imagename == "" && (imagename = t_imagename)
+
+    # If no version in template, query for the latest
+    if sigimagename != "" && sigimageversion == "" && t_sigimageversion == ""
+        parts = split(imageref_id, "/")
+        k_subscriptions = findfirst(x -> x == "subscriptions", parts)
+        k_resourcegroups = findfirst(x -> x == "resourceGroups", parts)
+        k_galleries = findfirst(x -> x == "galleries", parts)
+        if k_subscriptions !== nothing && k_resourcegroups !== nothing && k_galleries !== nothing
+            subscription = parts[k_subscriptions+1]
+            resourcegroup = parts[k_resourcegroups+1]
+            gallery = parts[k_galleries+1]
+            _r = @retry manager.nretry azrequest(
+                "GET",
+                manager.verbose,
+                "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$sigimagename/versions?api-version=2022-03-03",
+                ["Authorization"=>"Bearer $(token(manager.session))"])
+            r = JSON.parse(String(_r.body))
+            _versions, _r = getnextlinks!(manager, _r, get(r, "value", String[]), get(r, "nextLink", ""), manager.nretry, manager.verbose)
+            versions = VersionNumber.(get.(_versions, "name", ""))
+            if length(versions) > 0
+                sigimageversion = string(maximum(versions))
+            end
+        end
+    elseif t_sigimageversion != ""
+        sigimageversion = t_sigimageversion
+    end
+
+    @debug "from template: imagename=$imagename, sigimagename=$sigimagename, sigimageversion=$sigimageversion"
     sigimagename, sigimageversion, imagename
 end
 

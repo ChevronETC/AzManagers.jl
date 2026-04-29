@@ -88,7 +88,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     subnetid = vm_template["value"]["properties"]["networkProfile"]["networkInterfaces"][1]["id"]
 
     @debug "getting image info"
-    sigimagename, sigimageversion, imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
+    sigimagename, sigimageversion, imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename, vm_template["value"])
     scaleset_image!(manager, vm_template["value"], sigimagename, sigimageversion, imagename)
 
     vm_template["value"]["properties"]["storageProfile"]["osDisk"]["diskSizeGB"] = max(osdisksize, image_osdisksize(manager, vm_template["value"], sigimagename, sigimageversion, imagename))
