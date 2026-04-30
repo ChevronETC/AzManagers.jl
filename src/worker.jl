@@ -168,17 +168,33 @@ end
 function machine_preempt_channel_future(pid)
     manager = azmanager()
     timeout = parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "60"))
-    tic = time()
-    while true
-        if haskey(manager.preempt_channel_futures, pid)
-            return manager.preempt_channel_futures[pid]
+
+    # Wait for the preempt monitor to register the future
+    if haskey(manager.preempt_channel_ready, pid)
+        # Use a Timer-based watchdog for timeout
+        tsk = @async begin
+            wait(manager.preempt_channel_ready[pid])
         end
-        if time() - tic > timeout
-            @warn "unble to obtain preemption channel from worker $pid in $timeout seconds"
+        watchdog = Timer(Float64(timeout)) do _
+            if !istaskdone(tsk)
+                @async Base.throwto(tsk, InterruptException())
+            end
+        end
+        try
+            fetch(tsk)
+        catch
+            @warn "unable to obtain preemption channel from worker $pid in $timeout seconds"
             return nothing
+        finally
+            close(watchdog)
         end
-        sleep(1)
     end
+
+    if haskey(manager.preempt_channel_futures, pid)
+        return manager.preempt_channel_futures[pid]
+    end
+    @warn "unable to obtain preemption channel from worker $pid"
+    return nothing
 end
 
 function azure_physical_name(keyval="PhysicalHostName")

@@ -64,3 +64,35 @@ function handle(manager, event::WorkersChanged)
         notify(manager.workers_changed)
     end
 end
+
+function handle(manager, event::WorkerPreempted)
+    notbefore = DateTime(event.notbefore, dateformat"e, dd u yyyy HH:MM:SS \G\M\T")
+    @info "caught preempt for pid=$(event.pid), removing not before $notbefore UTC"
+    _now = now(UTC)
+    if notbefore > _now
+        @info "sleeping for $(notbefore - _now)"
+        sleep(notbefore - _now)
+    end
+
+    if haskey(Distributed.map_pid_wrkr, event.pid)
+        wrkr = Distributed.map_pid_wrkr[event.pid]
+        if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata)
+            u = wrkr.config.userdata
+            try
+                scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
+                add_instance_to_preempted_list(manager, scaleset, u["instanceid"])
+            catch e
+                @info "error adding instance to preempted list"
+            end
+        end
+    end
+
+    deregister_worker_safe(event.pid)
+end
+
+function handle(manager, event::WorkerLost)
+    if haskey(Distributed.map_pid_wrkr, event.pid)
+        @warn "worker $(event.pid) lost unexpectedly (not a graceful preemption), deregistering"
+    end
+    deregister_worker_safe(event.pid)
+end

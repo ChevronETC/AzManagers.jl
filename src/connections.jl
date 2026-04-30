@@ -82,6 +82,7 @@ end
 function start_preempt_monitors(manager, pids)
     @info "starting preempt monitors" pids
     for pid in pids
+        manager.preempt_channel_ready[pid] = Base.Event()
         @async monitor_worker_preempt(manager, pid)
     end
     @info "preempt monitors launched" pids
@@ -97,41 +98,19 @@ function monitor_worker_preempt(manager, pid)
 
     try
         manager.preempt_channel_futures[pid] = remotecall(Channel{Bool}, pid, 1)
+        notify(manager.preempt_channel_ready[pid])
         remotecall_fetch(machine_preempt_loop, pid, manager.preempt_channel_futures[pid])
     catch e
-        handle_preempt_exception(manager, pid, wrkr, e)
+        if isa(e, RemoteException) && isa(e.captured.ex, TaskFailedException) && isa(e.captured.ex.task.result.ex, SpotPreemptException)
+            ex = e.captured.ex.task.result.ex
+            put!(manager.events, WorkerPreempted(pid, ex.instanceid, ex.notbefore))
+        else
+            put!(manager.events, WorkerLost(pid))
+        end
     end
 end
 
-function handle_preempt_exception(manager, pid, wrkr, e)
-    if isa(e, RemoteException) && isa(e.captured.ex, TaskFailedException) && isa(e.captured.ex.task.result.ex, SpotPreemptException)
-        # Graceful preemption: IMDS scheduled event was detected before the VM was killed.
-        # Honor the NotBefore window before deregistering.
-        ex = e.captured.ex.task.result.ex
-        notbefore = DateTime(ex.notbefore, dateformat"e, dd u yyyy HH:MM:SS \G\M\T")
-        @info "caught preempt exception for $(ex.clusterid), removing not before $notbefore UTC"
-        _now = now(UTC)
-        if notbefore > _now
-            @info "sleeping for $(notbefore - _now)"
-            sleep(notbefore - _now)
-        end
-        u = wrkr.config.userdata
-        try
-            scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
-            add_instance_to_preempted_list(manager, scaleset, u["instanceid"])
-        catch e
-            @info "error adding instance to preempted list"
-        end
-    else
-        # Worker connection dropped — could be an ungraceful eviction, crash, or
-        # normal cleanup (rmprocs killed the process while preempt monitor was running).
-        # Only warn if the worker is still registered (i.e. not already cleaned up by rmprocs).
-        if haskey(Distributed.map_pid_wrkr, pid)
-            @warn "worker $pid lost unexpectedly (not a graceful preemption), deregistering" exception=(e, catch_backtrace())
-        end
-    end
-
-    # Always deregister the worker — whether graceful preemption or unexpected death.
+function deregister_worker_safe(pid)
     lock(Distributed.worker_lock) do
         try
             if haskey(Distributed.map_pid_wrkr, pid)

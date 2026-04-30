@@ -18,6 +18,7 @@ mutable struct AzManager <: ClusterManager
     pruned::Dict{ScaleSet,Set{String}}
     preempted::Dict{ScaleSet,Set{String}}
     preempt_channel_futures::Dict{Int,Future}
+    preempt_channel_ready::Dict{Int,Base.Event}
     port::UInt16
     server::Sockets.TCPServer
     worker_socket::TCPSocket
@@ -57,6 +58,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.pruned = Dict{ScaleSet,Set{String}}()
     _manager.preempted = Dict{ScaleSet,Set{String}}()
     _manager.preempt_channel_futures = Dict{Int,Future}()
+    _manager.preempt_channel_ready = Dict{Int,Base.Event}()
     _manager.scalesets = Dict{ScaleSet,Int}()
     _manager.lock = ReentrantLock()
     _manager.scaleset_request_counter = 0
