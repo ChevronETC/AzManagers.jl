@@ -40,6 +40,10 @@ function add_pending_connections()
                 @debug "done pushing new socket onto manger.pending_up" manager.pending_up.n_avail_items
             end
         catch e
+            if !isopen(manager.server)
+                @error "AzManagers, server socket closed — stopping connection listener"
+                break
+            end
             @error "AzManagers, error adding pending connection"
             logerror(e, Logging.Debug)
         end
@@ -157,11 +161,11 @@ function drain_with_deadline!(sockets, pending_up, max_sockets, deadline_s)
 end
 
 function start_preempt_monitors(manager, pids)
-    @debug "starting preempt loops" pids
+    @info "starting preempt monitors" pids
     for pid in pids
         @async monitor_worker_preempt(manager, pid)
     end
-    @debug "done starting preempt loops"
+    @info "preempt monitors launched" pids
 end
 
 function monitor_worker_preempt(manager, pid)
@@ -215,7 +219,8 @@ function handle_preempt_exception(manager, pid, wrkr, e)
             Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
             Distributed.deregister_worker(pid)
         end
-    catch
+    catch e
+        @error "error deregistering worker $pid" exception=(e, catch_backtrace())
     finally
         unlock(Distributed.worker_lock)
     end
@@ -274,10 +279,19 @@ end
 
 
 function spinner(n_target_workers)
+    timeout = parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "720")) + 120
     manager = azmanager()
     starttime = time()
 
     while (nprocs() == 1 ? 0 : nworkers()) != n_target_workers
+        elapsed = time() - starttime
+        if elapsed > timeout
+            n = nprocs() == 1 ? 0 : nworkers()
+            @printf(stdout, "\r  %d/%d workers up (%.1fs) — timed out\n", n, n_target_workers, elapsed)
+            flush(stdout)
+            error("Timed out after $(round(elapsed, digits=1))s waiting for workers: $n/$n_target_workers up. Consider increasing JULIA_WORKER_TIMEOUT.")
+        end
+
         # Wait for workers_changed notification with a timeout for UI updates
         tsk = @async begin
             lock(manager.workers_changed)

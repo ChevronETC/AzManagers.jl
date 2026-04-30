@@ -12,7 +12,7 @@
 using Dates
 
 const INTEGRATION_DIR = joinpath(@__DIR__, "integration")
-const PROJECT_DIR = joinpath(@__DIR__, "..")
+const PROJECT_DIR = get(ENV, "JULIA_PROJECT", joinpath(@__DIR__, ".."))
 
 struct TestResult
     name::String
