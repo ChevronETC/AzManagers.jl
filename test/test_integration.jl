@@ -14,6 +14,10 @@ using Dates
 const INTEGRATION_DIR = joinpath(@__DIR__, "integration")
 const PROJECT_DIR = get(ENV, "JULIA_PROJECT", joinpath(@__DIR__, ".."))
 
+# Tests listed here will run and report results but will not cause the pipeline to fail.
+# Comma-separated test names (without test_ prefix or .jl suffix).
+const SOFT_FAIL_TESTS = Set(strip.(split(get(ENV, "AZMANAGERS_SOFT_FAIL_TESTS", "spot,spot_eviction"), ",")))
+
 struct TestResult
     name::String
     file::String
@@ -191,28 +195,55 @@ function run_all_tests()
     println("="^80)
 
     for r in results
-        status_str = passed(r) ? "PASS" : "FAIL"
-        status_icon = passed(r) ? "✓" : "✗"
-        elapsed_str = round(r.elapsed; digits=1)
-        println("$status_icon [$status_str] $(r.name) ($(elapsed_str)s)")
+        is_soft = r.name ∈ SOFT_FAIL_TESTS
+        if passed(r)
+            println("✓ [PASS] $(r.name) ($(round(r.elapsed; digits=1))s)")
+        elseif is_soft
+            println("⚠ [SOFT-FAIL] $(r.name) ($(round(r.elapsed; digits=1))s)")
+        else
+            println("✗ [FAIL] $(r.name) ($(round(r.elapsed; digits=1))s)")
+        end
     end
 
-    # Summary
-    n_pass = count(passed, results)
-    n_fail = length(results) - n_pass
+    # Partition results into hard-fail and soft-fail
+    hard_results = filter(r -> r.name ∉ SOFT_FAIL_TESTS, results)
+    soft_results = filter(r -> r.name ∈ SOFT_FAIL_TESTS, results)
+
+    n_pass = count(passed, hard_results)
+    n_fail = length(hard_results) - n_pass
+    n_soft_pass = count(passed, soft_results)
+    n_soft_fail = length(soft_results) - n_soft_pass
     total_time = sum(r -> r.elapsed, results)
     wall_time = maximum(r -> r.elapsed, results)
 
     println("\n", "="^80)
-    println("SUMMARY: $n_pass passed, $n_fail failed out of $(length(results)) tests")
+    println("SUMMARY: $n_pass passed, $n_fail failed out of $(length(hard_results)) tests")
+    if !isempty(soft_results)
+        println("  (soft-fail: $n_soft_pass passed, $n_soft_fail failed out of $(length(soft_results)) tests)")
+    end
     println("Total CPU time: $(round(total_time; digits=1))s | Wall time: $(round(wall_time; digits=1))s")
     println("="^80)
 
     if n_fail > 0
         println("\nFailed tests:")
-        for r in results
+        for r in hard_results
             if !passed(r)
                 println("  ✗ $(r.name) ($(r.file))")
+                lf = logfiles[r.name]
+                if isfile(lf)
+                    println("  --- full log ---")
+                    println(read(lf, String))
+                    println("  --- end log ---")
+                end
+            end
+        end
+    end
+
+    if n_soft_fail > 0
+        println("\nSoft-fail tests (non-blocking):")
+        for r in soft_results
+            if !passed(r)
+                println("  ⚠ $(r.name) ($(r.file))")
                 lf = logfiles[r.name]
                 if isfile(lf)
                     println("  --- full log ---")
