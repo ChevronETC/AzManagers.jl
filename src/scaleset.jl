@@ -375,7 +375,11 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
     end
 
     istaskdone(t) || @async Base.throwto(t, InterruptException)
-    r = fetch(t)
+    r = try
+        fetch(t)
+    catch
+        nothing
+    end
 
     local _image
     if !isa(r, HTTP.Messages.Response)
@@ -385,7 +389,6 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
         end
         return sigimagename, sigimageversion, imagename
     else
-        r = fetch(t)
         image = JSON.parse(String(r.body))["id"]
         if image == ""
             # Marketplace image (no gallery id) — fall back to template
