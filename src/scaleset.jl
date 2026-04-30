@@ -322,17 +322,17 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
     t = @async begin
         r = @retry manager.nretry HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute/storageProfile/imageReference?api-version=2021-02-01", ["Metadata"=>"true"]; retry=false, redirect=false)
     end
-    tic = time()
-    while !istaskdone(t)
-        (time() - tic) > 10 && break
-        sleep(1)
+    watchdog = Timer(10.0) do _
+        if !istaskdone(t)
+            @async Base.throwto(t, InterruptException())
+        end
     end
-
-    istaskdone(t) || @async Base.throwto(t, InterruptException)
     r = try
         fetch(t)
     catch
         nothing
+    finally
+        close(watchdog)
     end
 
     local _image
@@ -1008,14 +1008,19 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     @debug "about to check quota"
 
     # check usage/quotas
-    while true
+    max_quota_retries = parse(Int, get(ENV, "JULIA_AZMANAGERS_QUOTA_MAX_RETRIES", "60"))
+    for quota_attempt in 1:max_quota_retries
         navailable_cores, navailable_cores_spot = quotacheck(manager, subscriptionid, _template, δn, nretry, verbose)
         if spot
             navailable_cores_spot >= 0 && break
-            @warn "Insufficient spot quota, $(-navailable_cores_spot) too few cores left in quota.  Sleeping for 60 seconds before trying again.  Ctrl-C to cancel."
+            @warn "Insufficient spot quota, $(-navailable_cores_spot) too few cores left in quota.  Attempt $quota_attempt/$max_quota_retries, sleeping for 60 seconds.  Ctrl-C to cancel."
         else
             navailable_cores >= 0 && break
-            @warn "Insufficient quota, $(-navailable_cores) too few cores left in quota. Sleeping for 60 seconds before trying again. Ctrl-C to cancel."
+            @warn "Insufficient quota, $(-navailable_cores) too few cores left in quota. Attempt $quota_attempt/$max_quota_retries, sleeping for 60 seconds. Ctrl-C to cancel."
+        end
+
+        if quota_attempt == max_quota_retries
+            error("Exhausted $max_quota_retries quota retries (~$(max_quota_retries) minutes). Insufficient quota to provision $δn VMs.")
         end
 
         try
