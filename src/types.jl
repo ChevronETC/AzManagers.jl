@@ -24,12 +24,14 @@ mutable struct AzManager <: ClusterManager
     worker_socket::TCPSocket
     task_add::Task
     task_process::Task
-    task_prune::Task
-    task_clean::Task
+    task_event_loop::Task
+    timer_prune::Timer
+    timer_clean::Timer
     lock::ReentrantLock
     scaleset_request_counter::Int
     ssh_user::String
     workers_changed::Threads.Condition
+    events::Channel{ManagerEvent}
 
     AzManager() = new()
 end
@@ -61,9 +63,18 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.lock = ReentrantLock()
     _manager.scaleset_request_counter = 0
     _manager.workers_changed = Threads.Condition()
+    _manager.events = Channel{ManagerEvent}(256)
 
-    _manager.task_prune = errormonitor(@async scaleset_pruning())
-    _manager.task_clean = errormonitor(@async scaleset_cleaning())
+    _manager.task_event_loop = errormonitor(@async run_event_loop(_manager))
+
+    prune_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
+    clean_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_CLEAN_POLL_INTERVAL", "60"))
+    _manager.timer_prune = Timer(0.0; interval=prune_interval) do _
+        try put!(_manager.events, PruneTick()) catch end
+    end
+    _manager.timer_clean = Timer(Float64(clean_interval); interval=clean_interval) do _
+        try put!(_manager.events, CleanTick()) catch end
+    end
 
     _manager
 end
