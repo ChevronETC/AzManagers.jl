@@ -96,3 +96,25 @@ function handle(manager, event::WorkerLost)
     end
     deregister_worker_safe(event.pid)
 end
+
+function handle(manager, ::ShutdownRequested)
+    @info "shutdown requested, cleaning up..."
+
+    # Stop periodic timers
+    isdefined(manager, :timer_prune) && close(manager.timer_prune)
+    isdefined(manager, :timer_clean) && close(manager.timer_clean)
+    isdefined(manager, :timer_batch_flush) && isopen(manager.timer_batch_flush) && close(manager.timer_batch_flush)
+
+    # Close the server socket to stop accepting connections
+    isdefined(manager, :server) && isopen(manager.server) && close(manager.server)
+
+    # Delete all scalesets
+    try
+        delete_scalesets()
+    catch e
+        @error "error during shutdown delete_scalesets" exception=(e, catch_backtrace())
+    end
+
+    # Close the event channel to terminate the event loop
+    close(manager.events)
+end

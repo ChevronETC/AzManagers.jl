@@ -130,7 +130,7 @@ function machine_preempt_loop(preempt_channel_future)
                 if poll_count % 30 == 0
                     @info "preempt loop heartbeat: pid=$clusterid, polls=$poll_count, no preempt detected"
                 end
-                sleep(1)
+                sleep(5)
             end
         end
         fetch(tsk)

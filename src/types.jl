@@ -86,6 +86,19 @@ azmanager() = _manager
 
 function __init__()
     if myid() == 1
-        atexit(AzManagers.delete_scalesets)
+        atexit() do
+            manager = azmanager()
+            if isdefined(manager, :events) && isopen(manager.events)
+                try
+                    put!(manager.events, ShutdownRequested())
+                    # Give the event loop a moment to process shutdown
+                    sleep(0.5)
+                catch
+                end
+            else
+                # Fallback if event loop isn't running
+                try delete_scalesets() catch end
+            end
+        end
     end
 end
