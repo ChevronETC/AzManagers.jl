@@ -13,7 +13,6 @@ mutable struct AzManager <: ClusterManager
     save_cloud_init_failures::Bool
     show_quota::Bool
     scalesets::Dict{ScaleSet,Int}
-    pending_up::Channel{TCPSocket}
     pending_down::Dict{ScaleSet,Set{String}}
     deleted::Dict{ScaleSet,Dict{String,DateTime}}
     pruned::Dict{ScaleSet,Set{String}}
@@ -22,16 +21,18 @@ mutable struct AzManager <: ClusterManager
     port::UInt16
     server::Sockets.TCPServer
     worker_socket::TCPSocket
-    task_add::Task
-    task_process::Task
+    task_accept::Task
     task_event_loop::Task
     timer_prune::Timer
     timer_clean::Timer
+    timer_batch_flush::Timer
     lock::ReentrantLock
     scaleset_request_counter::Int
     ssh_user::String
     workers_changed::Threads.Condition
     events::Channel{ManagerEvent}
+    socket_batch::Vector{TCPSocket}
+    batch_max::Int
 
     AzManager() = new()
 end
@@ -46,25 +47,25 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.show_quota = show_quota
     _manager.ssh_user = ssh_user
 
-    if isdefined(_manager, :pending_up)
+    if isdefined(_manager, :events)
         return _manager
     end
 
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
-    _manager.pending_up = Channel{TCPSocket}(64)
     _manager.pending_down = Dict{ScaleSet,Set{String}}()
     _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
     _manager.pruned = Dict{ScaleSet,Set{String}}()
     _manager.preempted = Dict{ScaleSet,Set{String}}()
     _manager.preempt_channel_futures = Dict{Int,Future}()
     _manager.scalesets = Dict{ScaleSet,Int}()
-    _manager.task_add = errormonitor(@async add_pending_connections())
-    _manager.task_process = errormonitor(@async process_pending_connections())
     _manager.lock = ReentrantLock()
     _manager.scaleset_request_counter = 0
     _manager.workers_changed = Threads.Condition()
     _manager.events = Channel{ManagerEvent}(256)
+    _manager.socket_batch = TCPSocket[]
+    _manager.batch_max = 64
 
+    _manager.task_accept = errormonitor(@async accept_connections(_manager))
     _manager.task_event_loop = errormonitor(@async run_event_loop(_manager))
 
     prune_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))

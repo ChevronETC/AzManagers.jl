@@ -1,18 +1,15 @@
-function add_pending_connections()
-    manager = azmanager()
+function accept_connections(manager)
     while true
         try
-            let s = accept(manager.server)
-                @debug "pushing new socket onto manger.pending_up" manager.pending_up.n_avail_items
-                put!(manager.pending_up, s)
-                @debug "done pushing new socket onto manger.pending_up" manager.pending_up.n_avail_items
-            end
+            s = accept(manager.server)
+            @debug "accepted new socket, posting SocketAccepted event"
+            put!(manager.events, SocketAccepted(s))
         catch e
             if !isopen(manager.server)
-                @error "AzManagers, server socket closed — stopping connection listener"
+                @info "AzManagers, server socket closed — stopping connection listener"
                 break
             end
-            @error "AzManagers, error adding pending connection"
+            @error "AzManagers, error accepting connection"
             logerror(e, Logging.Debug)
         end
     end
@@ -61,68 +58,25 @@ function addprocs_with_timeout(manager; sockets)
     pids
 end
 
-function process_pending_connections()
-    manager = azmanager()
-    max_sockets = manager.pending_up.sz_max
-    flush_delay = parse(Float64, get(ENV, "JULIA_AZMANAGERS_BATCH_FLUSH_DELAY",
-        get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "5.0")))
+function flush_socket_batch(manager)
+    sockets = copy(manager.socket_batch)
+    empty!(manager.socket_batch)
 
-    while true
-        # Block until at least one socket arrives
-        local first_socket
-        try
-            first_socket = take!(manager.pending_up)
-        catch e
-            @error "AzManagers, error retrieving pending connection"
-            logerror(e, Logging.Debug)
-            continue
-        end
-        sockets = TCPSocket[first_socket]
-
-        try
-            # Drain additional sockets until deadline or batch full
-            drain_with_deadline!(sockets, manager.pending_up, max_sockets, flush_delay)
-
-            @debug "flushing batch" length(sockets)
-            pids = addprocs_with_timeout(manager; sockets)
-            @debug "batch done" pids
-
-            if isdefined(manager, :workers_changed)
-                lock(manager.workers_changed) do
-                    notify(manager.workers_changed)
-                end
-            end
-
-            start_preempt_monitors(manager, pids)
-            @debug "loop iteration complete, waiting for next socket"
-        catch e
-            @error "AzManagers, error processing connection batch"
-            logerror(e, Logging.Debug)
-        end
+    if isdefined(manager, :timer_batch_flush)
+        close(manager.timer_batch_flush)
     end
-end
 
-function drain_with_deadline!(sockets, pending_up, max_sockets, deadline_s)
-    deadline = Timer(deadline_s)
-    try
-        while length(sockets) < max_sockets
-            # Check if deadline has fired
-            if !isopen(deadline)
-                break
-            end
-            # Non-blocking check for available sockets
-            if isready(pending_up)
-                push!(sockets, take!(pending_up))
-            else
-                # Brief yield to avoid busy-wait, but much shorter than old 0.1s poll
-                sleep(0.01)
-            end
-        end
-    catch e
-        @debug "drain_with_deadline! interrupted" e
-    finally
-        close(deadline)
+    isempty(sockets) && return
+
+    @debug "flushing batch" length(sockets)
+    pids = addprocs_with_timeout(manager; sockets)
+    @debug "batch done" pids
+
+    if !isempty(pids)
+        put!(manager.events, WorkersChanged(nprocs() == 1 ? 0 : nworkers()))
     end
+
+    start_preempt_monitors(manager, pids)
 end
 
 function start_preempt_monitors(manager, pids)
