@@ -109,6 +109,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     nic_timeout = parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
     nic_starttime = time()
     nic_state = "unknown"
+    local nic_dic
     while true
         nic_r = @retry nretry azrequest(
             "GET",

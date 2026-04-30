@@ -177,8 +177,8 @@ end
 
 function spinner(n_target_workers)
     timeout = parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "720")) + 120
-    manager = azmanager()
     starttime = time()
+    spincount = 1
 
     while (nprocs() == 1 ? 0 : nworkers()) != n_target_workers
         elapsed = time() - starttime
@@ -189,25 +189,11 @@ function spinner(n_target_workers)
             error("Timed out after $(round(elapsed, digits=1))s waiting for workers: $n/$n_target_workers up. Consider increasing JULIA_WORKER_TIMEOUT.")
         end
 
-        # Wait for workers_changed notification with a 2s timeout for UI updates
-        lock(manager.workers_changed) do
-            # Use a timer to interrupt the wait after 2 seconds
-            wakeup = Timer(2.0) do _
-                lock(manager.workers_changed) do
-                    notify(manager.workers_changed)
-                end
-            end
-            try
-                wait(manager.workers_changed)
-            finally
-                close(wakeup)
-            end
-        end
-
-        elapsed = time() - starttime
         n = nprocs() == 1 ? 0 : nworkers()
-        @printf(stdout, "\r  %d/%d workers up (%.1fs)     ", n, n_target_workers, elapsed)
+        @printf(stdout, "\r  %s %d/%d workers up (%.1fs)     ", string(spin(spincount, elapsed)[1]), n, n_target_workers, elapsed)
         flush(stdout)
+        spincount = spincount == 4 ? 1 : spincount + 1
+        sleep(0.25)
     end
 
     elapsed = time() - starttime
