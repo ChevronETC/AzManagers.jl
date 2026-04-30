@@ -59,66 +59,65 @@ end
 
 function delete_empty_scalesets()
     manager = azmanager()
-    lock(manager.lock)
-    _scalesets = scalesets(manager)
-    for (scaleset, capacity) in _scalesets
-        if capacity == 0
-            # double-check capacity in case there is client/server mis-match
-            _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
-        end
-        if _scalesets[scaleset] == 0
-            delete_scaleset(manager, scaleset)
+    lock(manager.lock) do
+        _scalesets = scalesets(manager)
+        for (scaleset, capacity) in _scalesets
+            if capacity == 0
+                # double-check capacity in case there is client/server mis-match
+                _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+            end
+            if _scalesets[scaleset] == 0
+                delete_scaleset(manager, scaleset)
+            end
         end
     end
-    unlock(manager.lock)
 end
 
 function delete_pending_down_vms()
     manager = azmanager()
-    lock(manager.lock)
-
-    for (scaleset, ids) in pending_down(manager)
-        @debug "deleting pending down vms $ids in $scaleset"
-        try
-            delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
-            new_capacity = max(0, scalesets(manager)[scaleset] - length(ids))
-            scalesets(manager)[scaleset] = new_capacity
-            delete!(pending_down(manager), scaleset)
-        catch e
-            if status(e) in (404, 409)
-                @debug "scaleset $(scaleset.scalesetname) not found or already being deleted when attempting to delete vms, skipping."
-                if haskey(pending_down(manager), scaleset)
-                    delete!(pending_down(manager), scaleset)
+    lock(manager.lock) do
+        for (scaleset, ids) in pending_down(manager)
+            @debug "deleting pending down vms $ids in $scaleset"
+            try
+                delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
+                new_capacity = max(0, scalesets(manager)[scaleset] - length(ids))
+                scalesets(manager)[scaleset] = new_capacity
+                delete!(pending_down(manager), scaleset)
+            catch e
+                if status(e) in (404, 409)
+                    @debug "scaleset $(scaleset.scalesetname) not found or already being deleted when attempting to delete vms, skipping."
+                    if haskey(pending_down(manager), scaleset)
+                        delete!(pending_down(manager), scaleset)
+                    end
+                else
+                    @error "error deleting scaleset vms, manual clean-up may be required."
+                    logerror(e, Logging.Debug)
                 end
-            else
-                @error "error deleting scaleset vms, manual clean-up may be required."
-                logerror(e, Logging.Debug)
             end
         end
     end
-    unlock(manager.lock)
     nothing
 end
 
 # sync server and client side views of the resources
 function scaleset_sync()
     manager = azmanager()
-    lock(manager.lock)
-    try
-        _pending_down = pending_down(manager)
-        pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
-        if nprocs()-1+pending_down_count != nworkers_provisioned()
-            @debug "client/server scaleset book-keeping mismatch, synching client to server."
-            _scalesets = scalesets(manager)
-            for scaleset in keys(_scalesets)
-                _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+    lock(manager.lock) do
+        try
+            _pending_down = pending_down(manager)
+            pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
+            if nprocs()-1+pending_down_count != nworkers_provisioned()
+                @debug "client/server scaleset book-keeping mismatch, synching client to server."
+                _scalesets = scalesets(manager)
+                for scaleset in keys(_scalesets)
+                    _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+                end
             end
+        catch e
+            @error "scaleset syncing error"
+            logerror(e, Logging.Debug)
         end
-    catch e
-        @error "scaleset syncing error"
-        logerror(e, Logging.Debug)
     end
-    unlock(manager.lock)
 end
 
 function prune_cluster()

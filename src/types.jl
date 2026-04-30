@@ -24,6 +24,8 @@ mutable struct AzManager <: ClusterManager
     worker_socket::TCPSocket
     task_add::Task
     task_process::Task
+    task_prune::Task
+    task_clean::Task
     lock::ReentrantLock
     scaleset_request_counter::Int
     ssh_user::String
@@ -54,14 +56,14 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.preempted = Dict{ScaleSet,Set{String}}()
     _manager.preempt_channel_futures = Dict{Int,Future}()
     _manager.scalesets = Dict{ScaleSet,Int}()
-    _manager.task_add = @async add_pending_connections()
-    _manager.task_process = @async process_pending_connections()
+    _manager.task_add = errormonitor(@async add_pending_connections())
+    _manager.task_process = errormonitor(@async process_pending_connections())
     _manager.lock = ReentrantLock()
     _manager.scaleset_request_counter = 0
     _manager.workers_changed = Threads.Condition()
 
-    @async scaleset_pruning()
-    @async scaleset_cleaning()
+    _manager.task_prune = errormonitor(@async scaleset_pruning())
+    _manager.task_clean = errormonitor(@async scaleset_cleaning())
 
     _manager
 end

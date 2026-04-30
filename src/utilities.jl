@@ -136,10 +136,12 @@ end
 function azrequest(rtype, verbose, url, headers, body=nothing)
     if contains(url, "virtualMachineScaleSets")
         manager = azmanager()
-        if isdefined(manager, :scaleset_request_counter)
-            manager.scaleset_request_counter += 1
-        else
-            manager.scaleset_request_counter = 1
+        lock(manager.lock) do
+            if isdefined(manager, :scaleset_request_counter)
+                manager.scaleset_request_counter += 1
+            else
+                manager.scaleset_request_counter = 1
+            end
         end
     end
 

@@ -88,11 +88,8 @@ function process_pending_connections()
             @debug "batch done" pids
 
             if isdefined(manager, :workers_changed)
-                lock(manager.workers_changed)
-                try
+                lock(manager.workers_changed) do
                     notify(manager.workers_changed)
-                finally
-                    unlock(manager.workers_changed)
                 end
             end
 
@@ -181,16 +178,15 @@ function handle_preempt_exception(manager, pid, wrkr, e)
     end
 
     # Always deregister the worker — whether graceful preemption or unexpected death.
-    try
-        lock(Distributed.worker_lock)
-        if haskey(Distributed.map_pid_wrkr, pid)
-            Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
-            Distributed.deregister_worker(pid)
+    lock(Distributed.worker_lock) do
+        try
+            if haskey(Distributed.map_pid_wrkr, pid)
+                Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
+                Distributed.deregister_worker(pid)
+            end
+        catch e
+            @error "error deregistering worker $pid" exception=(e, catch_backtrace())
         end
-    catch e
-        @error "error deregistering worker $pid" exception=(e, catch_backtrace())
-    finally
-        unlock(Distributed.worker_lock)
     end
 end
 
