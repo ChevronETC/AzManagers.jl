@@ -1,5 +1,7 @@
 *.swp
+*.cov
 Manifest.toml
+LocalPreferences.toml
 deps/build.log
 deps/usr
 docs/build

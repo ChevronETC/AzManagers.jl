@@ -27,6 +27,7 @@ mutable struct AzManager <: ClusterManager
     lock::ReentrantLock
     scaleset_request_counter::Int
     ssh_user::String
+    workers_changed::Threads.Condition
 
     AzManager() = new()
 end
