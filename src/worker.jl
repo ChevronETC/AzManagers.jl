@@ -732,6 +732,7 @@ function buildstartupscript_detached(manager::AzManager, exename::String, julia_
     cmd
 end
 
+# see https://docs.microsoft.com/en-us/azure/virtual-machines/linux/add-disk
 function mount_datadisks()
     try
         @info "mounting data disks"

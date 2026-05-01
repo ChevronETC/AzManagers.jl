@@ -511,49 +511,6 @@ function scaleset_image!(manager::AzManager, template, sigimagename, sigimagever
     end
 end
 
-function software_sanity_check(manager, imagename, custom_environment)
-    projectinfo = Pkg.project()
-    envpath = normpath(joinpath(projectinfo.path, ".."))
-    _packages = TOML.parse(read(joinpath(envpath, "Manifest.toml"), String))
-
-    packages = VERSION < v"1.7" ? _packages : _packages["deps"]
-
-    if custom_environment
-        for (packagename, packageinfo) in packages
-            if haskey(packageinfo[1], "path")
-                error("Project/environment has dev'd packages that will not be accessible from workers.")
-            end
-        end
-    end
-end
-
-function compress_environment(julia_environment_folder)
-    project_text = read(joinpath(julia_environment_folder, "Project.toml"), String)
-    manifest_text = read(joinpath(julia_environment_folder, "Manifest.toml"), String)
-    localpreferences_text = isfile(joinpath(julia_environment_folder, "LocalPreferences.toml")) ? read(joinpath(julia_environment_folder, "LocalPreferences.toml"), String) : ""
-    local project_compressed,manifest_compressed,localpreferences_compressed
-    with_logger(ConsoleLogger(stdout, Logging.Info)) do
-        project_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(project_text)))
-        manifest_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(manifest_text)))
-        localpreferences_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(localpreferences_text)))
-    end
-
-    project_compressed, manifest_compressed, localpreferences_compressed
-end
-
-function decompress_environment(project_compressed, manifest_compressed, localpreferences_compressed, remote_julia_environment_name)
-    mkpath(joinpath(Pkg.envdir(), remote_julia_environment_name))
-
-    text = String(CodecZlib.transcode(ZlibDecompressor, Vector{UInt8}(base64decode(project_compressed))))
-    write(joinpath(Pkg.envdir(), remote_julia_environment_name, "Project.toml"), text)
-    text = String(CodecZlib.transcode(ZlibDecompressor, Vector{UInt8}(base64decode(manifest_compressed))))
-    write(joinpath(Pkg.envdir(), remote_julia_environment_name, "Manifest.toml"), text)
-    text = String(CodecZlib.transcode(ZlibDecompressor, Vector{UInt8}(base64decode(localpreferences_compressed))))
-    if text != ""
-        write(joinpath(Pkg.envdir(), remote_julia_environment_name, "LocalPreferences.toml"), text)
-    end
-end
-
 function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     location = template["location"]
 
@@ -637,82 +594,6 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     ncores_spot_available = ncores_spot_limit - ncores_spot_current
 
     ncores_available - (ncores_per_machine * δn), ncores_spot_available - (ncores_per_machine * δn)
-end
-
-function nphysical_cores(template::Dict; session=AzSession())
-    ssid = template["subscriptionid"]
-    region = template["value"]["location"]
-    sku_name = template["value"]["properties"]["hardwareProfile"]["vmSize"]
-
-    _r = HTTP.request("GET", 
-        "https://management.azure.com/subscriptions/$ssid/providers/Microsoft.Compute/skus?api-version=2022-11-01", 
-        ["Authorization" => "Bearer $(token(session))"])
-    r = JSON.parse(String(_r.body))
-
-
-    filtered_skus = filter(sku -> sku["name"] == sku_name && haskey(sku, "capabilities") && any(location -> location == region, sku["locations"]), r["value"])
-
-    vCPU_details = [(cap["value"], any(cap -> cap["name"] == "HyperThreadingEnabled" && cap["value"] == "true", sku["capabilities"])) for sku in filtered_skus for cap in sku["capabilities"] if cap["name"] == "vCPUs"]
-    hyperthreading = vCPU_details[1][2]
-    vCPU = vCPU_details[1][1]
-
-    # Number of physical cores
-    pCPU = hyperthreading ? div(parse(Int,vCPU),2) : parse(Int,vCPU)
-end
-
-function nphysical_cores(template::AbstractString; session=AzSession())
-    isfile(templates_filename_vm()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
-
-    templates_scaleset = JSON.parse(read(templates_filename_vm(), String); dicttype=Dict)
-    haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
-    template = templates_scaleset[template]
-
-    nphysical_cores(template; session)
-end
-
-function getnextlinks!(manager::AzManager, _r, value, nextlink, nretry, verbose)
-    while nextlink != ""
-        _r = @retry nretry azrequest(
-            "GET",
-            verbose,
-            nextlink,
-            ["Authorization"=>"Bearer $(token(manager.session))"])
-        r = JSON.parse(String(_r.body))
-        value = [value;get(r,"value",[])]
-        nextlink = get(r, "nextLink", "")
-    end
-    value, _r
-end
-
-function resourcegraphrequest(manager, body)
-    skiptoken = ""
-    data = []
-    local _r
-    while true
-        if skiptoken != ""
-            body["\$skipToken"] = skiptoken
-        end
-        _r = @retry manager.nretry azrequest(
-            "POST",
-            manager.verbose,
-            "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01",
-            ["Authorization"=>"Bearer $(token(manager.session))", "Content-Type"=>"application/json"],
-            JSON.json(body)
-        )
-        r = JSON.parse(String(_r.body))
-        data = [data;get(r, "data", [])]
-        skiptoken = get(r, "\$skipToken", "")
-
-        if skiptoken == ""
-            break
-        end
-    end
-
-    if manager.show_quota
-        @info "Quota after getting instances for scaleset pruning" remaining_resource(_r)
-    end
-
-    data
 end
 
 function list_scalesets(manager::AzManager, subscriptionid, resourcegroup, nretry, verbose)

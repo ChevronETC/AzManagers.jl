@@ -17,4 +17,10 @@ if !isdefined(Base, :get_extension)
     include("../ext/MPIExt.jl")
 end
 
+function __init__()
+    if myid() == 1
+        atexit(AzManagers.delete_scalesets)
+    end
+end
+
 end

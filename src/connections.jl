@@ -1,3 +1,34 @@
+function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures, show_quota)
+    _manager.session = session
+    _manager.nretry = nretry
+    _manager.verbose = verbose
+    _manager.save_cloud_init_failures = save_cloud_init_failures
+    _manager.show_quota = show_quota
+    _manager.ssh_user = ssh_user
+
+    if isdefined(_manager, :pending_up)
+        return _manager
+    end
+
+    _manager.port,_manager.server = listenany(getipaddr(), 9000)
+    _manager.pending_up = Channel{TCPSocket}(64)
+    _manager.pending_down = Dict{ScaleSet,Set{String}}()
+    _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
+    _manager.pruned = Dict{ScaleSet,Set{String}}()
+    _manager.preempted = Dict{ScaleSet,Set{String}}()
+    _manager.preempt_channel_futures = Dict{Int,Future}()
+    _manager.scalesets = Dict{ScaleSet,Int}()
+    _manager.task_add = @async add_pending_connections()
+    _manager.task_process = @async process_pending_connections()
+    _manager.lock = ReentrantLock()
+    _manager.scaleset_request_counter = 0
+
+    @async scaleset_pruning()
+    @async scaleset_cleaning()
+
+    _manager
+end
+
 function add_pending_connections()
     manager = azmanager()
     while true
@@ -434,55 +465,6 @@ function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
 
     push!(launched, wconfig)
     notify(c)
-end
-
-function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSet, instanceid)
-    if haskey(manager.pending_down, scaleset)
-        @debug "pushing worker with id=$instanceid onto pending_down"
-        push!(manager.pending_down[scaleset], string(instanceid))
-    else
-        @debug "creating pending_down vector for id=$instanceid"
-        manager.pending_down[scaleset] = Set{String}([string(instanceid)])
-    end
-    nothing
-end
-
-function add_instance_to_pruned_list(manager::AzManager, scaleset::ScaleSet, instanceid)
-    if haskey(manager.pruned, scaleset)
-        @debug "pushing worker with id=$instanceid onto pruned"
-        push!(manager.pruned[scaleset], string(instanceid))
-    else
-        @debug "creating pruned vector for id=$instanceid"
-        manager.pruned[scaleset] = Set{String}([string(instanceid)])
-    end
-    nothing
-end
-
-function add_instance_to_preempted_list(manager::AzManager, scaleset::ScaleSet, instanceid)
-    if haskey(manager.preempted, scaleset)
-        @debug "pushing worker with id=$instanceid onto preempted"
-        push!(manager.preempted[scaleset], string(instanceid))
-    else
-        @debug "creating preempted vector for id=$instanceid"
-        manager.preempted[scaleset] = Set{String}([string(instanceid)])
-    end
-end
-
-function ispreempted(manager::AzManager, config::WorkerConfig)
-    u = config.userdata
-    scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
-    string(u["instanceid"])  ∈ get(manager.preempted, scaleset, Set{String}())
-end
-
-function add_instance_to_deleted_list(manager::AzManager, scaleset::ScaleSet, instanceid)
-    if haskey(manager.deleted, scaleset)
-        @debug "pushing worker with id=$instanceid onto deleted"
-        manager.deleted[scaleset][instanceid] = now(Dates.UTC)
-    else
-        @debug "creating deleted dictionary for id=$instanceid"
-        manager.deleted[scaleset] = Dict(instanceid=>now(Dates.UTC))
-    end
-    nothing
 end
 
 function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
