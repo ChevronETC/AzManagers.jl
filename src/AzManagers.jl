@@ -1487,10 +1487,13 @@ function Distributed.launch_n_additional_processes(manager::AzManager, frompid, 
             wconfig.count = fromconfig.count
             wconfig.userdata = Dict(
                 "localid" => localid+1,
+                "instanceid" => fromconfig.userdata["instanceid"],
+                "physical_hostname" => fromconfig.userdata["physical_hostname"],
                 "name" => fromconfig.userdata["name"],
                 "subscriptionid" => fromconfig.userdata["subscriptionid"],
                 "resourcegroup" => fromconfig.userdata["resourcegroup"],
-                "scalesetname" => fromconfig.userdata["scalesetname"])
+                "scalesetname" => fromconfig.userdata["scalesetname"],
+                "priority" => fromconfig.userdata["priority"])
 
             let wconfig=wconfig
                 @async begin
