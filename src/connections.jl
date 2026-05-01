@@ -93,7 +93,7 @@ function process_pending_connections()
     manager = azmanager()
     max_sockets = manager.pending_up.sz_max
     flush_delay = parse(Float64, get(ENV, "JULIA_AZMANAGERS_BATCH_FLUSH_DELAY",
-        get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "5.0")))
+        get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "30.0")))
 
     while true
         # Block until at least one socket arrives
