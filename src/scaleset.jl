@@ -1,48 +1,3 @@
-function scaleset_pruning()
-    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
-
-    while true
-        try
-            #=
-            The following seems required for an over-provisioned scaleset. it
-            is not clear why this is needed.
-            =#
-            prune_cluster()
-            #=
-            The following handles vms that are provisioined, but that fail to
-            join the cluster.
-            =#
-            prune_scalesets()
-        catch e
-            if e isa InterruptException
-                break
-            end
-            @debug "scaleset pruning error" exception=(e, catch_backtrace())
-        finally
-            sleep(interval)
-        end
-    end
-end
-
-function scaleset_cleaning()
-    interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_CLEAN_POLL_INTERVAL", "60"))
-
-    while true
-        try
-            sleep(interval)
-            delete_pending_down_vms()
-            delete_empty_scalesets()
-            scaleset_sync()
-            prune_cluster()
-        catch e
-            if e isa InterruptException
-                break
-            end
-            @debug "scaleset cleaning error" exception=(e, catch_backtrace())
-        end
-    end
-end
-
 scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : Dict{ScaleSet,Int}()
 scalesets() = scalesets(azmanager())
 pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Set{String}}()
@@ -59,66 +14,65 @@ end
 
 function delete_empty_scalesets()
     manager = azmanager()
-    lock(manager.lock)
-    _scalesets = scalesets(manager)
-    for (scaleset, capacity) in _scalesets
-        if capacity == 0
-            # double-check capacity in case there is client/server mis-match
-            _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
-        end
-        if _scalesets[scaleset] == 0
-            delete_scaleset(manager, scaleset)
+    lock(manager.lock) do
+        _scalesets = scalesets(manager)
+        for (scaleset, capacity) in _scalesets
+            if capacity == 0
+                # double-check capacity in case there is client/server mis-match
+                _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+            end
+            if _scalesets[scaleset] == 0
+                delete_scaleset(manager, scaleset)
+            end
         end
     end
-    unlock(manager.lock)
 end
 
 function delete_pending_down_vms()
     manager = azmanager()
-    lock(manager.lock)
-
-    for (scaleset, ids) in pending_down(manager)
-        @debug "deleting pending down vms $ids in $scaleset"
-        try
-            delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
-            new_capacity = max(0, scalesets(manager)[scaleset] - length(ids))
-            scalesets(manager)[scaleset] = new_capacity
-            delete!(pending_down(manager), scaleset)
-        catch e
-            if status(e) in (404, 409)
-                @debug "scaleset $(scaleset.scalesetname) not found or already being deleted when attempting to delete vms, skipping."
-                if haskey(pending_down(manager), scaleset)
-                    delete!(pending_down(manager), scaleset)
+    lock(manager.lock) do
+        for (scaleset, ids) in pending_down(manager)
+            @debug "deleting pending down vms $ids in $scaleset"
+            try
+                delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
+                new_capacity = max(0, scalesets(manager)[scaleset] - length(ids))
+                scalesets(manager)[scaleset] = new_capacity
+                delete!(pending_down(manager), scaleset)
+            catch e
+                if status(e) in (404, 409)
+                    @debug "scaleset $(scaleset.scalesetname) not found or already being deleted when attempting to delete vms, skipping."
+                    if haskey(pending_down(manager), scaleset)
+                        delete!(pending_down(manager), scaleset)
+                    end
+                else
+                    @error "error deleting scaleset vms, manual clean-up may be required."
+                    logerror(e, Logging.Debug)
                 end
-            else
-                @error "error deleting scaleset vms, manual clean-up may be required."
-                logerror(e, Logging.Debug)
             end
         end
     end
-    unlock(manager.lock)
     nothing
 end
 
 # sync server and client side views of the resources
 function scaleset_sync()
     manager = azmanager()
-    lock(manager.lock)
-    try
-        _pending_down = pending_down(manager)
-        pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
-        if nprocs()-1+pending_down_count != nworkers_provisioned()
-            @debug "client/server scaleset book-keeping mismatch, synching client to server."
-            _scalesets = scalesets(manager)
-            for scaleset in keys(_scalesets)
-                _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+    lock(manager.lock) do
+        try
+            _pending_down = pending_down(manager)
+            pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
+            if nprocs()-1+pending_down_count != nworkers_provisioned()
+                @debug "client/server scaleset book-keeping mismatch, synching client to server."
+                _scalesets = scalesets(manager)
+                for scaleset in keys(_scalesets)
+                    _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+                end
             end
+        catch e
+            @error "scaleset syncing error"
+            logerror(e, Logging.Debug)
         end
-    catch e
-        @error "scaleset syncing error"
-        logerror(e, Logging.Debug)
     end
-    unlock(manager.lock)
 end
 
 function prune_cluster()
@@ -368,17 +322,17 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
     t = @async begin
         r = @retry manager.nretry HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute/storageProfile/imageReference?api-version=2021-02-01", ["Metadata"=>"true"]; retry=false, redirect=false)
     end
-    tic = time()
-    while !istaskdone(t)
-        (time() - tic) > 10 && break
-        sleep(1)
+    watchdog = Timer(10.0) do _
+        if !istaskdone(t)
+            @async Base.throwto(t, InterruptException())
+        end
     end
-
-    istaskdone(t) || @async Base.throwto(t, InterruptException)
     r = try
         fetch(t)
     catch
         nothing
+    finally
+        close(watchdog)
     end
 
     local _image
@@ -591,6 +545,119 @@ function scaleset_image!(manager::AzManager, template, sigimagename, sigimagever
     end
 end
 
+function software_sanity_check(manager, imagename, custom_environment)
+    projectinfo = Pkg.project()
+    envpath = normpath(joinpath(projectinfo.path, ".."))
+    manifest_path = joinpath(envpath, "Manifest.toml")
+
+    if !isfile(manifest_path)
+        @debug "No Manifest.toml found at $manifest_path — skipping software sanity check"
+        return
+    end
+
+    _packages = TOML.parse(read(manifest_path, String))
+    packages = _packages["deps"]
+
+    if custom_environment
+        dev_packages = _detect_dev_packages(read(manifest_path, String), envpath)
+        if !isempty(dev_packages)
+            dev_names = join([name for (name, _, _) in dev_packages], ", ")
+            error("Project has Pkg.develop'd packages ($dev_names). " *
+                  "Workers cannot resolve local paths. Please Pkg.add these packages " *
+                  "and push all code changes before using customenv=true.")
+        end
+    end
+end
+
+"""
+    _detect_dev_packages(manifest_text, base_path) -> Vector{Tuple{String,String,String}}
+
+Detect Pkg.develop'd packages in a Manifest and return their git info as
+`(name, repo_url, repo_rev)` tuples. Packages without a discoverable git repo
+are logged as warnings and omitted.
+"""
+function _detect_dev_packages(manifest_text, base_path)
+    manifest = TOML.parse(manifest_text)
+    dev_pkgs = Tuple{String,String,String}[]
+
+    if !haskey(manifest, "deps")
+        return dev_pkgs
+    end
+
+    for (pkg_name, entries) in manifest["deps"]
+        for entry in entries
+            if haskey(entry, "path")
+                pkg_path = entry["path"]
+                pkg_path = isabspath(pkg_path) ? normpath(pkg_path) : normpath(joinpath(base_path, pkg_path))
+
+                try
+                    repo_url = readchomp(Cmd(["git", "-C", pkg_path, "remote", "get-url", "origin"]))
+                    repo_rev = readchomp(Cmd(["git", "-C", pkg_path, "rev-parse", "--abbrev-ref", "HEAD"]))
+                    if repo_rev == "HEAD"  # detached HEAD → use commit SHA
+                        repo_rev = readchomp(Cmd(["git", "-C", pkg_path, "rev-parse", "HEAD"]))
+                    end
+                    # Convert SSH URLs to HTTPS so workers can authenticate via .git-credentials
+                    m = match(r"^git@([^:]+):(.+)$", repo_url)
+                    if m !== nothing
+                        repo_url = "https://$(m.captures[1])/$(m.captures[2])"
+                    end
+                    push!(dev_pkgs, (pkg_name, repo_url, repo_rev))
+                    @debug "Dev'd package '$pkg_name' at $pkg_path → $repo_url#$repo_rev"
+                catch e
+                    @warn "Cannot determine git info for dev'd package '$pkg_name' at $pkg_path; " *
+                          "it will be removed from the worker environment" exception=e
+                end
+            end
+        end
+    end
+
+    dev_pkgs
+end
+
+function sanitize_manifest(manifest_text)
+    manifest = TOML.parse(manifest_text)
+    if haskey(manifest, "deps")
+        for (pkg, entries) in manifest["deps"]
+            for entry in entries
+                delete!(entry, "path")
+            end
+        end
+    end
+    io = IOBuffer()
+    TOML.print(io, manifest)
+    String(take!(io))
+end
+
+function compress_environment(julia_environment_folder)
+    project_text = read(joinpath(julia_environment_folder, "Project.toml"), String)
+    manifest_text = read(joinpath(julia_environment_folder, "Manifest.toml"), String)
+
+    manifest_text = sanitize_manifest(manifest_text)
+
+    localpreferences_text = isfile(joinpath(julia_environment_folder, "LocalPreferences.toml")) ? read(joinpath(julia_environment_folder, "LocalPreferences.toml"), String) : ""
+    local project_compressed,manifest_compressed,localpreferences_compressed
+    with_logger(ConsoleLogger(stdout, Logging.Info)) do
+        project_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(project_text)))
+        manifest_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(manifest_text)))
+        localpreferences_compressed = base64encode(CodecZlib.transcode(ZlibCompressor, Vector{UInt8}(localpreferences_text)))
+    end
+
+    project_compressed, manifest_compressed, localpreferences_compressed
+end
+
+function decompress_environment(project_compressed, manifest_compressed, localpreferences_compressed, remote_julia_environment_name)
+    mkpath(joinpath(Pkg.envdir(), remote_julia_environment_name))
+
+    text = String(CodecZlib.transcode(ZlibDecompressor, Vector{UInt8}(base64decode(project_compressed))))
+    write(joinpath(Pkg.envdir(), remote_julia_environment_name, "Project.toml"), text)
+    text = String(CodecZlib.transcode(ZlibDecompressor, Vector{UInt8}(base64decode(manifest_compressed))))
+    write(joinpath(Pkg.envdir(), remote_julia_environment_name, "Manifest.toml"), text)
+    text = String(CodecZlib.transcode(ZlibDecompressor, Vector{UInt8}(base64decode(localpreferences_compressed))))
+    if text != ""
+        write(joinpath(Pkg.envdir(), remote_julia_environment_name, "LocalPreferences.toml"), text)
+    end
+end
+
 function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     location = template["location"]
 
@@ -674,6 +741,82 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     ncores_spot_available = ncores_spot_limit - ncores_spot_current
 
     ncores_available - (ncores_per_machine * δn), ncores_spot_available - (ncores_per_machine * δn)
+end
+
+function nphysical_cores(template::Dict; session=AzSession())
+    ssid = template["subscriptionid"]
+    region = template["value"]["location"]
+    sku_name = template["value"]["properties"]["hardwareProfile"]["vmSize"]
+
+    _r = HTTP.request("GET", 
+        "https://management.azure.com/subscriptions/$ssid/providers/Microsoft.Compute/skus?api-version=2022-11-01", 
+        ["Authorization" => "Bearer $(token(session))"])
+    r = JSON.parse(String(_r.body))
+
+
+    filtered_skus = filter(sku -> sku["name"] == sku_name && haskey(sku, "capabilities") && any(location -> location == region, sku["locations"]), r["value"])
+
+    vCPU_details = [(cap["value"], any(cap -> cap["name"] == "HyperThreadingEnabled" && cap["value"] == "true", sku["capabilities"])) for sku in filtered_skus for cap in sku["capabilities"] if cap["name"] == "vCPUs"]
+    hyperthreading = vCPU_details[1][2]
+    vCPU = vCPU_details[1][1]
+
+    # Number of physical cores
+    pCPU = hyperthreading ? div(parse(Int,vCPU),2) : parse(Int,vCPU)
+end
+
+function nphysical_cores(template::AbstractString; session=AzSession())
+    isfile(templates_filename_vm()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
+
+    templates_scaleset = JSON.parse(read(templates_filename_vm(), String); dicttype=Dict)
+    haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
+    template = templates_scaleset[template]
+
+    nphysical_cores(template; session)
+end
+
+function getnextlinks!(manager::AzManager, _r, value, nextlink, nretry, verbose)
+    while nextlink != ""
+        _r = @retry nretry azrequest(
+            "GET",
+            verbose,
+            nextlink,
+            ["Authorization"=>"Bearer $(token(manager.session))"])
+        r = JSON.parse(String(_r.body))
+        value = [value;get(r,"value",[])]
+        nextlink = get(r, "nextLink", "")
+    end
+    value, _r
+end
+
+function resourcegraphrequest(manager, body)
+    skiptoken = ""
+    data = []
+    local _r
+    while true
+        if skiptoken != ""
+            body["\$skipToken"] = skiptoken
+        end
+        _r = @retry manager.nretry azrequest(
+            "POST",
+            manager.verbose,
+            "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01",
+            ["Authorization"=>"Bearer $(token(manager.session))", "Content-Type"=>"application/json"],
+            JSON.json(body)
+        )
+        r = JSON.parse(String(_r.body))
+        data = [data;get(r, "data", [])]
+        skiptoken = get(r, "\$skipToken", "")
+
+        if skiptoken == ""
+            break
+        end
+    end
+
+    if manager.show_quota
+        @info "Quota after getting instances for scaleset pruning" remaining_resource(_r)
+    end
+
+    data
 end
 
 function list_scalesets(manager::AzManager, subscriptionid, resourcegroup, nretry, verbose)
@@ -865,14 +1008,19 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     @debug "about to check quota"
 
     # check usage/quotas
-    while true
+    max_quota_retries = parse(Int, get(ENV, "JULIA_AZMANAGERS_QUOTA_MAX_RETRIES", "60"))
+    for quota_attempt in 1:max_quota_retries
         navailable_cores, navailable_cores_spot = quotacheck(manager, subscriptionid, _template, δn, nretry, verbose)
         if spot
             navailable_cores_spot >= 0 && break
-            @warn "Insufficient spot quota, $(-navailable_cores_spot) too few cores left in quota.  Sleeping for 60 seconds before trying again.  Ctrl-C to cancel."
+            @warn "Insufficient spot quota, $(-navailable_cores_spot) too few cores left in quota.  Attempt $quota_attempt/$max_quota_retries, sleeping for 60 seconds.  Ctrl-C to cancel."
         else
             navailable_cores >= 0 && break
-            @warn "Insufficient quota, $(-navailable_cores) too few cores left in quota. Sleeping for 60 seconds before trying again. Ctrl-C to cancel."
+            @warn "Insufficient quota, $(-navailable_cores) too few cores left in quota. Attempt $quota_attempt/$max_quota_retries, sleeping for 60 seconds. Ctrl-C to cancel."
+        end
+
+        if quota_attempt == max_quota_retries
+            error("Exhausted $max_quota_retries quota retries (~$(max_quota_retries) minutes). Insufficient quota to provision $δn VMs.")
         end
 
         try

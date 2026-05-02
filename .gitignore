@@ -6,4 +6,5 @@ deps/build.log
 deps/usr
 docs/build
 .vscode
+.context
 logs

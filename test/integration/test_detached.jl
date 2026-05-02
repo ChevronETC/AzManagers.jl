@@ -57,7 +57,7 @@ include(joinpath(@__DIR__, "common.jl"))
         @info "@detach persist=true: provision VM, run 2 jobs on same VM → expect stdout/stderr and status"
         job1 = nothing
         try
-            job1 = @detach vm(;vm_template=TEMPLATENAME, session=SESSION, persist=true, exename=EXENAME) begin
+            job1 = @detach vm(;vm_template=TEMPLATENAME, session=SESSION, persist=true, exename=EXENAME, basename="detpr") begin
                 write(stdout, "detach-job1-stdout")
                 write(stderr, "detach-job1-stderr")
             end
@@ -82,7 +82,7 @@ include(joinpath(@__DIR__, "common.jl"))
         @info "@detach persist=false: provision VM, run job → expect auto-cleanup"
         job3 = nothing
         try
-            job3 = @detach vm(;vm_template=TEMPLATENAME, session=SESSION, persist=false, exename=EXENAME) begin
+            job3 = @detach vm(;vm_template=TEMPLATENAME, session=SESSION, persist=false, exename=EXENAME, basename="detnp") begin
                 write(stdout, "auto-destruct")
             end
             wait(job3)
