@@ -17,8 +17,9 @@ handle(manager, event::ManagerEvent) = @warn "unhandled event type: $(typeof(eve
 
 function handle(manager, ::PruneTick)
     try
-        prune_cluster()
-        prune_scalesets()
+        all_vms = list_all_scaleset_vms(manager)
+        prune_cluster(all_vms)
+        prune_scalesets(all_vms)
     catch e
         @debug "scaleset pruning error" exception=(e, catch_backtrace())
     end
@@ -29,7 +30,8 @@ function handle(manager, ::CleanTick)
         delete_pending_down_vms()
         delete_empty_scalesets()
         scaleset_sync()
-        prune_cluster()
+        all_vms = list_all_scaleset_vms(manager)
+        prune_cluster(all_vms)
     catch e
         @debug "scaleset cleaning error" exception=(e, catch_backtrace())
     end
