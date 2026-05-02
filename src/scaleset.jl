@@ -75,7 +75,7 @@ function scaleset_sync()
     end
 end
 
-function prune_cluster()
+function prune_cluster(all_vms::Dict{ScaleSet, Vector}=Dict{ScaleSet, Vector}())
     manager = azmanager()
 
     # list of workers registered with Distributed.jl
@@ -88,10 +88,15 @@ function prune_cluster()
         end
     end
 
+    # Fetch VM data if not provided
+    if isempty(all_vms)
+        all_vms = list_all_scaleset_vms(manager)
+    end
+
     # remove from list workers that have a corresponding scale-set vm instance.  What remains can be deleted from the cluster.
     _scalesets = scalesets(manager)
     for scaleset in keys(_scalesets)
-        vms = list_scaleset_vms(manager, scaleset)
+        vms = get(all_vms, scaleset, [])
 
         vm_names = String[]
         for vm in vms
@@ -138,9 +143,16 @@ function prune_cluster()
     end
 end
 
-function prune_scalesets()
+function prune_scalesets(all_vms::Dict{ScaleSet, Vector}=Dict{ScaleSet, Vector}())
     worker_timeout = Second(parse(Int, get(ENV, "JULIA_AZMANAGERS_VM_JOIN_TIMEOUT", "720")))
     manager = azmanager()
+
+    _scalesets = scalesets(manager)
+
+    # Fetch VM data if not provided
+    if isempty(all_vms)
+        all_vms = list_all_scaleset_vms(manager)
+    end
 
     _scalesets = scalesets(manager)
 
@@ -164,7 +176,7 @@ function prune_scalesets()
 
     for scaleset in keys(_scalesets)
         # update scale-set instances
-        _vms = list_scaleset_vms(manager, scaleset)
+        _vms = get(all_vms, scaleset, [])
 
         for _vm in _vms
             instanceid = split(_vm["id"],'/')[end]
@@ -831,19 +843,16 @@ function list_scalesets(manager::AzManager, subscriptionid, resourcegroup, nretr
 end
 
 function list_scaleset_vms_uniform(manager, scaleset)
-    _r = @retry manager.nretry azrequest(
-            "GET",
-            manager.verbose,
-            "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)/virtualMachines?api-version=2022-11-01",
-            ["Authorization"=>"Bearer $(token(manager.session))"])
-    r = JSON.parse(String(_r.body))
-    vms,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), manager.nretry, manager.verbose)
-
-    if manager.show_quota
-        @info "Quota after getting instances for scaleset pruning" remaining_resource(_r)
-    end
-
-    vms
+    body = Dict(
+        "subscriptions" => [scaleset.subscriptionid],
+        "query" => """ComputeResources
+            | where type =~ "microsoft.compute/virtualmachinescalesets/virtualmachines"
+            | where resourceGroup =~ "$(scaleset.resourcegroup)"
+            | extend scalesetName = tolower(tostring(split(id, '/')[8]))
+            | where scalesetName == "$(scaleset.scalesetname)"
+            | project id, name, properties"""
+    )
+    resourcegraphrequest(manager, body)
 end
 
 function list_scaleset_vms_flexible(manager, scaleset)
@@ -857,29 +866,77 @@ function list_scaleset_vms_flexible(manager, scaleset)
     vms
 end
 
-function list_scaleset_vms(manager, scaleset)
-    local vms, _r
-    try
-        _r = @retry manager.nretry azrequest(
-            "GET",
-            manager.verbose,
-            "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)?api-version=2023-03-01",
-            ["Authorization"=>"Bearer $(token(manager.session))"])
-    catch e
-        if status(e) == 404
-            # the scale-set does not exist, so the set of vms is empty
-            return []
+"""
+    list_all_scaleset_vms(manager) -> Dict{ScaleSet, Vector}
+
+Retrieve all VMs across all tracked scale sets using Resource Graph.
+Uniform VMSS VMs are queried from the ComputeResources table.
+Flexible VMSS VMs are queried from the Resources table.
+Returns a dict mapping each ScaleSet to its list of VM dicts (with id, name, properties).
+"""
+function list_all_scaleset_vms(manager)
+    _scalesets = scalesets(manager)
+    isempty(_scalesets) && return Dict{ScaleSet, Vector}()
+
+    result = Dict{ScaleSet, Vector}()
+    for ss in keys(_scalesets)
+        result[ss] = []
+    end
+
+    # Group scale sets by (subscription, resource group) for batched queries
+    groups = Dict{Tuple{String,String}, Vector{ScaleSet}}()
+    for ss in keys(_scalesets)
+        key = (ss.subscriptionid, ss.resourcegroup)
+        push!(get!(groups, key, ScaleSet[]), ss)
+    end
+
+    for ((subid, rg), group_scalesets) in groups
+        ss_by_name = Dict{String, ScaleSet}(ss.scalesetname => ss for ss in group_scalesets)
+
+        # Uniform VMSS VMs: ComputeResources table
+        uniform_body = Dict(
+            "subscriptions" => [subid],
+            "query" => """ComputeResources
+                | where type =~ "microsoft.compute/virtualmachinescalesets/virtualmachines"
+                | where resourceGroup =~ "$rg"
+                | project id, name, properties,
+                    scalesetName = tolower(tostring(split(id, '/')[8]))"""
+        )
+        for vm in resourcegraphrequest(manager, uniform_body)
+            ssname = get(vm, "scalesetName", "")
+            if haskey(ss_by_name, ssname)
+                push!(result[ss_by_name[ssname]], vm)
+            end
+        end
+
+        # Flexible VMSS VMs: Resources table
+        flexible_body = Dict(
+            "subscriptions" => [subid],
+            "query" => """Resources
+                | where type =~ "microsoft.compute/virtualmachines"
+                | where resourceGroup =~ "$rg"
+                | where isnotempty(properties.virtualMachineScaleSet)
+                | project id, name, properties,
+                    scalesetName = tolower(tostring(split(properties.virtualMachineScaleSet.id, '/')[8]))"""
+        )
+        for vm in resourcegraphrequest(manager, flexible_body)
+            ssname = get(vm, "scalesetName", "")
+            if haskey(ss_by_name, ssname)
+                push!(result[ss_by_name[ssname]], vm)
+            end
         end
     end
-    r = JSON.parse(String(_r.body))
 
-    local vms
-    if get(get(r, "properties", Dict()), "orchestrationMode", "Uniform") == "Flexible"
-        vms = list_scaleset_vms_flexible(manager, scaleset)
-    else
-        vms = list_scaleset_vms_uniform(manager, scaleset)
+    result
+end
+
+function list_scaleset_vms(manager, scaleset)
+    # Query both tables — a scale set is either Uniform or Flexible, not both
+    vms = list_scaleset_vms_uniform(manager, scaleset)
+    if !isempty(vms)
+        return vms
     end
-    vms
+    list_scaleset_vms_flexible(manager, scaleset)
 end
 
 function scaleset_capacity(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
