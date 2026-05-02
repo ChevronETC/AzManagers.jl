@@ -90,17 +90,22 @@ function check_pending_deletions(manager)
 end
 
 function handle(manager, event::SocketAccepted)
-    push!(manager.socket_batch, event.socket)
-    @debug "socket added to batch" batch_size=length(manager.socket_batch)
+    @debug "socket accepted, spawning validation"
+    @async validate_connection(manager, event.socket)
+end
+
+function handle(manager, event::ConnectionValidated)
+    push!(manager.wconfig_batch, event.wconfig)
+    @debug "validated connection added to batch" batch_size=length(manager.wconfig_batch)
 
     # Flush immediately if batch is full
-    if length(manager.socket_batch) >= manager.batch_max
-        flush_socket_batch(manager)
+    if length(manager.wconfig_batch) >= manager.batch_max
+        flush_wconfig_batch(manager)
         return
     end
 
-    # Arm flush timer on first socket in a new batch
-    if length(manager.socket_batch) == 1
+    # Arm flush timer on first wconfig in a new batch
+    if length(manager.wconfig_batch) == 1
         flush_delay = parse(Float64, get(ENV, "JULIA_AZMANAGERS_BATCH_FLUSH_DELAY",
             get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "5.0")))
         manager.timer_batch_flush = Timer(flush_delay) do _
@@ -114,7 +119,7 @@ function handle(manager, event::SocketAccepted)
 end
 
 function handle(manager, ::BatchFlushTick)
-    flush_socket_batch(manager)
+    flush_wconfig_batch(manager)
 end
 
 function handle(manager, event::WorkersChanged)

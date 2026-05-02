@@ -396,7 +396,7 @@ end
 @testset "run_event_loop — process and shutdown" begin
     mgr = AzManagers.AzManager()
     mgr.events = Channel{AzManagers.ManagerEvent}(16)
-    mgr.socket_batch = Sockets.TCPSocket[]
+    mgr.wconfig_batch = Distributed.WorkerConfig[]
     mgr.batch_max = 64
     mgr.workers_changed = Threads.Condition()
     mgr.lock = ReentrantLock()
@@ -417,7 +417,7 @@ end
     mgr.timer_prune = Timer(999)
     mgr.timer_clean = Timer(999)
     mgr.lock = ReentrantLock()
-    mgr.socket_batch = Sockets.TCPSocket[]
+    mgr.wconfig_batch = Distributed.WorkerConfig[]
     mgr.batch_max = 64
     mgr.workers_changed = Threads.Condition()
 
@@ -433,27 +433,23 @@ end
     @test !isopen(mgr.events)
 end
 
-@testset "SocketAccepted batching" begin
+@testset "ConnectionValidated batching" begin
     mgr = AzManagers.AzManager()
     mgr.events = Channel{AzManagers.ManagerEvent}(64)
-    mgr.socket_batch = Sockets.TCPSocket[]
+    mgr.wconfig_batch = Distributed.WorkerConfig[]
     mgr.batch_max = 3
     mgr.lock = ReentrantLock()
     mgr.workers_changed = Threads.Condition()
 
-    # Create a real socket pair for type correctness
-    server = listen(getipaddr(), 0)
-    port = getsockname(server)[2]
-    client = connect(getipaddr(), port)
-    accepted = accept(server)
+    # Create a mock WorkerConfig
+    wconfig = Distributed.WorkerConfig()
+    wconfig.bind_addr = "10.0.0.1"
+    wconfig.exename = "julia"
 
-    AzManagers.handle(mgr, AzManagers.SocketAccepted(client))
-    @test length(mgr.socket_batch) == 1
+    AzManagers.handle(mgr, AzManagers.ConnectionValidated(wconfig))
+    @test length(mgr.wconfig_batch) == 1
     @test isdefined(mgr, :timer_batch_flush)
 
-    close(client)
-    close(accepted)
-    close(server)
     close(mgr.events)
 end
 
@@ -503,7 +499,7 @@ end
 
     # New fields undefined on bare constructor
     @test !isdefined(mgr, :events)
-    @test !isdefined(mgr, :socket_batch)
+    @test !isdefined(mgr, :wconfig_batch)
     @test !isdefined(mgr, :task_accept)
     @test !isdefined(mgr, :task_event_loop)
     @test !isdefined(mgr, :timer_prune)
@@ -519,18 +515,18 @@ end
     @test !hasfield(AzManagers.AzManager, :task_clean)
 end
 
-@testset "flush_socket_batch — empty batch is no-op" begin
+@testset "flush_wconfig_batch — empty batch is no-op" begin
     mgr = AzManagers.AzManager()
     mgr.events = Channel{AzManagers.ManagerEvent}(16)
-    mgr.socket_batch = Sockets.TCPSocket[]
+    mgr.wconfig_batch = Distributed.WorkerConfig[]
     mgr.batch_max = 64
     mgr.lock = ReentrantLock()
     mgr.timer_batch_flush = Timer(999)
     mgr.workers_changed = Threads.Condition()
 
-    AzManagers.flush_socket_batch(mgr)
+    AzManagers.flush_wconfig_batch(mgr)
 
-    @test isempty(mgr.socket_batch)
+    @test isempty(mgr.wconfig_batch)
     @test !isopen(mgr.timer_batch_flush)
     close(mgr.events)
 end
@@ -909,7 +905,7 @@ end
 @testset "CleanTick handler calls log_health_summary" begin
     mgr = AzManagers.AzManager()
     mgr.events = Channel{AzManagers.ManagerEvent}(16)
-    mgr.socket_batch = Sockets.TCPSocket[]
+    mgr.wconfig_batch = Distributed.WorkerConfig[]
     mgr.batch_max = 64
     mgr.workers_changed = Threads.Condition()
     mgr.lock = ReentrantLock()
@@ -935,7 +931,7 @@ end
 @testset "PruneTick handler records prune time" begin
     mgr = AzManagers.AzManager()
     mgr.events = Channel{AzManagers.ManagerEvent}(16)
-    mgr.socket_batch = Sockets.TCPSocket[]
+    mgr.wconfig_batch = Distributed.WorkerConfig[]
     mgr.batch_max = 64
     mgr.workers_changed = Threads.Condition()
     mgr.lock = ReentrantLock()

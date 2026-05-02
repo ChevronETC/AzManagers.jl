@@ -32,7 +32,7 @@ mutable struct AzManager <: ClusterManager
     ssh_user::String
     workers_changed::Threads.Condition
     events::Channel{ManagerEvent}
-    socket_batch::Vector{TCPSocket}
+    wconfig_batch::Vector{WorkerConfig}
     batch_max::Int
     pending_deletions::Vector{@NamedTuple{vmname::String, url::String, session::AzSessionAbstract, started::Float64}}
     metrics::ManagerMetrics
@@ -66,7 +66,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.scaleset_request_counter = 0
     _manager.workers_changed = Threads.Condition()
     _manager.events = Channel{ManagerEvent}(256)
-    _manager.socket_batch = TCPSocket[]
+    _manager.wconfig_batch = WorkerConfig[]
     _manager.batch_max = 64
     _manager.pending_deletions = @NamedTuple{vmname::String, url::String, session::AzSessionAbstract, started::Float64}[]
     _manager.metrics = ManagerMetrics()

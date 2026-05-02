@@ -14,13 +14,58 @@ function accept_connections(manager)
     end
 end
 
-function Distributed.addprocs(manager::AzManager; sockets)
+function validate_connection(manager, socket)
+    timeout = parse(Float64, get(ENV, "JULIA_AZMANAGERS_VALIDATION_TIMEOUT", "30.0"))
+    tsk = @async _read_worker_config(socket)
+
+    watchdog = Timer(timeout) do _
+        if !istaskdone(tsk)
+            @async Base.throwto(tsk, InterruptException())
+        end
+    end
+
+    local wconfig
+    try
+        wconfig = fetch(tsk)
+    catch e
+        @warn "connection validation failed, discarding socket" exception=(e, catch_backtrace())
+        isdefined(manager, :metrics) && record_connection_validation_failed!(manager.metrics)
+        close(socket)
+        return
+    finally
+        close(watchdog)
+    end
+
+    put!(manager.events, ConnectionValidated(wconfig))
+end
+
+function _read_worker_config(socket)
+    _cookie = read(socket, Distributed.HDR_COOKIE_LEN)
+    cookie = String(_cookie)
+    cookie == Distributed.cluster_cookie() || error("Invalid cookie sent by remote worker.")
+
+    _connection_string = readline(socket)
+    connection_string = String(base64decode(_connection_string))
+    vm = JSON.parse(connection_string)
+
+    wconfig = WorkerConfig()
+    wconfig.io = socket
+    wconfig.bind_addr = vm["bind_addr"]
+    wconfig.count = vm["ppi"]
+    wconfig.exename = "julia"
+    wconfig.exeflags = `$(vm["exeflags"])`
+    wconfig.userdata = vm["userdata"]
+
+    wconfig
+end
+
+function Distributed.addprocs(manager::AzManager; wconfigs)
     pids = []
     try
         Distributed.init_multi()
         Distributed.cluster_mgmt_from_master_check()
         lock(Distributed.worker_lock)
-        pids = Distributed.addprocs_locked(manager; sockets)
+        pids = Distributed.addprocs_locked(manager; wconfigs)
     catch e
         @warn "error processing pending connections" exception=(e, catch_backtrace())
     finally
@@ -29,11 +74,11 @@ function Distributed.addprocs(manager::AzManager; sockets)
     pids
 end
 
-function addprocs_with_timeout(manager; sockets)
+function addprocs_with_timeout(manager; wconfigs)
     # Distributed.setup_launched_worker also uses Distributed.worker_timeout, so we add a grace period
     # to allow for the Distributed.setup_launched_worker to hit its timeout.
     timeout = Distributed.worker_timeout() + 30
-    tsk = @async addprocs(manager; sockets)
+    tsk = @async addprocs(manager; wconfigs)
 
     # Arm a watchdog that interrupts the task on timeout
     watchdog = Timer(timeout) do _
@@ -55,18 +100,18 @@ function addprocs_with_timeout(manager; sockets)
     pids
 end
 
-function flush_socket_batch(manager)
-    sockets = copy(manager.socket_batch)
-    empty!(manager.socket_batch)
+function flush_wconfig_batch(manager)
+    wconfigs = copy(manager.wconfig_batch)
+    empty!(manager.wconfig_batch)
 
     if isdefined(manager, :timer_batch_flush)
         close(manager.timer_batch_flush)
     end
 
-    isempty(sockets) && return
+    isempty(wconfigs) && return
 
-    @debug "flushing batch" count=length(sockets)
-    pids = addprocs_with_timeout(manager; sockets)
+    @debug "flushing batch" count=length(wconfigs)
+    pids = addprocs_with_timeout(manager; wconfigs)
     @debug "batch done" pids=pids count=length(pids)
 
     if !isempty(pids)
@@ -344,57 +389,12 @@ function Distributed.addprocs(mgr::AzManager, template::AbstractString, n::Int; 
 end
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)
-    sockets = params[:sockets]
+    wconfigs = params[:wconfigs]
 
-    @sync for socket in sockets
-        @async try
-            Distributed.launch_on_machine(manager, launched, c, socket)
-        catch e
-            @error "failed to launch worker" exception=(e, catch_backtrace())
-        end
+    for wconfig in wconfigs
+        push!(launched, wconfig)
+        notify(c)
     end
-    notify(c)
-end
-
-function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
-    local _cookie
-    try
-        _cookie = read(socket, Distributed.HDR_COOKIE_LEN)
-    catch e
-        @error "unable to read cookie from socket" exception=(e, catch_backtrace())
-        return
-    end
-
-    cookie = String(_cookie)
-    cookie == Distributed.cluster_cookie() || error("Invalid cookie sent by remote worker.")
-
-    local _connection_string
-    try
-        _connection_string = readline(socket)
-    catch e
-        @error "unable to read connection string from socket"
-        throw(e)
-    end
-
-    connection_string = String(base64decode(_connection_string))
-
-    local vm
-    try
-        vm = JSON.parse(connection_string)
-    catch e
-        @error "unable to parse connection string, string=$connection_string, cookie=$cookie"
-        throw(e)
-    end
-
-    wconfig = WorkerConfig()
-    wconfig.io = socket
-    wconfig.bind_addr = vm["bind_addr"]
-    wconfig.count = vm["ppi"]
-    wconfig.exename = "julia"
-    wconfig.exeflags = `$(vm["exeflags"])`
-    wconfig.userdata = vm["userdata"]
-
-    push!(launched, wconfig)
     notify(c)
 end
 

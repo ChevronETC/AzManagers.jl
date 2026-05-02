@@ -13,6 +13,7 @@ mutable struct ManagerMetrics
     workers_preempted::Int
     workers_pruned::Int
     workers_join_failed::Int
+    connections_validation_failed::Int
 
     # Scale-set lifecycle
     scalesets_created::Int
@@ -36,7 +37,7 @@ mutable struct ManagerMetrics
 
     function ManagerMetrics()
         new(
-            0, 0, 0, 0, 0,  # worker counters
+            0, 0, 0, 0, 0, 0,  # worker counters
             0, 0,            # scaleset counters
             0, 0, 0, 0,     # API counters
             DateTime(0), DateTime(0), now(Dates.UTC),  # timestamps
@@ -109,6 +110,12 @@ function record_worker_join_failed!(m::ManagerMetrics)
     end
 end
 
+function record_connection_validation_failed!(m::ManagerMetrics)
+    lock(m.lock) do
+        m.connections_validation_failed += 1
+    end
+end
+
 function record_scaleset_created!(m::ManagerMetrics)
     lock(m.lock) do
         m.scalesets_created += 1
@@ -151,6 +158,7 @@ function metrics()
             workers_preempted   = m.workers_preempted,
             workers_pruned      = m.workers_pruned,
             workers_join_failed = m.workers_join_failed,
+            connections_validation_failed = m.connections_validation_failed,
             scalesets_created   = m.scalesets_created,
             scalesets_deleted   = m.scalesets_deleted,
             api_calls           = m.api_calls,
