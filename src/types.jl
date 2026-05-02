@@ -35,6 +35,7 @@ mutable struct AzManager <: ClusterManager
     socket_batch::Vector{TCPSocket}
     batch_max::Int
     pending_deletions::Vector{@NamedTuple{vmname::String, url::String, session::AzSessionAbstract, started::Float64}}
+    metrics::ManagerMetrics
 
     AzManager() = new()
 end
@@ -68,6 +69,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.socket_batch = TCPSocket[]
     _manager.batch_max = 64
     _manager.pending_deletions = @NamedTuple{vmname::String, url::String, session::AzSessionAbstract, started::Float64}[]
+    _manager.metrics = ManagerMetrics()
 
     _manager.task_accept = errormonitor(@async accept_connections(_manager))
     _manager.task_event_loop = errormonitor(@async run_event_loop(_manager))
@@ -75,10 +77,18 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     prune_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "120"))
     clean_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_CLEAN_POLL_INTERVAL", "60"))
     _manager.timer_prune = Timer(0.0; interval=prune_interval) do _
-        try put!(_manager.events, PruneTick()) catch end
+        try
+            put!(_manager.events, PruneTick())
+        catch e
+            @debug "failed to enqueue PruneTick" exception=(e, catch_backtrace())
+        end
     end
     _manager.timer_clean = Timer(Float64(clean_interval); interval=clean_interval) do _
-        try put!(_manager.events, CleanTick()) catch end
+        try
+            put!(_manager.events, CleanTick())
+        catch e
+            @debug "failed to enqueue CleanTick" exception=(e, catch_backtrace())
+        end
     end
 
     _manager
@@ -95,11 +105,16 @@ function __init__()
                     put!(manager.events, ShutdownRequested())
                     # Give the event loop a moment to process shutdown
                     sleep(0.5)
-                catch
+                catch e
+                    @debug "failed to enqueue ShutdownRequested" exception=(e, catch_backtrace())
                 end
             else
                 # Fallback if event loop isn't running
-                try delete_scalesets() catch end
+                try
+                    delete_scalesets()
+                catch e
+                    @warn "failed to delete scalesets during shutdown" exception=(e, catch_backtrace())
+                end
             end
         end
     end

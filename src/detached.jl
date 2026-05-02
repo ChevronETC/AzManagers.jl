@@ -135,7 +135,7 @@ function poll_detached_service(vm, custom_environment; timeout)
         elapsed_time = time() - starttime
 
         if elapsed_time > timeout
-            @error "reached timeout ($timeout seconds) while waiting for $waitfor to start."
+            @error "detached service poll timeout" timeout_seconds=timeout waitfor=waitfor vmname=vm["name"] port=vm["port"]
             throw(DetachedServiceTimeoutException(vm))
         end
 
@@ -393,7 +393,7 @@ function rmproc(vm;
     if r.status >= 300
         @warn "Problem removing VM, $vmname, status=$(r.status)"
     else
-        @info "VM '$vmname' deletion accepted by Azure (status=$(r.status))"
+        @info "VM deletion accepted" vmname=vmname status=r.status
 
         # Extract async operation URL for background verification
         async_url = ""
@@ -407,7 +407,8 @@ function rmproc(vm;
         if async_url != "" && isdefined(manager, :events) && isopen(manager.events)
             try
                 put!(manager.events, DeletionStarted(vmname, async_url, session))
-            catch
+            catch e
+                @debug "failed to enqueue DeletionStarted" vmname=vmname exception=(e, catch_backtrace())
             end
         end
     end
@@ -569,7 +570,7 @@ function detached_run(code, ip::String="", port=detached_port();
         JSON.json(body))
     r = JSON.parse(String(_r.body))
 
-    @info "detached job id is $(r["id"]) at $(vm["name"]),$(vm["ip"]):$(vm["port"])"
+    @info "detached job submitted" job_id=r["id"] vm_name=vm["name"] vm_ip=vm["ip"] port=vm["port"]
     DetachedJob(vm, string(r["id"]), string(r["pid"]), "")
 end
 
