@@ -74,8 +74,8 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.task_accept = errormonitor(@async accept_connections(_manager))
     _manager.task_event_loop = errormonitor(@async run_event_loop(_manager))
 
-    prune_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "120"))
-    clean_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_CLEAN_POLL_INTERVAL", "60"))
+    prune_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "30"))
+    clean_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_CLEAN_POLL_INTERVAL", "30"))
     _manager.timer_prune = Timer(0.0; interval=prune_interval) do _
         try
             put!(_manager.events, PruneTick())

@@ -19,10 +19,6 @@ function delete_empty_scalesets()
         _scalesets = scalesets(manager)
         for (scaleset, capacity) in _scalesets
             if capacity == 0
-                # double-check capacity in case there is client/server mis-match
-                _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
-            end
-            if _scalesets[scaleset] == 0
                 delete_scaleset(manager, scaleset)
             end
         end
@@ -64,8 +60,31 @@ function scaleset_sync()
             if nprocs()-1+pending_down_count != nworkers_provisioned()
                 @info "client/server scaleset book-keeping mismatch, syncing" client_count=nprocs()-1+pending_down_count server_count=nworkers_provisioned()
                 _scalesets = scalesets(manager)
-                for scaleset in keys(_scalesets)
-                    _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+
+                # Batch query: get all scaleset capacities in one Resource Graph call per (sub, rg) group
+                groups = Dict{Tuple{String,String}, Vector{ScaleSet}}()
+                for ss in keys(_scalesets)
+                    key = (ss.subscriptionid, ss.resourcegroup)
+                    push!(get!(groups, key, ScaleSet[]), ss)
+                end
+
+                for ((subid, rg), group_scalesets) in groups
+                    ss_names = [ss.scalesetname for ss in group_scalesets]
+                    name_filter = join(["\"$n\"" for n in ss_names], ", ")
+                    body = Dict(
+                        "subscriptions" => [subid],
+                        "query" => """Resources
+                            | where type =~ "microsoft.compute/virtualmachinescalesets"
+                            | where resourceGroup =~ "$rg"
+                            | where tolower(name) in ($name_filter)
+                            | project name=tolower(name), capacity=toint(sku.capacity)"""
+                    )
+                    results = resourcegraphrequest(manager, body)
+                    capacity_map = Dict{String,Int}(get(r, "name", "") => get(r, "capacity", 0) for r in results)
+
+                    for ss in group_scalesets
+                        _scalesets[ss] = get(capacity_map, ss.scalesetname, 0)
+                    end
                 end
             end
         catch e
@@ -77,66 +96,63 @@ end
 function prune_cluster(all_vms::Dict{ScaleSet, Vector}=Dict{ScaleSet, Vector}())
     manager = azmanager()
 
-    # list of workers registered with Distributed.jl
-    wrkrs = Dict{Int,Dict}()
-    for (pid,wrkr) in Distributed.map_pid_wrkr
-        if pid != 1 && isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
-            if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
-                wrkrs[pid] = wrkr.config.userdata
-            end
-        end
-    end
-
     # Fetch VM data if not provided
     if isempty(all_vms)
         all_vms = list_all_scaleset_vms(manager)
     end
 
-    # remove from list workers that have a corresponding scale-set vm instance.  What remains can be deleted from the cluster.
+    # Build set of instance IDs pending deletion (not yet removed from scaleset)
+    pending_instance_ids = Set{String}()
+    for (_, ids) in pending_down(manager)
+        union!(pending_instance_ids, ids)
+    end
+
+    # Build set of VM names with healthy provisioning states per scaleset
     _scalesets = scalesets(manager)
+    live_vms = Dict{ScaleSet, Set{String}}()
     for scaleset in keys(_scalesets)
         vms = get(all_vms, scaleset, [])
-
-        vm_names = String[]
+        names = Set{String}()
         for vm in vms
             status = get(get(vm, "properties", Dict()), "provisioningState", "none")
             if lowercase(status) ∈ ("creating", "updating", "succeeded")
-                push!(vm_names, vm["name"])
+                push!(names, vm["name"])
             end
         end
+        live_vms[scaleset] = names
+    end
 
-        for (id,wrkr) in wrkrs
-            _scaleset = ScaleSet(get(wrkr, "subscriptionid", ""), get(wrkr, "resourcegroup", ""), get(wrkr, "scalesetname", ""))
-            if _scaleset == scaleset && get(wrkr, "name", "") ∈ vm_names
-                delete!(wrkrs, id)
-            end
+    # Single pass over map_pid_wrkr: collect workers to prune
+    to_prune = Dict{Int,Dict}()
+    for (pid, wrkr) in Distributed.map_pid_wrkr
+        pid == 1 && continue
+        !isa(wrkr, Distributed.Worker) && continue
+        isdefined(wrkr, :state) && wrkr.state ∈ (Distributed.W_TERMINATED, Distributed.W_TERMINATING) && continue
+        !isdefined(wrkr, :config) && continue
+        !isdefined(wrkr.config, :userdata) && continue
+        !isa(wrkr.config.userdata, Dict) && continue
+
+        ud = wrkr.config.userdata
+        scaleset = ScaleSet(get(ud, "subscriptionid", ""), get(ud, "resourcegroup", ""), get(ud, "scalesetname", ""))
+
+        # Skip if worker's VM is still live in the scaleset
+        vm_name = get(ud, "name", "")
+        if haskey(live_vms, scaleset) && vm_name ∈ live_vms[scaleset]
+            continue
         end
-    end
 
-    # remove from list workers that are already scheduled for removal from the cluster
-    for id in pending_down(manager)
-        delete!(wrkrs, id)
-    end
-
-    # remove from list workers that are in TERMINATED or TERMINATING cluster state
-    for (id,wrkr) in Distributed.map_pid_wrkr
-        if isdefined(wrkr, :state) && wrkr.state ∈ (Distributed.W_TERMINATED, Distributed.W_TERMINATING)
-            delete!(wrkrs, id)
+        # Skip if instance is pending deletion
+        instance_id = get(ud, "instanceid", "")
+        if instance_id ∈ pending_instance_ids
+            continue
         end
+
+        to_prune[pid] = ud
     end
 
-    # remove from list workers that are in Distributed's deletion pool
-    for (id,wrkr) in Distributed.map_pid_wrkr
-        if isdefined(wrkr, :state) && wrkr.state ∈ (Distributed.W_TERMINATED, Distributed.W_TERMINATING)
-            delete!(wrkrs, id)
-        end
-    end
-
-    # remove workers that do not have a corresponding scale-set vm instance
-    for pid in keys(wrkrs)
-        @info "removing worker from cluster — no longer in scaleset" pid=pid vm_info=wrkrs[pid]
-        # We can't use rmprocs here since the worker process is gone.  The worker process would usually do the
-        # following two lines (see the Distributed.message_handler_loop function)
+    # Remove workers that no longer have a corresponding scale-set VM instance
+    for pid in keys(to_prune)
+        @info "removing worker from cluster — no longer in scaleset" pid=pid vm_info=to_prune[pid]
         Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
         Distributed.deregister_worker(pid)
     end
@@ -186,7 +202,11 @@ function prune_scalesets(all_vms::Dict{ScaleSet, Vector}=Dict{ScaleSet, Vector}(
             end
 
             # otherwise, decide if we should remove the instance from the scale-set
-            time_touched = get(get(manager.deleted, scaleset, Dict()), instanceid, DateTime(_vm["properties"]["timeCreated"][1:23], DateFormat("yyyy-mm-ddTHH:MM:SS.s")))
+            # Azure returns variable-precision fractional seconds (e.g. "2026-05-02T13:24:15.1234567Z")
+            # Truncate to "yyyy-mm-ddTHH:MM:SS.s" (first 21 chars covers up to tenths)
+            _tc_raw = replace(_vm["properties"]["timeCreated"], r"Z$" => "")
+            _tc_str = _tc_raw[1:min(21, length(_tc_raw))]
+            time_touched = get(get(manager.deleted, scaleset, Dict()), instanceid, DateTime(_tc_str, DateFormat("yyyy-mm-ddTHH:MM:SS.s")))
             time_elapsed = now(Dates.UTC) - time_touched
             vm_state = lowercase(get(get(_vm, "properties", Dict()), "provisioningState", "none"))
             is_worker_deleting = scaleset ∈ keys(manager.pending_down) && instanceid ∈ manager.pending_down[scaleset]
