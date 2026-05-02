@@ -1,4 +1,4 @@
-function logerror(e, loglevel=Logging.Info)
+function logerror(e, loglevel=Logging.Warn; context...)
     io = IOBuffer()
     showerror(io, e)
     write(io, "\n\terror type: $(typeof(e))\n")
@@ -7,7 +7,11 @@ function logerror(e, loglevel=Logging.Info)
         showerror(io, exc, bt)
         println(io)
     end
-    @logmsg loglevel String(take!(io))
+    if isempty(context)
+        @logmsg loglevel String(take!(io))
+    else
+        @logmsg loglevel String(take!(io)) context...
+    end
     close(io)
 end
 
@@ -47,11 +51,10 @@ function load_manifest()
                 _manifest[key] = get(manifest, key, "")
             end
         catch e
-            @error "Manifest file ($(AzManagers.manifestfile())) is not valid JSON"
-            throw(e)
+            throw(ManifestError(manifestfile(), "manifest file is not valid JSON"))
         end
     else
-        @error "Manifest file ($(AzManagers.manifestfile())) does not exist.  Use AzManagers.write_manifest to generate a manifest file."
+        throw(ManifestError(manifestfile(), "manifest file does not exist — use AzManagers.write_manifest to generate one"))
     end
 end
 
@@ -77,44 +80,63 @@ status(e::HTTP.StatusError) = e.status
 status(e) = 999
 
 function retrywarn(i, retries, s, e)
-    if isa(e, HTTP.ExceptionRequest.StatusError)
-        @debug "$(e.status): $(String(e.response.body)), retry $i of $retries, retrying in $s seconds"
+    if isa(e, HTTP.StatusError)
+        @debug "HTTP retry" status=e.status retry=i retries=retries backoff_seconds=round(s, digits=1)
         if e.status == 429
-            remaining_resource = nothing
+            remaining_resource = ""
             for header in e.response.headers
                 if header[1] == "x-ms-ratelimit-remaining-resource"
-                    remaining_resource = header
+                    remaining_resource = header[2]
                     break
                 end
             end
-            @warn "The Azure service is throttling the request, asking to retry after $s seconds.  Quota information:" remaining_resource[2]
+            @warn "Azure API throttled (429)" retry=i retries=retries backoff_seconds=round(s, digits=1) remaining_resource
+            _try_record_throttle()
         elseif e.status == 500
-            b = JSON.parse(String(e.response.body))
+            b = try JSON.parse(String(e.response.body)) catch; Dict() end
             errorcode = get(get(b, "error", Dict()), "code", "")
-            @warn "errorcode: $errorcode, retry $i, retrying in $s seconds"
+            @warn "Azure API server error (500)" error_code=errorcode retry=i retries=retries backoff_seconds=round(s, digits=1)
         elseif e.status == 409
-            b = JSON.parse(String(e.response.body))
+            b = try JSON.parse(String(e.response.body)) catch; Dict() end
             errorcode = get(get(b, "error", Dict()), "code", "")
             errormessage = get(get(b, "error", Dict()), "message", "")
-            @warn "($errorcode): $errormessage; retry $i of $retries, retrying in $s seconds"
+            @warn "Azure API conflict (409)" error_code=errorcode message=errormessage retry=i retries=retries backoff_seconds=round(s, digits=1)
         else
-            @warn "status=$(e.status): $(String(e.response.body)), retry $i of $retries, retrying in $s seconds"
+            @warn "Azure API error" status=e.status retry=i retries=retries backoff_seconds=round(s, digits=1)
         end
     else
-        @warn "warn: $(typeof(e)) -- retry $i, retrying in $s seconds"
+        @warn "retryable error" error_type=string(typeof(e)) retry=i retries=retries backoff_seconds=round(s, digits=1)
         logerror(e, Logging.Debug)
+    end
+end
+
+# Helper to record throttle metric without requiring manager to be initialized
+function _try_record_throttle()
+    try
+        manager = azmanager()
+        isdefined(manager, :metrics) && record_api_throttle!(manager.metrics)
+    catch
     end
 end
 
 macro retry(retries, ex::Expr)
     quote
         r = nothing
+        _retry_count = 0
         for i = 0:$(esc(retries))
             try
                 r = $(esc(ex))
+                if _retry_count > 0
+                    @debug "operation succeeded after retries" retries=_retry_count
+                end
                 break
             catch e
-                (i < $(esc(retries)) && isretryable(e)) || throw(e)
+                if !(i < $(esc(retries)) && isretryable(e))
+                    _try_record_api_error()
+                    throw(e)
+                end
+                _retry_count += 1
+                _try_record_api_retry()
                 maximum_backoff = 256
                 s = min(2.0^(i-1), maximum_backoff) + rand()
                 if status(e) ∈ (429,500)
@@ -133,9 +155,31 @@ macro retry(retries, ex::Expr)
     end
 end
 
-function azrequest(rtype, verbose, url, headers, body=nothing)
-    if contains(url, "virtualMachineScaleSets")
+function _try_record_api_retry()
+    try
         manager = azmanager()
+        isdefined(manager, :metrics) && record_api_retry!(manager.metrics)
+    catch
+    end
+end
+
+function _try_record_api_error()
+    try
+        manager = azmanager()
+        isdefined(manager, :metrics) && record_api_error!(manager.metrics)
+    catch
+    end
+end
+
+function azrequest(rtype, verbose, url, headers, body=nothing)
+    local manager
+    try
+        manager = azmanager()
+    catch
+        manager = nothing
+    end
+
+    if manager !== nothing && contains(url, "virtualMachineScaleSets")
         lock(manager.lock) do
             if isdefined(manager, :scaleset_request_counter)
                 manager.scaleset_request_counter += 1
@@ -143,6 +187,11 @@ function azrequest(rtype, verbose, url, headers, body=nothing)
                 manager.scaleset_request_counter = 1
             end
         end
+    end
+
+    # Record API call metric
+    if manager !== nothing && isdefined(manager, :metrics)
+        record_api_call!(manager.metrics)
     end
 
     options = (retry=false, status_exception=false)
