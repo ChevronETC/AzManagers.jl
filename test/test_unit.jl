@@ -1,22 +1,5 @@
 using AzManagers, Test, HTTP, JSON, Dates, Distributed, Logging, Pkg, TOML, Sockets, AzSessions
 
-@testset "spin" begin
-    s = AzManagers.spin(1, 12.345)
-    @test startswith(s, "◐")
-    @test contains(s, "12.35")
-    @test contains(s, "seconds")
-
-    s = AzManagers.spin(5, 0.0)
-    @test startswith(s, "✓")
-    @test contains(s, "0.00")
-
-    # All spinner characters
-    for i in 1:4
-        s = AzManagers.spin(i, 1.0)
-        @test s[1] ∈ ('◐', '◓', '◑', '◒')
-    end
-end
-
 @testset "nthreads_filter" begin
     @test AzManagers.nthreads_filter("4") == "4"
     @test AzManagers.nthreads_filter("4,0") == "4"

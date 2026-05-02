@@ -216,5 +216,3 @@ function scaleset_request_counter()
         return 1
     end
 end
-
-spin(spincount, elapsed_time) = ['◐','◓','◑','◒','✓'][spincount]*@sprintf(" %.2f",elapsed_time)*" seconds"

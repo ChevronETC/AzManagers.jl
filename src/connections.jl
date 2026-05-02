@@ -221,34 +221,6 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
 end
 
 
-function spinner(n_target_workers)
-    timeout = parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "720")) + 120
-    starttime = time()
-    spincount = 1
-
-    while (nprocs() == 1 ? 0 : nworkers()) != n_target_workers
-        elapsed = time() - starttime
-        if elapsed > timeout
-            n = nprocs() == 1 ? 0 : nworkers()
-            @printf(stdout, "\r  %d/%d workers up (%.1fs) — timed out\n", n, n_target_workers, elapsed)
-            flush(stdout)
-            error("Timed out after $(round(elapsed, digits=1))s waiting for workers: $n/$n_target_workers up. Consider increasing JULIA_WORKER_TIMEOUT.")
-        end
-
-        n = nprocs() == 1 ? 0 : nworkers()
-        @printf(stdout, "\r  %s %d/%d workers up (%.1fs)     ", string(spin(spincount, elapsed)[1]), n, n_target_workers, elapsed)
-        flush(stdout)
-        spincount = spincount == 4 ? 1 : spincount + 1
-        sleep(0.25)
-    end
-
-    elapsed = time() - starttime
-    n = nprocs() == 1 ? 0 : nworkers()
-    @printf(stdout, "\r  %d/%d workers running (%.1fs)\n", n, n_target_workers, elapsed)
-    flush(stdout)
-    nothing
-end
-
 function nthreads_filter(nthreads)
     _nthreads = split(string(nthreads), ',')
     nthreads_default = length(_nthreads) > 0 ? parse(Int, _nthreads[1]) : 1
@@ -372,8 +344,8 @@ function Distributed.addprocs(::AzManager, template::Dict, n::Int;
 
     if waitfor
         @info "Initiating cluster..."
-        spinner_tsk = @async spinner(n_current_workers + n)
-        wait(spinner_tsk)
+        progress = start_progress(manager, n_current_workers + n)
+        wait_for_progress(progress)
     end
 
     nothing

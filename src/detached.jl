@@ -33,36 +33,36 @@ Poll Azure until VM `vmname` reaches "Succeeded" state.  Returns nothing.
 Throws on "Failed" state or timeout.  Prints a spinner while waiting.
 """
 function poll_vm_ready(session, subscriptionid, resourcegroup, vmname; timeout, nretry, verbose)
-    spincount = 1
     starttime = time()
     poll_interval = 10
-    while true
-        sleep(poll_interval)
-        _r = @retry nretry azrequest(
-            "GET",
-            verbose,
-            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2022-11-01",
-            ["Authorization"=>"Bearer $(token(session))"])
-        r = JSON.parse(String(_r.body))
+    s = start_spinner(t -> "waiting for VM, $vmname, to start ($(round(t, digits=1))s)")
+    try
+        while true
+            sleep(poll_interval)
+            _r = @retry nretry azrequest(
+                "GET",
+                verbose,
+                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2022-11-01",
+                ["Authorization"=>"Bearer $(token(session))"])
+            r = JSON.parse(String(_r.body))
 
-        r["properties"]["provisioningState"] == "Succeeded" && break
+            r["properties"]["provisioningState"] == "Succeeded" && break
 
-        if r["properties"]["provisioningState"] == "Failed"
-            error("Failed to create VM.  Check the Azure portal to diagnose the problem.")
+            if r["properties"]["provisioningState"] == "Failed"
+                error("Failed to create VM.  Check the Azure portal to diagnose the problem.")
+            end
+
+            elapsed_time = time() - starttime
+            if elapsed_time > timeout
+                error("reached timeout ($timeout seconds) while creating head VM.")
+            end
         end
-
         elapsed_time = time() - starttime
-        if elapsed_time > timeout
-            error("reached timeout ($timeout seconds) while creating head VM.")
-        end
-
-        write(stdout, spin(spincount, elapsed_time)*", waiting for VM, $vmname, to start.\r")
-        flush(stdout)
-        spincount = spincount == 4 ? 1 : spincount + 1
+        stop_spinner!(s; final_message="VM $vmname ready ($(round(elapsed_time, digits=1))s)")
+    catch
+        stop_spinner!(s)
+        rethrow()
     end
-    elapsed_time = time() - starttime
-    write(stdout, spin(5, elapsed_time)*", waiting for VM, $vmname, to start.\r")
-    write(stdout, "\n")
 end
 
 """
@@ -72,43 +72,43 @@ Poll Azure until VM `vmname` no longer appears in the resource group VM list.
 Warns on timeout rather than throwing.
 """
 function poll_vm_deleted(manager, session, subscriptionid, resourcegroup, vmname; timeout, nretry, verbose)
-    spincount = 1
     starttime = time()
     poll_interval = 10
-    while true
-        sleep(poll_interval)
+    s = start_spinner(t -> "waiting for VM, $vmname, to delete ($(round(t, digits=1))s)")
+    try
+        while true
+            sleep(poll_interval)
 
-        _r = @retry nretry azrequest(
-            "GET",
-            verbose,
-            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines?api-version=2022-11-01",
-            ["Authorization" => "Bearer $(token(session))"])
+            _r = @retry nretry azrequest(
+                "GET",
+                verbose,
+                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines?api-version=2022-11-01",
+                ["Authorization" => "Bearer $(token(session))"])
 
-        r = JSON.parse(String(_r.body))
-        vms,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
+            r = JSON.parse(String(_r.body))
+            vms,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
 
-        haveit = false
-        for vm in vms
-            if vm["name"] == vmname
-                haveit = true
+            haveit = false
+            for vm in vms
+                if vm["name"] == vmname
+                    haveit = true
+                    break
+                end
+            end
+            haveit || break
+
+            elapsed_time = time() - starttime
+            if elapsed_time > timeout
+                @warn "Unable to delete virtual machine in $timeout seconds"
                 break
             end
         end
-        haveit || break
-
         elapsed_time = time() - starttime
-        if elapsed_time > timeout
-            @warn "Unable to delete virtual machine in $timeout seconds"
-            break
-        end
-
-        write(stdout, spin(spincount, elapsed_time)*", waiting for VM, $vmname, to delete.\r")
-        flush(stdout)
-        spincount = spincount == 4 ? 1 : spincount + 1
+        stop_spinner!(s; final_message="VM $vmname deleted ($(round(elapsed_time, digits=1))s)")
+    catch
+        stop_spinner!(s)
+        rethrow()
     end
-    elapsed_time = time() - starttime
-    write(stdout, spin(5, elapsed_time)*", waiting for VM, $vmname, to delete.\r")
-    write(stdout, "\n")
     nothing
 end
 
@@ -119,33 +119,33 @@ Poll the detached service HTTP endpoint until it responds to a ping.
 Throws `DetachedServiceTimeoutException` on timeout.
 """
 function poll_detached_service(vm, custom_environment; timeout)
-    spincount = 1
     starttime = time()
     poll_interval = 5
     waitfor = custom_environment ? "Julia package instantiation and COFII detached service" : "COFII detached service"
-    while true
-        sleep(poll_interval)
+    s = start_spinner(t -> "waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start ($(round(t, digits=1))s)")
+    try
+        while true
+            sleep(poll_interval)
 
-        try
-            HTTP.request("GET", "http://$(vm["ip"]):$(vm["port"])/cofii/detached/ping")
-            break
-        catch
+            try
+                HTTP.request("GET", "http://$(vm["ip"]):$(vm["port"])/cofii/detached/ping")
+                break
+            catch
+            end
+
+            elapsed_time = time() - starttime
+
+            if elapsed_time > timeout
+                @error "detached service poll timeout" timeout_seconds=timeout waitfor=waitfor vmname=vm["name"] port=vm["port"]
+                throw(DetachedServiceTimeoutException(vm))
+            end
         end
-
         elapsed_time = time() - starttime
-
-        if elapsed_time > timeout
-            @error "detached service poll timeout" timeout_seconds=timeout waitfor=waitfor vmname=vm["name"] port=vm["port"]
-            throw(DetachedServiceTimeoutException(vm))
-        end
-
-        write(stdout, spin(spincount, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
-        flush(stdout)
-        spincount = spincount == 4 ? 1 : spincount + 1
+        stop_spinner!(s; final_message="$waitfor on VM $(vm["name"]):$(vm["port"]) ready ($(round(elapsed_time, digits=1))s)")
+    catch
+        stop_spinner!(s)
+        rethrow()
     end
-    elapsed_time = time() - starttime
-    write(stdout, spin(5, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
-    write(stdout, "\n")
 end
 
 """
