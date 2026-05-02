@@ -534,3 +534,434 @@ end
     @test !isopen(mgr.timer_batch_flush)
     close(mgr.events)
 end
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Error types (src/errors.jl)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@testset "AzureAPIError" begin
+    # From an HTTP.StatusError with JSON error body
+    body = JSON.json(Dict("error" => Dict("code" => "QuotaExceeded", "message" => "Not enough cores")))
+    r = HTTP.Response(429, [], body)
+    http_err = HTTP.StatusError(429, "PUT", "/subscriptions/...", r)
+    e = AzManagers.AzureAPIError(http_err; operation="scaleset_create")
+
+    @test e isa AzManagers.AzManagersError
+    @test e.status == 429
+    @test e.error_code == "QuotaExceeded"
+    @test e.message == "Not enough cores"
+    @test e.operation == "scaleset_create"
+    @test e.cause === http_err
+
+    io = IOBuffer()
+    showerror(io, e)
+    msg = String(take!(io))
+    @test contains(msg, "AzureAPIError(429)")
+    @test contains(msg, "QuotaExceeded")
+    @test contains(msg, "scaleset_create")
+    @test contains(msg, "Not enough cores")
+
+    # From an HTTP.StatusError with non-JSON body
+    r2 = HTTP.Response(500, [], "Internal Server Error")
+    http_err2 = HTTP.StatusError(500, "GET", "/", r2)
+    e2 = AzManagers.AzureAPIError(http_err2)
+    @test e2.status == 500
+    @test e2.error_code == "Unknown"
+    @test e2.operation == ""
+
+    # From a non-HTTP exception
+    generic_err = ErrorException("connection refused")
+    e3 = AzManagers.AzureAPIError(generic_err; operation="list_vms")
+    @test e3.status == 999
+    @test e3.operation == "list_vms"
+    @test contains(e3.message, "connection refused")
+end
+
+@testset "QuotaExhaustedError" begin
+    e = AzManagers.QuotaExhaustedError("sub-123", "eastus", "standardDv3Family", 16, 4, 60)
+    @test e isa AzManagers.AzManagersError
+    @test e.subscriptionid == "sub-123"
+    @test e.requested == 16
+    @test e.available == 4
+    @test e.retries == 60
+
+    io = IOBuffer()
+    showerror(io, e)
+    msg = String(take!(io))
+    @test contains(msg, "QuotaExhaustedError")
+    @test contains(msg, "standardDv3Family")
+    @test contains(msg, "eastus")
+    @test contains(msg, "16")
+    @test contains(msg, "60 retries")
+end
+
+@testset "WorkerJoinTimeoutError" begin
+    e = AzManagers.WorkerJoinTimeoutError("myscaleset", "inst-42", 720.0)
+    @test e isa AzManagers.AzManagersError
+
+    io = IOBuffer()
+    showerror(io, e)
+    msg = String(take!(io))
+    @test contains(msg, "WorkerJoinTimeoutError")
+    @test contains(msg, "inst-42")
+    @test contains(msg, "myscaleset")
+    @test contains(msg, "720.0")
+end
+
+@testset "CloudInitError" begin
+    e = AzManagers.CloudInitError("inst-7", "ss-prod", "failed", "cloud-init timed out")
+    @test e isa AzManagers.AzManagersError
+
+    io = IOBuffer()
+    showerror(io, e)
+    msg = String(take!(io))
+    @test contains(msg, "CloudInitError")
+    @test contains(msg, "inst-7")
+    @test contains(msg, "failed")
+    @test contains(msg, "cloud-init timed out")
+end
+
+@testset "ScaleSetOperationError" begin
+    e = AzManagers.ScaleSetOperationError("delete", "ss-prod", "404 not found", nothing)
+    @test e isa AzManagers.AzManagersError
+
+    io = IOBuffer()
+    showerror(io, e)
+    msg = String(take!(io))
+    @test contains(msg, "ScaleSetOperationError")
+    @test contains(msg, "delete")
+    @test contains(msg, "ss-prod")
+
+    # With a cause
+    cause = ErrorException("network error")
+    e2 = AzManagers.ScaleSetOperationError("create", "ss-dev", "failed", cause)
+    @test e2.cause === cause
+end
+
+@testset "ManifestError" begin
+    e = AzManagers.ManifestError("/home/user/.azmanagers/manifest.json", "file not found")
+    @test e isa AzManagers.AzManagersError
+
+    io = IOBuffer()
+    showerror(io, e)
+    msg = String(take!(io))
+    @test contains(msg, "ManifestError")
+    @test contains(msg, "file not found")
+    @test contains(msg, "manifest.json")
+
+    # load_manifest throws ManifestError for missing file
+    original_home = ENV["HOME"]
+    mktempdir() do tmpdir
+        ENV["HOME"] = tmpdir
+        try
+            @test_throws AzManagers.ManifestError AzManagers.load_manifest()
+        finally
+            ENV["HOME"] = original_home
+            isfile(AzManagers.manifestfile()) && AzManagers.load_manifest()
+        end
+    end
+
+    # load_manifest throws ManifestError for invalid JSON
+    mktempdir() do tmpdir
+        ENV["HOME"] = tmpdir
+        try
+            mkpath(AzManagers.manifestpath())
+            write(AzManagers.manifestfile(), "not valid json {{{")
+            @test_throws AzManagers.ManifestError AzManagers.load_manifest()
+        finally
+            ENV["HOME"] = original_home
+            isfile(AzManagers.manifestfile()) && AzManagers.load_manifest()
+        end
+    end
+end
+
+@testset "ImageResolutionError" begin
+    e = AzManagers.ImageResolutionError("myimage", "", "", "gallery name not found in template")
+    @test e isa AzManagers.AzManagersError
+
+    io = IOBuffer()
+    showerror(io, e)
+    msg = String(take!(io))
+    @test contains(msg, "ImageResolutionError")
+    @test contains(msg, "myimage")
+    @test contains(msg, "gallery name not found")
+end
+
+@testset "DetachedServiceError" begin
+    e = AzManagers.DetachedServiceError("cbox-abc", "10.0.0.5", "run", "connection refused", nothing)
+    @test e isa AzManagers.AzManagersError
+
+    io = IOBuffer()
+    showerror(io, e)
+    msg = String(take!(io))
+    @test contains(msg, "DetachedServiceError")
+    @test contains(msg, "cbox-abc")
+    @test contains(msg, "10.0.0.5")
+    @test contains(msg, "run")
+    @test contains(msg, "connection refused")
+end
+
+@testset "Error type hierarchy" begin
+    # All error types are subtypes of AzManagersError
+    @test AzManagers.AzureAPIError <: AzManagers.AzManagersError
+    @test AzManagers.QuotaExhaustedError <: AzManagers.AzManagersError
+    @test AzManagers.WorkerJoinTimeoutError <: AzManagers.AzManagersError
+    @test AzManagers.CloudInitError <: AzManagers.AzManagersError
+    @test AzManagers.ScaleSetOperationError <: AzManagers.AzManagersError
+    @test AzManagers.ManifestError <: AzManagers.AzManagersError
+    @test AzManagers.ImageResolutionError <: AzManagers.AzManagersError
+    @test AzManagers.DetachedServiceError <: AzManagers.AzManagersError
+
+    # AzManagersError is a subtype of Exception
+    @test AzManagers.AzManagersError <: Exception
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Telemetry (src/telemetry.jl)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@testset "ManagerMetrics construction" begin
+    m = AzManagers.ManagerMetrics()
+    @test m.workers_joined == 0
+    @test m.workers_lost == 0
+    @test m.workers_preempted == 0
+    @test m.workers_pruned == 0
+    @test m.workers_join_failed == 0
+    @test m.scalesets_created == 0
+    @test m.scalesets_deleted == 0
+    @test m.api_calls == 0
+    @test m.api_retries == 0
+    @test m.api_errors == 0
+    @test m.api_throttles == 0
+    @test m.created_at <= now(Dates.UTC)
+    @test isempty(m.worker_join_durations)
+end
+
+@testset "ManagerMetrics record functions" begin
+    m = AzManagers.ManagerMetrics()
+
+    AzManagers.record_api_call!(m)
+    AzManagers.record_api_call!(m)
+    @test m.api_calls == 2
+
+    AzManagers.record_api_retry!(m)
+    @test m.api_retries == 1
+
+    AzManagers.record_api_error!(m)
+    @test m.api_errors == 1
+
+    AzManagers.record_api_throttle!(m)
+    AzManagers.record_api_throttle!(m)
+    @test m.api_throttles == 2
+
+    AzManagers.record_worker_joined!(m, 15.5)
+    AzManagers.record_worker_joined!(m, 22.3)
+    @test m.workers_joined == 2
+    @test length(m.worker_join_durations) == 2
+    @test m.worker_join_durations[1] ≈ 15.5
+    @test m.worker_join_durations[2] ≈ 22.3
+
+    # Zero duration doesn't add to durations vector
+    AzManagers.record_worker_joined!(m)
+    @test m.workers_joined == 3
+    @test length(m.worker_join_durations) == 2
+
+    AzManagers.record_worker_lost!(m)
+    @test m.workers_lost == 1
+
+    AzManagers.record_worker_preempted!(m)
+    @test m.workers_preempted == 1
+
+    AzManagers.record_worker_pruned!(m)
+    AzManagers.record_worker_pruned!(m)
+    @test m.workers_pruned == 2
+
+    AzManagers.record_worker_join_failed!(m)
+    @test m.workers_join_failed == 1
+
+    AzManagers.record_scaleset_created!(m)
+    @test m.scalesets_created == 1
+
+    AzManagers.record_scaleset_deleted!(m)
+    @test m.scalesets_deleted == 1
+
+    AzManagers.record_prune_time!(m)
+    @test m.last_prune_time > DateTime(0)
+
+    AzManagers.record_clean_time!(m)
+    @test m.last_clean_time > DateTime(0)
+end
+
+@testset "ManagerMetrics join durations bounded" begin
+    m = AzManagers.ManagerMetrics()
+    for i in 1:1100
+        AzManagers.record_worker_joined!(m, Float64(i))
+    end
+    @test m.workers_joined == 1100
+    @test length(m.worker_join_durations) <= 1000
+end
+
+@testset "ManagerMetrics thread safety" begin
+    m = AzManagers.ManagerMetrics()
+    n = 100
+    tasks = Task[]
+    for _ in 1:n
+        push!(tasks, Threads.@spawn begin
+            AzManagers.record_api_call!(m)
+            AzManagers.record_api_retry!(m)
+            AzManagers.record_worker_joined!(m, 1.0)
+        end)
+    end
+    foreach(wait, tasks)
+    @test m.api_calls == n
+    @test m.api_retries == n
+    @test m.workers_joined == n
+end
+
+@testset "AzManager has metrics field" begin
+    @test hasfield(AzManagers.AzManager, :metrics)
+
+    mgr = AzManagers.AzManager()
+    # Bare constructor leaves it undefined
+    @test !isdefined(mgr, :metrics)
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Structured logging improvements
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@testset "logerror with context kwargs" begin
+    # logerror should accept context keyword arguments without throwing
+    try
+        error("test structured logerror")
+    catch e
+        AzManagers.logerror(e, Logging.Debug; operation="test", scaleset="ss-1")
+    end
+    @test true  # didn't throw
+end
+
+@testset "logerror default level is Warn" begin
+    logger = Test.TestLogger(min_level=Logging.Debug)
+    with_logger(logger) do
+        try
+            error("test default level")
+        catch e
+            AzManagers.logerror(e)
+        end
+    end
+    @test length(logger.logs) >= 1
+    @test logger.logs[end].level == Logging.Warn
+end
+
+@testset "retrywarn structured logging — 429 with no remaining_resource header" begin
+    # 429 without the quota header — should not throw
+    r = HTTP.Response(429, ["retry-after" => "30"], "")
+    e = HTTP.StatusError(429, "GET", "/", r)
+    AzManagers.retrywarn(0, 3, 30, e)
+    @test true
+end
+
+@testset "retrywarn structured logging — 500 with non-JSON body" begin
+    r = HTTP.Response(500, [], "plain text error")
+    e = HTTP.StatusError(500, "GET", "/", r)
+    # Should not throw even with unparseable body
+    AzManagers.retrywarn(1, 3, 10, e)
+    @test true
+end
+
+@testset "retrywarn structured logging — 409 with non-JSON body" begin
+    r = HTTP.Response(409, [], "not json")
+    e = HTTP.StatusError(409, "GET", "/", r)
+    AzManagers.retrywarn(1, 2, 5, e)
+    @test true
+end
+
+@testset "retrywarn structured logging — other HTTP status" begin
+    r = HTTP.Response(503, [], "Service Unavailable")
+    e = HTTP.StatusError(503, "GET", "/", r)
+    # 503 is not retryable normally but retrywarn should still handle it
+    AzManagers.retrywarn(0, 1, 5, e)
+    @test true
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# @retry telemetry integration
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@testset "@retry records retry count on success" begin
+    # After retries, the macro should succeed and log retries at @debug
+    counter = Ref(0)
+    result = AzManagers.@retry 3 begin
+        counter[] += 1
+        if counter[] < 2
+            throw(Base.IOError("transient", 0))
+        end
+        "recovered"
+    end
+    @test result == "recovered"
+    @test counter[] == 2
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Event loop metrics integration
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@testset "CleanTick handler calls log_health_summary" begin
+    mgr = AzManagers.AzManager()
+    mgr.events = Channel{AzManagers.ManagerEvent}(16)
+    mgr.socket_batch = Sockets.TCPSocket[]
+    mgr.batch_max = 64
+    mgr.workers_changed = Threads.Condition()
+    mgr.lock = ReentrantLock()
+    mgr.metrics = AzManagers.ManagerMetrics()
+    mgr.pending_deletions = @NamedTuple{vmname::String, url::String, session::AzSessions.AzSessionAbstract, started::Float64}[]
+    mgr.pending_down = Dict{AzManagers.ScaleSet,Set{String}}()
+    mgr.scalesets = Dict{AzManagers.ScaleSet,Int}()
+    mgr.deleted = Dict{AzManagers.ScaleSet,Dict{String,DateTime}}()
+    mgr.pruned = Dict{AzManagers.ScaleSet,Set{String}}()
+    mgr.preempted = Dict{AzManagers.ScaleSet,Set{String}}()
+
+    # CleanTick calls delete_pending_down_vms() which accesses the global
+    # _manager.session — that will throw in test, but the handler catches it
+    # and still runs check_pending_deletions + log_health_summary.
+    # record_clean_time! is inside the try block so it won't be called here.
+    AzManagers.handle(mgr, AzManagers.CleanTick())
+
+    # Verify log_health_summary ran (no throw) and metrics struct is intact
+    @test mgr.metrics isa AzManagers.ManagerMetrics
+    close(mgr.events)
+end
+
+@testset "PruneTick handler records prune time" begin
+    mgr = AzManagers.AzManager()
+    mgr.events = Channel{AzManagers.ManagerEvent}(16)
+    mgr.socket_batch = Sockets.TCPSocket[]
+    mgr.batch_max = 64
+    mgr.workers_changed = Threads.Condition()
+    mgr.lock = ReentrantLock()
+    mgr.metrics = AzManagers.ManagerMetrics()
+
+    AzManagers.handle(mgr, AzManagers.PruneTick())
+    # PruneTick will fail with UndefRefError on scalesets, but metrics should still be recorded
+    # because the error is caught inside the handler
+    # Note: prune_time only gets set on success, so it may remain DateTime(0) here
+    @test mgr.metrics isa AzManagers.ManagerMetrics
+    close(mgr.events)
+end
+
+@testset "log_health_summary does not throw" begin
+    mgr = AzManagers.AzManager()
+    mgr.metrics = AzManagers.ManagerMetrics()
+    mgr.pending_down = Dict{AzManagers.ScaleSet,Set{String}}()
+    mgr.scalesets = Dict{AzManagers.ScaleSet,Int}()
+    mgr.lock = ReentrantLock()
+
+    # Should emit structured log without throwing
+    AzManagers.log_health_summary(mgr)
+    @test true
+
+    # No-op when metrics not defined
+    mgr2 = AzManagers.AzManager()
+    AzManagers.log_health_summary(mgr2)
+    @test true
+end

@@ -3,11 +3,12 @@ scalesets() = scalesets(azmanager())
 pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Set{String}}()
 
 function delete_scaleset(manager, scaleset)
-    @debug "deleting scaleset, $scaleset"
+    @info "deleting scaleset" scaleset=scaleset.scalesetname resourcegroup=scaleset.resourcegroup
     try
         rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose, manager.show_quota)
+        isdefined(manager, :metrics) && record_scaleset_deleted!(manager.metrics)
     catch e
-        @warn "unable to remove scaleset $(scaleset.resourcegroup), $(scaleset.scalesetname)"
+        @warn "unable to remove scaleset" scaleset=scaleset.scalesetname resourcegroup=scaleset.resourcegroup exception=(e, catch_backtrace())
     end
     delete!(scalesets(manager), scaleset)
 end
@@ -40,13 +41,12 @@ function delete_pending_down_vms()
                 delete!(pending_down(manager), scaleset)
             catch e
                 if status(e) in (404, 409)
-                    @debug "scaleset $(scaleset.scalesetname) not found or already being deleted when attempting to delete vms, skipping."
+                    @debug "scaleset not found or conflict during VM deletion" scaleset=scaleset.scalesetname status=status(e)
                     if haskey(pending_down(manager), scaleset)
                         delete!(pending_down(manager), scaleset)
                     end
                 else
-                    @error "error deleting scaleset vms, manual clean-up may be required."
-                    logerror(e, Logging.Debug)
+                    @error "failed to delete scaleset VMs — manual clean-up may be required" scaleset=scaleset.scalesetname vm_count=length(ids) exception=(e, catch_backtrace())
                 end
             end
         end
@@ -54,7 +54,7 @@ function delete_pending_down_vms()
     nothing
 end
 
-# sync server and client side views of the resources
+    # sync server and client side views of the resources
 function scaleset_sync()
     manager = azmanager()
     lock(manager.lock) do
@@ -62,15 +62,14 @@ function scaleset_sync()
             _pending_down = pending_down(manager)
             pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
             if nprocs()-1+pending_down_count != nworkers_provisioned()
-                @debug "client/server scaleset book-keeping mismatch, synching client to server."
+                @info "client/server scaleset book-keeping mismatch, syncing" client_count=nprocs()-1+pending_down_count server_count=nworkers_provisioned()
                 _scalesets = scalesets(manager)
                 for scaleset in keys(_scalesets)
                     _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
                 end
             end
         catch e
-            @error "scaleset syncing error"
-            logerror(e, Logging.Debug)
+            @warn "scaleset sync error" exception=(e, catch_backtrace())
         end
     end
 end
@@ -135,7 +134,7 @@ function prune_cluster(all_vms::Dict{ScaleSet, Vector}=Dict{ScaleSet, Vector}())
 
     # remove workers that do not have a corresponding scale-set vm instance
     for pid in keys(wrkrs)
-        @info "Removing worker $pid from the Julia cluster since it is no longer in the scaleset." wrkrs[pid]
+        @info "removing worker from cluster — no longer in scaleset" pid=pid vm_info=wrkrs[pid]
         # We can't use rmprocs here since the worker process is gone.  The worker process would usually do the
         # following two lines (see the Distributed.message_handler_loop function)
         Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
@@ -196,15 +195,15 @@ function prune_scalesets(all_vms::Dict{ScaleSet, Vector}=Dict{ScaleSet, Vector}(
 
             doprune = (time_elapsed > worker_timeout || vm_state == "failed") && !is_worker_deleting && !is_vm_deleting && !ispruned_already
             if doprune
-                @info "Putting machine with instance id $instanceid in $(scaleset.scalesetname) onto the deletion queue because it failed to join the Julia cluster after $(round(time_elapsed, Second)), vm_state=$vm_state."
+                @info "VM queued for deletion" instanceid scaleset=scaleset.scalesetname reason=(vm_state == "failed" ? "vm_failed" : "join_timeout") elapsed=round(time_elapsed, Second) vm_state
+                isdefined(manager, :metrics) && record_worker_pruned!(manager.metrics)
                 if manager.save_cloud_init_failures
-                    @info "copying cloud init output log to '$(pwd())/cloud-init-output-$(instanceid).log'."
+                    @info "copying cloud-init log" instanceid destination="$(pwd())/cloud-init-output-$(instanceid).log"
                     try
                         ipaddress = get_ipaddress_for_scaleset_vm(manager, _vm)
                         run(`scp -i $(homedir())/.ssh/azmanagers_rsa $(manager.ssh_user)@$(ipaddress):/var/log/cloud-init-output.log ./cloud-init-output-$(instanceid).log`)
                     catch e
-                        @warn "failed to copy cloud init log from VM $(instanceid)."
-                        logerror(e, Logging.Debug)
+                        @warn "failed to copy cloud-init log" instanceid=instanceid exception=(e, catch_backtrace())
                     end
                 end
                 add_instance_to_pruned_list(manager, scaleset, instanceid)

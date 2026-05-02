@@ -6,11 +6,10 @@ function accept_connections(manager)
             put!(manager.events, SocketAccepted(s))
         catch e
             if !isopen(manager.server)
-                @info "AzManagers, server socket closed — stopping connection listener"
+                @info "server socket closed, stopping connection listener"
                 break
             end
-            @error "AzManagers, error accepting connection"
-            logerror(e, Logging.Debug)
+            @error "error accepting connection" exception=(e, catch_backtrace())
         end
     end
 end
@@ -23,8 +22,7 @@ function Distributed.addprocs(manager::AzManager; sockets)
         lock(Distributed.worker_lock)
         pids = Distributed.addprocs_locked(manager; sockets)
     catch e
-        @debug "AzManagers, error processing pending connection"
-        logerror(e, Logging.Debug)
+        @warn "error processing pending connections" exception=(e, catch_backtrace())
     finally
         unlock(Distributed.worker_lock)
     end
@@ -40,7 +38,7 @@ function addprocs_with_timeout(manager; sockets)
     # Arm a watchdog that interrupts the task on timeout
     watchdog = Timer(timeout) do _
         if !istaskdone(tsk)
-            @warn "AzManagers, interrupting addprocs due to timeout"
+            @warn "interrupting addprocs due to timeout" timeout_seconds=timeout
             @async Base.throwto(tsk, InterruptException())
         end
     end
@@ -49,8 +47,7 @@ function addprocs_with_timeout(manager; sockets)
     try
         pids = fetch(tsk)
     catch e
-        @warn "AzManagers, failed to process pending connections"
-        logerror(e, Logging.Debug)
+        @warn "failed to process pending connections" exception=(e, catch_backtrace())
         pids = []
     finally
         close(watchdog)
@@ -68,11 +65,14 @@ function flush_socket_batch(manager)
 
     isempty(sockets) && return
 
-    @debug "flushing batch" length(sockets)
+    @debug "flushing batch" count=length(sockets)
     pids = addprocs_with_timeout(manager; sockets)
-    @debug "batch done" pids
+    @debug "batch done" pids=pids count=length(pids)
 
     if !isempty(pids)
+        for pid in pids
+            isdefined(manager, :metrics) && record_worker_joined!(manager.metrics)
+        end
         put!(manager.events, WorkersChanged(nprocs() == 1 ? 0 : nworkers()))
     end
 
@@ -118,7 +118,7 @@ function deregister_worker_safe(pid)
                 Distributed.deregister_worker(pid)
             end
         catch e
-            @error "error deregistering worker $pid" exception=(e, catch_backtrace())
+            @error "error deregistering worker" pid=pid exception=(e, catch_backtrace())
         end
     end
 end
@@ -143,8 +143,9 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
             close(watchdog)
         end
     catch e
-        @warn "unable to create worker within $timeout seconds, adding vm to pending down list"
+        @warn "worker failed to join cluster" timeout_seconds=timeout instanceid=get(u, "instanceid", "unknown") scaleset=get(u, "scalesetname", "unknown")
         logerror(e, Logging.Debug)
+        isdefined(manager, :metrics) && record_worker_join_failed!(manager.metrics)
         u = wconfig.userdata
         scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
         add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
@@ -318,7 +319,7 @@ function Distributed.addprocs(::AzManager, template::Dict, n::Int;
 
     julia_num_threads = nthreads_filter(julia_num_threads)
 
-    @info "Provisioning $n virtual machines in scale-set $group..."
+    @info "provisioning VMs" count=n scaleset=group
     _scalesets[scaleset] = scaleset_create_or_update(manager, user, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, sigimagename,
         sigimageversion, imagename, osdisksize, nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig,
         hyperthreading, julia_num_threads, omp_num_threads, exename, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base,
@@ -349,8 +350,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
         @async try
             Distributed.launch_on_machine(manager, launched, c, socket)
         catch e
-            @error "failed to launch on machine for socket=$socket"
-            logerror(e, Logging.Debug)
+            @error "failed to launch worker" exception=(e, catch_backtrace())
         end
     end
     notify(c)
@@ -361,8 +361,7 @@ function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
     try
         _cookie = read(socket, Distributed.HDR_COOKIE_LEN)
     catch e
-        @error "unable to read cookie from socket"
-        logerror(e, Logging.Debug)
+        @error "unable to read cookie from socket" exception=(e, catch_backtrace())
         return
     end
 
@@ -458,7 +457,8 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
 
     try
         remote_do(exit, id, 42)
-    catch
+    catch e
+        @debug "failed to send exit to worker" pid=id exception=(e, catch_backtrace())
     end
     @debug "kill, done remote_do"
 

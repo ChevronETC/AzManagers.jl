@@ -48,10 +48,10 @@ end
 function get_instanceid()
     local r
     try
-        # _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01", ["Metadata"=>"true"])
         _r = curl_get_metadata("http://169.254.169.254/metadata/instance/compute?api-version=2021-02-01")
         r = JSON.parse(String(_r.body))
-    catch
+    catch e
+        @debug "failed to query IMDS for instance compute metadata" exception=(e, catch_backtrace())
         r = Dict()
     end
     get(r, "name", "")
@@ -72,11 +72,12 @@ function preempted(instanceid::AbstractString, clusterid::Int)
         tic = time()
         # _r = HTTP.request("GET", "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01", ["Metadata"=>"true"])
         _r = curl_get_metadata("http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01")
-        if time() - tic > 55 # 55 seconds, simply because it is less that 60, and 60 seconds is the eviction notice.
-            @debug "$(now()), took longer than 55 seconds to query the meta-data server for scheduled events (elapsed time=$(time() - tic))."
+        elapsed = time() - tic
+        if elapsed > 55 # 55 seconds, simply because it is less that 60, and 60 seconds is the eviction notice.
+            @warn "IMDS scheduled events query took too long" elapsed_seconds=round(elapsed, digits=1) pid=clusterid
         end
     catch e
-        @warn "unable to get scheduledevents" exception=(e, catch_backtrace())
+        @warn "unable to query IMDS scheduled events" pid=clusterid exception=(e, catch_backtrace())
         return false, ""
     end
     r = JSON.parse(String(_r.body))
@@ -86,7 +87,7 @@ function preempted(instanceid::AbstractString, clusterid::Int)
     end
     for event in events
         if get(event, "EventType", "") == "Preempt" && instanceid ∈ get(event, "Resources", [])
-            @warn "Machine with id $clusterid ($instanceid) is being pre-empted" now(Dates.UTC) event["NotBefore"] event["EventType"] event["EventSource"]
+            @warn "VM being preempted" pid=clusterid instanceid notbefore=event["NotBefore"] event_type=event["EventType"] event_source=event["EventSource"]
             return true, event["NotBefore"]
         end
     end
@@ -203,7 +204,8 @@ function azure_physical_name(keyval="PhysicalHostName")
         s = split(read("/var/lib/hyperv/.kvp_pool_3", String), '\0'; keepempty=false)
         i = findfirst(_s->_s==keyval, s)
         physical_hostname = s[i+1]
-    catch
+    catch e
+        @debug "unable to read physical hostname" exception=(e, catch_backtrace())
         physical_hostname = "unknown"
     end
     physical_hostname
@@ -411,8 +413,8 @@ function nvidia_gpumode!(feature, switch)
     _switch = switch ? 1 : 0
     p = open(`sudo nvidia-smi $feature $_switch`)
     wait(p)
-    success(p) || @error "unable to toggle NVIDIA GPU feature='$feature' to '$_switch'."
-    @info "NVIDIA $feature is toggled to $_switch"
+    success(p) || @error "unable to toggle NVIDIA GPU feature" feature=feature target=_switch
+    @info "NVIDIA GPU feature toggled" feature=feature target=_switch
 end
 
 function nvidia_gpucheck(enable_ecc=true, enable_mig=false)
@@ -787,7 +789,7 @@ function mount_datadisks()
                 if lun ∈ luns
                     try
                         name = blk["name"]
-                        @info "mounting data disk with lun $lun ($name)..."
+                        @info "mounting data disk" lun=lun name=name
                         run(`sudo parted /dev/$name --script mklabel gpt mkpart xfspart xfs 0% 100%`)
                         sleep(1) # I'm not sure why this is needed, but the following command often fails without it
                         run(`sudo mkfs.xfs /dev/$(name)1`)
@@ -795,18 +797,17 @@ function mount_datadisks()
                         run(`sudo mkdir /scratch$lun`)
                         run(`sudo mount /dev/$(name)1 /scratch$lun`)
                         run(`sudo chmod 777 /scratch$lun`)
-                        @info "done mounting data disk with lun $lun ($name)"
+                        @info "data disk mounted" lun=lun name=name
                     catch e
-                        @error "caught error formatting mounting data disk lun=$lun ($name)"
-                        logerror(e, Logging.Debug)
+                        @error "error formatting/mounting data disk" lun=lun name=name exception=(e, catch_backtrace())
+                        logerror(e, Logging.Warn)
                         run(`sudo rm -rf /scratch$lun`)
                     end
                 end
             end
         end
     catch e
-        @error "caught error formatting/mounting data disks"
-        logerror(e, Logging.Debug)
+        @error "error formatting/mounting data disks" exception=(e, catch_backtrace())
     end
 end
 
