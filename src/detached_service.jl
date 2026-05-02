@@ -132,7 +132,7 @@ function detachedrun(request::HTTP.Request)
         julia_num_threads = nthreads_filter("$(Threads.nthreads()),$(Threads.nthreads(:interactive))")
         projectdir = dirname(Pkg.project().path)
         exename_parts = split(exename)
-        cmd = pipeline(Cmd(vcat(exename_parts, ["-t", julia_num_threads, "--project=$projectdir", _tempname_wrapper])))
+        cmd = pipeline(Cmd(String.(vcat(exename_parts, ["-t", julia_num_threads, "--project=$projectdir", _tempname_wrapper]))))
         process = open(cmd)
         pid = getpid(process)
         @info "executing $_tempname_wrapper with executable '$exename', $nthreads Julia threads, environment '$projectdir', and pid $pid"
@@ -140,9 +140,13 @@ function detachedrun(request::HTTP.Request)
         DETACHED_JOBS[string(id)] = Dict("process"=>process, "request"=>request, "stdout"=>outfile, "stderr"=>errfile, "codefile"=>_tempname, "code"=>code)
     catch e
         io = IOBuffer()
-        @error "caught error in detachedrun"
-        logerror(e, Logging.Debug)
-        return HTTP.Response(500, ["Content-Type"=>"application/json"], JSON.json(Dict("error"=>String(take!(io)))); request)
+        showerror(io, e, catch_backtrace())
+        errmsg = String(take!(io))
+        if isempty(errmsg)
+            errmsg = "$(typeof(e)): $(sprint(show, e))"
+        end
+        @error "caught error in detachedrun" exception=(e, catch_backtrace())
+        return HTTP.Response(500, ["Content-Type"=>"application/json"], JSON.json(Dict("error"=>errmsg)); request)
     end
 
     Threads.@spawn begin
@@ -151,8 +155,12 @@ function detachedrun(request::HTTP.Request)
         catch
         end
         if !r["persist"]
-            vm = AzManagers.DETACHED_VM[]
-            rmproc(vm; session=sessionbundle(:management))
+            try
+                vm = AzManagers.DETACHED_VM[]
+                rmproc(vm; session=AzSession(;protocal=AzClientCredentials))
+            catch e
+                @error "persist=false auto-delete failed" exception=(e, catch_backtrace())
+            end
         end
     end
     HTTP.Response(200, ["Content-Type"=>"application/json"], JSON.json(Dict("id"=>id, "pid"=>pid)); request)
@@ -208,7 +216,9 @@ function detachedstatus(request::HTTP.Request)
             status = "starting"
         end
     catch e
-        return HTTP.Response(500, ["Content-Type"=>"application/json"], JSON.json(Dict("error"=>show(e), "trace"=>show(stacktrace()))); request)
+        io = IOBuffer()
+        showerror(io, e, catch_backtrace())
+        return HTTP.Response(500, ["Content-Type"=>"application/json"], JSON.json(Dict("error"=>String(take!(io)))); request)
     end
     HTTP.Response(200, ["Content-Type"=>"application/json"], JSON.json(Dict("id"=>id, "status"=>status)); request)
 end

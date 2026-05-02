@@ -40,6 +40,10 @@ function add_pending_connections()
                 @debug "done pushing new socket onto manger.pending_up" manager.pending_up.n_avail_items
             end
         catch e
+            if !isopen(manager.server)
+                @error "AzManagers, server socket closed — stopping connection listener"
+                break
+            end
             @error "AzManagers, error adding pending connection"
             logerror(e, Logging.Debug)
         end
@@ -107,17 +111,29 @@ function process_pending_connections()
         end
         sockets = TCPSocket[first_socket]
 
-        # Drain additional sockets until deadline or batch full
-        drain_with_deadline!(sockets, manager.pending_up, max_sockets, flush_delay)
+        try
+            # Drain additional sockets until deadline or batch full
+            drain_with_deadline!(sockets, manager.pending_up, max_sockets, flush_delay)
 
-        @debug "flushing batch" length(sockets)
-        pids = addprocs_with_timeout(manager; sockets)
+            @debug "flushing batch" length(sockets)
+            pids = addprocs_with_timeout(manager; sockets)
+            @debug "batch done" pids
 
-        if isdefined(manager, :workers_changed)
-            notify(manager.workers_changed)
+            if isdefined(manager, :workers_changed)
+                lock(manager.workers_changed)
+                try
+                    notify(manager.workers_changed)
+                finally
+                    unlock(manager.workers_changed)
+                end
+            end
+
+            start_preempt_monitors(manager, pids)
+            @debug "loop iteration complete, waiting for next socket"
+        catch e
+            @error "AzManagers, error processing connection batch"
+            logerror(e, Logging.Debug)
         end
-
-        start_preempt_monitors(manager, pids)
     end
 end
 
@@ -145,11 +161,11 @@ function drain_with_deadline!(sockets, pending_up, max_sockets, deadline_s)
 end
 
 function start_preempt_monitors(manager, pids)
-    @debug "starting preempt loops" pids
+    @info "starting preempt monitors" pids
     for pid in pids
         @async monitor_worker_preempt(manager, pid)
     end
-    @debug "done starting preempt loops"
+    @info "preempt monitors launched" pids
 end
 
 function monitor_worker_preempt(manager, pid)
@@ -170,6 +186,8 @@ end
 
 function handle_preempt_exception(manager, pid, wrkr, e)
     if isa(e, RemoteException) && isa(e.captured.ex, TaskFailedException) && isa(e.captured.ex.task.result.ex, SpotPreemptException)
+        # Graceful preemption: IMDS scheduled event was detected before the VM was killed.
+        # Honor the NotBefore window before deregistering.
         ex = e.captured.ex.task.result.ex
         notbefore = DateTime(ex.notbefore, dateformat"e, dd u yyyy HH:MM:SS \G\M\T")
         @info "caught preempt exception for $(ex.clusterid), removing not before $notbefore UTC"
@@ -185,19 +203,26 @@ function handle_preempt_exception(manager, pid, wrkr, e)
         catch e
             @info "error adding instance to preempted list"
         end
-
-        try
-            lock(Distributed.worker_lock)
-            if haskey(Distributed.map_pid_wrkr, pid)
-                # We can't use rmprocs here since the worker process might already be gone due to preemption.  The
-                # worker process would usually do the following two lines (see the Distributed.message_handler_loop function)
-                Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
-                Distributed.deregister_worker(pid)
-            end
-        catch
-        finally
-            unlock(Distributed.worker_lock)
+    else
+        # Worker connection dropped — could be an ungraceful eviction, crash, or
+        # normal cleanup (rmprocs killed the process while preempt monitor was running).
+        # Only warn if the worker is still registered (i.e. not already cleaned up by rmprocs).
+        if haskey(Distributed.map_pid_wrkr, pid)
+            @warn "worker $pid lost unexpectedly (not a graceful preemption), deregistering" exception=(e, catch_backtrace())
         end
+    end
+
+    # Always deregister the worker — whether graceful preemption or unexpected death.
+    try
+        lock(Distributed.worker_lock)
+        if haskey(Distributed.map_pid_wrkr, pid)
+            Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
+            Distributed.deregister_worker(pid)
+        end
+    catch e
+        @error "error deregistering worker $pid" exception=(e, catch_backtrace())
+    finally
+        unlock(Distributed.worker_lock)
     end
 end
 
@@ -254,10 +279,19 @@ end
 
 
 function spinner(n_target_workers)
+    timeout = parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "720")) + 120
     manager = azmanager()
     starttime = time()
 
     while (nprocs() == 1 ? 0 : nworkers()) != n_target_workers
+        elapsed = time() - starttime
+        if elapsed > timeout
+            n = nprocs() == 1 ? 0 : nworkers()
+            @printf(stdout, "\r  %d/%d workers up (%.1fs) — timed out\n", n, n_target_workers, elapsed)
+            flush(stdout)
+            error("Timed out after $(round(elapsed, digits=1))s waiting for workers: $n/$n_target_workers up. Consider increasing JULIA_WORKER_TIMEOUT.")
+        end
+
         # Wait for workers_changed notification with a timeout for UI updates
         tsk = @async begin
             lock(manager.workers_changed)
@@ -384,7 +418,7 @@ function Distributed.addprocs(::AzManager, template::Dict, n::Int;
     user == "" && (user = _manifest["ssh_user"])
 
     manager = azmanager!(session, user, nretry, verbose, save_cloud_init_failures, show_quota)
-    sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
+    sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename, template["value"])
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
 

@@ -171,22 +171,92 @@ spin(spincount, elapsed_time) = ['◐','◓','◑','◒','✓'][spincount]*@spri
 function software_sanity_check(manager, imagename, custom_environment)
     projectinfo = Pkg.project()
     envpath = normpath(joinpath(projectinfo.path, ".."))
-    _packages = TOML.parse(read(joinpath(envpath, "Manifest.toml"), String))
+    manifest_path = joinpath(envpath, "Manifest.toml")
 
+    if !isfile(manifest_path)
+        @debug "No Manifest.toml found at $manifest_path — skipping software sanity check"
+        return
+    end
+
+    _packages = TOML.parse(read(manifest_path, String))
     packages = _packages["deps"]
 
     if custom_environment
-        for (packagename, packageinfo) in packages
-            if haskey(packageinfo[1], "path")
-                error("Project/environment has dev'd packages that will not be accessible from workers.")
+        dev_packages = _detect_dev_packages(read(manifest_path, String), envpath)
+        if !isempty(dev_packages)
+            dev_names = join([name for (name, _, _) in dev_packages], ", ")
+            error("Project has Pkg.develop'd packages ($dev_names). " *
+                  "Workers cannot resolve local paths. Please Pkg.add these packages " *
+                  "and push all code changes before using customenv=true.")
+        end
+    end
+end
+
+"""
+    _detect_dev_packages(manifest_text, base_path) -> Vector{Tuple{String,String,String}}
+
+Detect Pkg.develop'd packages in a Manifest and return their git info as
+`(name, repo_url, repo_rev)` tuples. Packages without a discoverable git repo
+are logged as warnings and omitted.
+"""
+function _detect_dev_packages(manifest_text, base_path)
+    manifest = TOML.parse(manifest_text)
+    dev_pkgs = Tuple{String,String,String}[]
+
+    if !haskey(manifest, "deps")
+        return dev_pkgs
+    end
+
+    for (pkg_name, entries) in manifest["deps"]
+        for entry in entries
+            if haskey(entry, "path")
+                pkg_path = entry["path"]
+                pkg_path = isabspath(pkg_path) ? normpath(pkg_path) : normpath(joinpath(base_path, pkg_path))
+
+                try
+                    repo_url = readchomp(Cmd(["git", "-C", pkg_path, "remote", "get-url", "origin"]))
+                    repo_rev = readchomp(Cmd(["git", "-C", pkg_path, "rev-parse", "--abbrev-ref", "HEAD"]))
+                    if repo_rev == "HEAD"  # detached HEAD → use commit SHA
+                        repo_rev = readchomp(Cmd(["git", "-C", pkg_path, "rev-parse", "HEAD"]))
+                    end
+                    # Convert SSH URLs to HTTPS so workers can authenticate via .git-credentials
+                    m = match(r"^git@([^:]+):(.+)$", repo_url)
+                    if m !== nothing
+                        repo_url = "https://$(m.captures[1])/$(m.captures[2])"
+                    end
+                    push!(dev_pkgs, (pkg_name, repo_url, repo_rev))
+                    @debug "Dev'd package '$pkg_name' at $pkg_path → $repo_url#$repo_rev"
+                catch e
+                    @warn "Cannot determine git info for dev'd package '$pkg_name' at $pkg_path; " *
+                          "it will be removed from the worker environment" exception=e
+                end
             end
         end
     end
+
+    dev_pkgs
+end
+
+function sanitize_manifest(manifest_text)
+    manifest = TOML.parse(manifest_text)
+    if haskey(manifest, "deps")
+        for (pkg, entries) in manifest["deps"]
+            for entry in entries
+                delete!(entry, "path")
+            end
+        end
+    end
+    io = IOBuffer()
+    TOML.print(io, manifest)
+    String(take!(io))
 end
 
 function compress_environment(julia_environment_folder)
     project_text = read(joinpath(julia_environment_folder, "Project.toml"), String)
     manifest_text = read(joinpath(julia_environment_folder, "Manifest.toml"), String)
+
+    manifest_text = sanitize_manifest(manifest_text)
+
     localpreferences_text = isfile(joinpath(julia_environment_folder, "LocalPreferences.toml")) ? read(joinpath(julia_environment_folder, "LocalPreferences.toml"), String) : ""
     local project_compressed,manifest_compressed,localpreferences_compressed
     with_logger(ConsoleLogger(stdout, Logging.Info)) do

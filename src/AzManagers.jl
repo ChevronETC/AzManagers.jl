@@ -2,8 +2,8 @@ module AzManagers
 
 using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, JSON, JWTs, LibCURL, LibGit2, Logging, Pkg, Printf, Random, Serialization, Sockets, TOML
 
-include("utilities.jl")
 include("types.jl")
+include("utilities.jl")
 include("templates.jl")
 include("scaleset.jl")
 include("worker.jl")
