@@ -4,6 +4,10 @@ struct SocketAccepted <: ManagerEvent
     socket::TCPSocket
 end
 
+struct ConnectionValidated <: ManagerEvent
+    wconfig::WorkerConfig
+end
+
 struct BatchFlushTick <: ManagerEvent end
 
 struct PruneTick <: ManagerEvent end
