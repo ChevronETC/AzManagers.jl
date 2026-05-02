@@ -100,7 +100,7 @@ function handle(manager, event::ConnectionValidated)
 
     # Flush immediately if batch is full
     if length(manager.wconfig_batch) >= manager.batch_max
-        flush_wconfig_batch(manager)
+        @async flush_wconfig_batch(manager)
         return
     end
 
@@ -119,7 +119,7 @@ function handle(manager, event::ConnectionValidated)
 end
 
 function handle(manager, ::BatchFlushTick)
-    flush_wconfig_batch(manager)
+    @async flush_wconfig_batch(manager)
 end
 
 function handle(manager, event::WorkersChanged)
