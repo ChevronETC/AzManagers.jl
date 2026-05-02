@@ -1,50 +1,15 @@
-function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures, show_quota)
-    _manager.session = session
-    _manager.nretry = nretry
-    _manager.verbose = verbose
-    _manager.save_cloud_init_failures = save_cloud_init_failures
-    _manager.show_quota = show_quota
-    _manager.ssh_user = ssh_user
-
-    if isdefined(_manager, :pending_up)
-        return _manager
-    end
-
-    _manager.port,_manager.server = listenany(getipaddr(), 9000)
-    _manager.pending_up = Channel{TCPSocket}(64)
-    _manager.pending_down = Dict{ScaleSet,Set{String}}()
-    _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
-    _manager.pruned = Dict{ScaleSet,Set{String}}()
-    _manager.preempted = Dict{ScaleSet,Set{String}}()
-    _manager.preempt_channel_futures = Dict{Int,Future}()
-    _manager.scalesets = Dict{ScaleSet,Int}()
-    _manager.task_add = @async add_pending_connections()
-    _manager.task_process = @async process_pending_connections()
-    _manager.lock = ReentrantLock()
-    _manager.scaleset_request_counter = 0
-    _manager.workers_changed = Threads.Condition()
-
-    @async scaleset_pruning()
-    @async scaleset_cleaning()
-
-    _manager
-end
-
-function add_pending_connections()
-    manager = azmanager()
+function accept_connections(manager)
     while true
         try
-            let s = accept(manager.server)
-                @debug "pushing new socket onto manger.pending_up" manager.pending_up.n_avail_items
-                put!(manager.pending_up, s)
-                @debug "done pushing new socket onto manger.pending_up" manager.pending_up.n_avail_items
-            end
+            s = accept(manager.server)
+            @debug "accepted new socket, posting SocketAccepted event"
+            put!(manager.events, SocketAccepted(s))
         catch e
             if !isopen(manager.server)
-                @error "AzManagers, server socket closed — stopping connection listener"
+                @info "AzManagers, server socket closed — stopping connection listener"
                 break
             end
-            @error "AzManagers, error adding pending connection"
+            @error "AzManagers, error accepting connection"
             logerror(e, Logging.Debug)
         end
     end
@@ -93,76 +58,31 @@ function addprocs_with_timeout(manager; sockets)
     pids
 end
 
-function process_pending_connections()
-    manager = azmanager()
-    max_sockets = manager.pending_up.sz_max
-    flush_delay = parse(Float64, get(ENV, "JULIA_AZMANAGERS_BATCH_FLUSH_DELAY",
-        get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "30.0")))
+function flush_socket_batch(manager)
+    sockets = copy(manager.socket_batch)
+    empty!(manager.socket_batch)
 
-    while true
-        # Block until at least one socket arrives
-        local first_socket
-        try
-            first_socket = take!(manager.pending_up)
-        catch e
-            @error "AzManagers, error retrieving pending connection"
-            logerror(e, Logging.Debug)
-            continue
-        end
-        sockets = TCPSocket[first_socket]
-
-        try
-            # Drain additional sockets until deadline or batch full
-            drain_with_deadline!(sockets, manager.pending_up, max_sockets, flush_delay)
-
-            @debug "flushing batch" length(sockets)
-            pids = addprocs_with_timeout(manager; sockets)
-            @debug "batch done" pids
-
-            if isdefined(manager, :workers_changed)
-                lock(manager.workers_changed)
-                try
-                    notify(manager.workers_changed)
-                finally
-                    unlock(manager.workers_changed)
-                end
-            end
-
-            start_preempt_monitors(manager, pids)
-            @debug "loop iteration complete, waiting for next socket"
-        catch e
-            @error "AzManagers, error processing connection batch"
-            logerror(e, Logging.Debug)
-        end
+    if isdefined(manager, :timer_batch_flush)
+        close(manager.timer_batch_flush)
     end
-end
 
-function drain_with_deadline!(sockets, pending_up, max_sockets, deadline_s)
-    deadline = Timer(deadline_s)
-    try
-        while length(sockets) < max_sockets
-            # Check if deadline has fired
-            if !isopen(deadline)
-                break
-            end
-            # Non-blocking check for available sockets
-            if isready(pending_up)
-                push!(sockets, take!(pending_up))
-            else
-                # Brief yield to avoid busy-wait, but much shorter than old 0.1s poll
-                sleep(0.01)
-            end
-        end
-    catch e
-        @debug "drain_with_deadline! interrupted" e
-    finally
-        close(deadline)
+    isempty(sockets) && return
+
+    @debug "flushing batch" length(sockets)
+    pids = addprocs_with_timeout(manager; sockets)
+    @debug "batch done" pids
+
+    if !isempty(pids)
+        put!(manager.events, WorkersChanged(nprocs() == 1 ? 0 : nworkers()))
     end
+
+    start_preempt_monitors(manager, pids)
 end
 
 function start_preempt_monitors(manager, pids)
     @info "starting preempt monitors" pids
     for pid in pids
+        manager.preempt_channel_ready[pid] = Base.Event()
         @async monitor_worker_preempt(manager, pid)
     end
     @info "preempt monitors launched" pids
@@ -178,51 +98,28 @@ function monitor_worker_preempt(manager, pid)
 
     try
         manager.preempt_channel_futures[pid] = remotecall(Channel{Bool}, pid, 1)
+        notify(manager.preempt_channel_ready[pid])
         remotecall_fetch(machine_preempt_loop, pid, manager.preempt_channel_futures[pid])
     catch e
-        handle_preempt_exception(manager, pid, wrkr, e)
+        if isa(e, RemoteException) && isa(e.captured.ex, TaskFailedException) && isa(e.captured.ex.task.result.ex, SpotPreemptException)
+            ex = e.captured.ex.task.result.ex
+            put!(manager.events, WorkerPreempted(pid, ex.instanceid, ex.notbefore))
+        else
+            put!(manager.events, WorkerLost(pid))
+        end
     end
 end
 
-function handle_preempt_exception(manager, pid, wrkr, e)
-    if isa(e, RemoteException) && isa(e.captured.ex, TaskFailedException) && isa(e.captured.ex.task.result.ex, SpotPreemptException)
-        # Graceful preemption: IMDS scheduled event was detected before the VM was killed.
-        # Honor the NotBefore window before deregistering.
-        ex = e.captured.ex.task.result.ex
-        notbefore = DateTime(ex.notbefore, dateformat"e, dd u yyyy HH:MM:SS \G\M\T")
-        @info "caught preempt exception for $(ex.clusterid), removing not before $notbefore UTC"
-        _now = now(UTC)
-        if notbefore > _now
-            @info "sleeping for $(notbefore - _now)"
-            sleep(notbefore - _now)
-        end
-        u = wrkr.config.userdata
+function deregister_worker_safe(pid)
+    lock(Distributed.worker_lock) do
         try
-            scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
-            add_instance_to_preempted_list(manager, scaleset, u["instanceid"])
+            if haskey(Distributed.map_pid_wrkr, pid)
+                Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
+                Distributed.deregister_worker(pid)
+            end
         catch e
-            @info "error adding instance to preempted list"
+            @error "error deregistering worker $pid" exception=(e, catch_backtrace())
         end
-    else
-        # Worker connection dropped — could be an ungraceful eviction, crash, or
-        # normal cleanup (rmprocs killed the process while preempt monitor was running).
-        # Only warn if the worker is still registered (i.e. not already cleaned up by rmprocs).
-        if haskey(Distributed.map_pid_wrkr, pid)
-            @warn "worker $pid lost unexpectedly (not a graceful preemption), deregistering" exception=(e, catch_backtrace())
-        end
-    end
-
-    # Always deregister the worker — whether graceful preemption or unexpected death.
-    try
-        lock(Distributed.worker_lock)
-        if haskey(Distributed.map_pid_wrkr, pid)
-            Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
-            Distributed.deregister_worker(pid)
-        end
-    catch e
-        @error "error deregistering worker $pid" exception=(e, catch_backtrace())
-    finally
-        unlock(Distributed.worker_lock)
     end
 end
 
@@ -280,8 +177,8 @@ end
 
 function spinner(n_target_workers)
     timeout = parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "720")) + 120
-    manager = azmanager()
     starttime = time()
+    spincount = 1
 
     while (nprocs() == 1 ? 0 : nworkers()) != n_target_workers
         elapsed = time() - starttime
@@ -292,21 +189,11 @@ function spinner(n_target_workers)
             error("Timed out after $(round(elapsed, digits=1))s waiting for workers: $n/$n_target_workers up. Consider increasing JULIA_WORKER_TIMEOUT.")
         end
 
-        # Wait for workers_changed notification with a timeout for UI updates
-        tsk = @async begin
-            lock(manager.workers_changed)
-            try
-                wait(manager.workers_changed)
-            finally
-                unlock(manager.workers_changed)
-            end
-        end
-        timedwait(() -> istaskdone(tsk), 2.0)
-
-        elapsed = time() - starttime
         n = nprocs() == 1 ? 0 : nworkers()
-        @printf(stdout, "\r  %d/%d workers up (%.1fs)     ", n, n_target_workers, elapsed)
+        @printf(stdout, "\r  %s %d/%d workers up (%.1fs)     ", string(spin(spincount, elapsed)[1]), n, n_target_workers, elapsed)
         flush(stdout)
+        spincount = spincount == 4 ? 1 : spincount + 1
+        sleep(0.25)
     end
 
     elapsed = time() - starttime
@@ -510,6 +397,55 @@ function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
 
     push!(launched, wconfig)
     notify(c)
+end
+
+function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSet, instanceid)
+    if haskey(manager.pending_down, scaleset)
+        @debug "pushing worker with id=$instanceid onto pending_down"
+        push!(manager.pending_down[scaleset], string(instanceid))
+    else
+        @debug "creating pending_down vector for id=$instanceid"
+        manager.pending_down[scaleset] = Set{String}([string(instanceid)])
+    end
+    nothing
+end
+
+function add_instance_to_pruned_list(manager::AzManager, scaleset::ScaleSet, instanceid)
+    if haskey(manager.pruned, scaleset)
+        @debug "pushing worker with id=$instanceid onto pruned"
+        push!(manager.pruned[scaleset], string(instanceid))
+    else
+        @debug "creating pruned vector for id=$instanceid"
+        manager.pruned[scaleset] = Set{String}([string(instanceid)])
+    end
+    nothing
+end
+
+function add_instance_to_preempted_list(manager::AzManager, scaleset::ScaleSet, instanceid)
+    if haskey(manager.preempted, scaleset)
+        @debug "pushing worker with id=$instanceid onto preempted"
+        push!(manager.preempted[scaleset], string(instanceid))
+    else
+        @debug "creating preempted vector for id=$instanceid"
+        manager.preempted[scaleset] = Set{String}([string(instanceid)])
+    end
+end
+
+function ispreempted(manager::AzManager, config::WorkerConfig)
+    u = config.userdata
+    scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
+    string(u["instanceid"])  ∈ get(manager.preempted, scaleset, Set{String}())
+end
+
+function add_instance_to_deleted_list(manager::AzManager, scaleset::ScaleSet, instanceid)
+    if haskey(manager.deleted, scaleset)
+        @debug "pushing worker with id=$instanceid onto deleted"
+        manager.deleted[scaleset][instanceid] = now(Dates.UTC)
+    else
+        @debug "creating deleted dictionary for id=$instanceid"
+        manager.deleted[scaleset] = Dict(instanceid=>now(Dates.UTC))
+    end
+    nothing
 end
 
 function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)

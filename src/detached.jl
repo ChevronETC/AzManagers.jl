@@ -1,6 +1,153 @@
 #
 # detached service client API
 #
+
+"""
+    poll_nic_ready(session, subscriptionid, resourcegroup, nicname; timeout, nretry, verbose)
+
+Poll Azure until NIC `nicname` reaches "Succeeded" state.  Returns the parsed NIC dictionary.
+Throws on "Failed" state or timeout.
+"""
+function poll_nic_ready(session, subscriptionid, resourcegroup, nicname; timeout, nretry, verbose)
+    starttime = time()
+    while true
+        nic_r = @retry nretry azrequest(
+            "GET",
+            verbose,
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2024-03-01",
+            ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"])
+        nic_dic = JSON.parse(String(nic_r.body))
+        state = nic_dic["properties"]["provisioningState"]
+
+        state == "Succeeded" && return nic_dic
+        state == "Failed" && error("NIC creation failed for $nicname")
+        (time() - starttime > timeout) && error("Timed out after $timeout seconds waiting for NIC $nicname to provision (state=$state)")
+        sleep(10)
+    end
+end
+
+"""
+    poll_vm_ready(session, subscriptionid, resourcegroup, vmname; timeout, nretry, verbose)
+
+Poll Azure until VM `vmname` reaches "Succeeded" state.  Returns nothing.
+Throws on "Failed" state or timeout.  Prints a spinner while waiting.
+"""
+function poll_vm_ready(session, subscriptionid, resourcegroup, vmname; timeout, nretry, verbose)
+    spincount = 1
+    starttime = time()
+    poll_interval = 10
+    while true
+        sleep(poll_interval)
+        _r = @retry nretry azrequest(
+            "GET",
+            verbose,
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2022-11-01",
+            ["Authorization"=>"Bearer $(token(session))"])
+        r = JSON.parse(String(_r.body))
+
+        r["properties"]["provisioningState"] == "Succeeded" && break
+
+        if r["properties"]["provisioningState"] == "Failed"
+            error("Failed to create VM.  Check the Azure portal to diagnose the problem.")
+        end
+
+        elapsed_time = time() - starttime
+        if elapsed_time > timeout
+            error("reached timeout ($timeout seconds) while creating head VM.")
+        end
+
+        write(stdout, spin(spincount, elapsed_time)*", waiting for VM, $vmname, to start.\r")
+        flush(stdout)
+        spincount = spincount == 4 ? 1 : spincount + 1
+    end
+    elapsed_time = time() - starttime
+    write(stdout, spin(5, elapsed_time)*", waiting for VM, $vmname, to start.\r")
+    write(stdout, "\n")
+end
+
+"""
+    poll_vm_deleted(manager, session, subscriptionid, resourcegroup, vmname; timeout, nretry, verbose)
+
+Poll Azure until VM `vmname` no longer appears in the resource group VM list.
+Warns on timeout rather than throwing.
+"""
+function poll_vm_deleted(manager, session, subscriptionid, resourcegroup, vmname; timeout, nretry, verbose)
+    spincount = 1
+    starttime = time()
+    poll_interval = 10
+    while true
+        sleep(poll_interval)
+
+        _r = @retry nretry azrequest(
+            "GET",
+            verbose,
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines?api-version=2022-11-01",
+            ["Authorization" => "Bearer $(token(session))"])
+
+        r = JSON.parse(String(_r.body))
+        vms,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
+
+        haveit = false
+        for vm in vms
+            if vm["name"] == vmname
+                haveit = true
+                break
+            end
+        end
+        haveit || break
+
+        elapsed_time = time() - starttime
+        if elapsed_time > timeout
+            @warn "Unable to delete virtual machine in $timeout seconds"
+            break
+        end
+
+        write(stdout, spin(spincount, elapsed_time)*", waiting for VM, $vmname, to delete.\r")
+        flush(stdout)
+        spincount = spincount == 4 ? 1 : spincount + 1
+    end
+    elapsed_time = time() - starttime
+    write(stdout, spin(5, elapsed_time)*", waiting for VM, $vmname, to delete.\r")
+    write(stdout, "\n")
+    nothing
+end
+
+"""
+    poll_detached_service(vm, custom_environment; timeout)
+
+Poll the detached service HTTP endpoint until it responds to a ping.
+Throws `DetachedServiceTimeoutException` on timeout.
+"""
+function poll_detached_service(vm, custom_environment; timeout)
+    spincount = 1
+    starttime = time()
+    poll_interval = 5
+    waitfor = custom_environment ? "Julia package instantiation and COFII detached service" : "COFII detached service"
+    while true
+        sleep(poll_interval)
+
+        try
+            HTTP.request("GET", "http://$(vm["ip"]):$(vm["port"])/cofii/detached/ping")
+            break
+        catch
+        end
+
+        elapsed_time = time() - starttime
+
+        if elapsed_time > timeout
+            @error "reached timeout ($timeout seconds) while waiting for $waitfor to start."
+            throw(DetachedServiceTimeoutException(vm))
+        end
+
+        write(stdout, spin(spincount, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
+        flush(stdout)
+        spincount = spincount == 4 ? 1 : spincount + 1
+    end
+    elapsed_time = time() - starttime
+    write(stdout, spin(5, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
+    write(stdout, "\n")
+end
+
 """
     addproc(template[; name="", basename="cbox", subscriptionid="myid", resourcegroup="mygroup", nretry=10, verbose=0, session=AzSession(;lazy=true), sigimagename="", sigimageversion="", imagename="", detachedservice=true])
 
@@ -106,42 +253,9 @@ function addproc(vm_template::Dict, nic_template=nothing;
 
     sleep(5)
 
-    nic_r = @retry nretry azrequest(
-        "GET",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2024-03-01",
-        ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"]
-    )
-    nic_dic = JSON.parse(String(nic_r.body))
-    nic_state = nic_dic["properties"]["provisioningState"]
-    try
-        while nic_state != "Succeeded"
-            sleep(10)
-            nic_r = @retry nretry azrequest(
-                "GET",
-                verbose,
-                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2024-03-01",
-                ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"]
-            )
-            nic_dic = JSON.parse(String(nic_r.body))
-            nic_state = nic_dic["properties"]["provisioningState"]
-        end
-    catch e 
-        @error "failed to get $nicname status"
-    end
-
-    if nic_state == "Failed"
-        @error "Nic creation failed!"
-    end
-
-    nic_r = @retry nretry azrequest(
-        "GET",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Network/networkInterfaces/$nicname?api-version=2024-03-01",
-        ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"]
-    )
-    nic_dic = JSON.parse(String(nic_r.body))
-    # nic_id = JSON.parse(String(r.body))["id"]
+    nic_timeout = parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "720"))
+    nic_task = @async poll_nic_ready(session, subscriptionid, resourcegroup, nicname; timeout=nic_timeout, nretry, verbose)
+    nic_dic = fetch(nic_task)
     nic_id = nic_dic["id"]
 
     @debug "unique names for the attached disks"
@@ -186,15 +300,21 @@ function addproc(vm_template::Dict, nic_template=nothing;
 
     # vm quota check
     @debug "quota check"
-    while true
+    max_quota_retries = parse(Int, get(ENV, "JULIA_AZMANAGERS_QUOTA_MAX_RETRIES", "60"))
+    for quota_attempt in 1:max_quota_retries
         navailable_cores, navailable_cores_spot = quotacheck(manager, subscriptionid, vm_template["value"], 1, nretry, verbose)
         navailable_cores >= 0 && break
-        @warn "Insufficient quota for VM.  VM will start when usage allows; sleeping for 60 seconds, and trying again."
+        @warn "Insufficient quota for VM. Attempt $quota_attempt/$max_quota_retries, sleeping for 60 seconds."
+
+        if quota_attempt == max_quota_retries
+            error("Exhausted $max_quota_retries quota retries (~$(max_quota_retries) minutes). Insufficient quota to provision VM.")
+        end
+
         try
             sleep(60)
         catch e
             isa(e, InterruptException) || rethrow(e)
-            @warn "Recieved interupt, canceling AzManagers operation."
+            @warn "Received interrupt, canceling AzManagers operation."
             return
         end
     end
@@ -207,39 +327,8 @@ function addproc(vm_template::Dict, nic_template=nothing;
         ["Content-Type"=>"application/json", "Authorization"=>"Bearer $(token(session))"],
         String(JSON.json(vm_template["value"])))
 
-    spincount = 1
-    starttime = tic = time()
-    elapsed_time = 0.0
-    while true
-        if time() - tic > 10
-            _r = @retry nretry azrequest(
-                "GET",
-                verbose,
-                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines/$vmname?api-version=2022-11-01",
-                ["Authorization"=>"Bearer $(token(session))"])
-            r = JSON.parse(String(_r.body))
-
-            r["properties"]["provisioningState"] == "Succeeded" && break
-
-            if r["properties"]["provisioningState"] == "Failed"
-                error("Failed to create VM.  Check the Azure portal to diagnose the problem.")
-            end
-            tic = time()
-        end
-
-        elapsed_time = time() - starttime
-        if elapsed_time > timeout
-            error("reached timeout ($timeout seconds) while creating head VM.")
-        end
-
-        write(stdout, spin(spincount, elapsed_time)*", waiting for VM, $vmname, to start.\r")
-        flush(stdout)
-        spincount = spincount == 4 ? 1 : spincount + 1
-
-        sleep(0.5)
-    end
-    write(stdout, spin(5, elapsed_time)*", waiting for VM, $vmname, to start.\r")
-    write(stdout, "\n")
+    vm_task = @async poll_vm_ready(session, subscriptionid, resourcegroup, vmname; timeout, nretry, verbose)
+    fetch(vm_task)
 
     _r = @retry nretry azrequest(
         "GET",
@@ -303,48 +392,25 @@ function rmproc(vm;
 
     if r.status >= 300
         @warn "Problem removing VM, $vmname, status=$(r.status)"
-    end
+    else
+        @info "VM '$vmname' deletion accepted by Azure (status=$(r.status))"
 
-    @debug "Waiting for VM deletion"
-    starttime = time()
-    elapsed_time = 0.0
-    tic = time() - 20
-    spincount = 1
-    while true
-        if time() - tic > 10
-            _r = @retry nretry azrequest(
-                "GET",
-                verbose,
-                "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachines?api-version=2022-11-01",
-                ["Authorization" => "Bearer $(token(session))"])
-
-            r = JSON.parse(String(_r.body))
-            vms,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
-
-            haveit = false
-            for vm in vms
-                if vm["name"] == vmname
-                    haveit = true
-                    break
-                end
+        # Extract async operation URL for background verification
+        async_url = ""
+        for (k, v) in r.headers
+            if k == "Azure-AsyncOperation"
+                async_url = v
+                break
             end
-            haveit || break
-            tic = time()
         end
 
-        elapsed_time = time() - starttime
-        elapsed_time > timeout && @warn "Unable to delete virtual machine in $timeout seconds"
-
-        write(stdout, spin(spincount, elapsed_time)*", waiting for VM, $vmname, to delete.\r")
-        flush(stdout)
-        spincount = spincount == 4 ? 1 : spincount + 1
-
-        sleep(0.5)
+        if async_url != "" && isdefined(manager, :events) && isopen(manager.events)
+            try
+                put!(manager.events, DeletionStarted(vmname, async_url, session))
+            catch
+            end
+        end
     end
-    write(stdout, spin(5, elapsed_time)*", waiting for VM, $vmname, to delete.\r")
-    write(stdout, "\n")
-
-    nothing
 end
 
 vm(;kwargs...) = nothing
@@ -401,36 +467,8 @@ end
 
 function detached_service_wait(vm, custom_environment)
     timeout = Distributed.worker_timeout()
-    starttime = time()
-    elapsed_time = 0.0
-    tic = starttime - 20
-    spincount = 1
-    waitfor = custom_environment ? "Julia package instantiation and COFII detached service" : "COFII detached service"
-    while true
-        if time() - tic > 5
-            try
-                r = HTTP.request("GET", "http://$(vm["ip"]):$(vm["port"])/cofii/detached/ping")
-                break
-            catch
-                tic = time()
-            end
-        end
-
-        elapsed_time = time() - starttime
-
-        if elapsed_time > timeout
-            @error "reached timeout ($timeout seconds) while waiting for $waitfor to start."
-            throw(DetachedServiceTimeoutException(vm))
-        end
-        
-        write(stdout, spin(spincount, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
-        flush(stdout)
-        spincount = spincount == 4 ? 1 : spincount + 1
-        
-        sleep(0.5)
-    end
-    write(stdout, spin(5, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
-    write(stdout, "\n")
+    svc_task = @async poll_detached_service(vm, custom_environment; timeout)
+    fetch(svc_task)
 end
 
 const VARIABLE_BUNDLE = Dict()

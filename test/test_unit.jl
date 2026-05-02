@@ -1,4 +1,4 @@
-using AzManagers, Test, HTTP, JSON, Dates, Distributed, Logging, Pkg, TOML
+using AzManagers, Test, HTTP, JSON, Dates, Distributed, Logging, Pkg, TOML, Sockets, AzSessions
 
 @testset "spin" begin
     s = AzManagers.spin(1, 12.345)
@@ -361,4 +361,176 @@ end
     @test AzManagers.detached_port() == 9999
     AzManagers.detached_port!(original)
     @test AzManagers.detached_port() == original
+end
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Event-driven architecture tests (async refactor)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@testset "Event types" begin
+    wp = AzManagers.WorkerPreempted(42, "inst-1", "Mon, 01 Jan 2024 00:00:00 GMT")
+    @test wp isa AzManagers.ManagerEvent
+    @test wp.pid == 42
+    @test wp.instanceid == "inst-1"
+    @test wp.notbefore == "Mon, 01 Jan 2024 00:00:00 GMT"
+
+    wl = AzManagers.WorkerLost(7)
+    @test wl isa AzManagers.ManagerEvent
+    @test wl.pid == 7
+
+    wc = AzManagers.WorkersChanged(3)
+    @test wc isa AzManagers.ManagerEvent
+    @test wc.count == 3
+
+    @test AzManagers.PruneTick()        isa AzManagers.ManagerEvent
+    @test AzManagers.CleanTick()        isa AzManagers.ManagerEvent
+    @test AzManagers.BatchFlushTick()   isa AzManagers.ManagerEvent
+    @test AzManagers.ShutdownRequested() isa AzManagers.ManagerEvent
+
+    ds = AzManagers.DeletionStarted("myvm", "https://example.com/op", AzSessions.AzSession(;lazy=true))
+    @test ds isa AzManagers.ManagerEvent
+    @test ds.vmname == "myvm"
+    @test ds.async_url == "https://example.com/op"
+end
+
+@testset "run_event_loop — process and shutdown" begin
+    mgr = AzManagers.AzManager()
+    mgr.events = Channel{AzManagers.ManagerEvent}(16)
+    mgr.socket_batch = Sockets.TCPSocket[]
+    mgr.batch_max = 64
+    mgr.workers_changed = Threads.Condition()
+    mgr.lock = ReentrantLock()
+
+    # Post benign events (handlers will log errors but not throw)
+    put!(mgr.events, AzManagers.PruneTick())
+    put!(mgr.events, AzManagers.CleanTick())
+    close(mgr.events)
+
+    # Should run to completion without throwing
+    AzManagers.run_event_loop(mgr)
+    @test !isopen(mgr.events)
+end
+
+@testset "ShutdownRequested handler" begin
+    mgr = AzManagers.AzManager()
+    mgr.events = Channel{AzManagers.ManagerEvent}(16)
+    mgr.timer_prune = Timer(999)
+    mgr.timer_clean = Timer(999)
+    mgr.lock = ReentrantLock()
+    mgr.socket_batch = Sockets.TCPSocket[]
+    mgr.batch_max = 64
+    mgr.workers_changed = Threads.Condition()
+
+    @test isopen(mgr.timer_prune)
+    @test isopen(mgr.timer_clean)
+
+    put!(mgr.events, AzManagers.ShutdownRequested())
+    event = take!(mgr.events)
+    AzManagers.handle(mgr, event)
+
+    @test !isopen(mgr.timer_prune)
+    @test !isopen(mgr.timer_clean)
+    @test !isopen(mgr.events)
+end
+
+@testset "SocketAccepted batching" begin
+    mgr = AzManagers.AzManager()
+    mgr.events = Channel{AzManagers.ManagerEvent}(64)
+    mgr.socket_batch = Sockets.TCPSocket[]
+    mgr.batch_max = 3
+    mgr.lock = ReentrantLock()
+    mgr.workers_changed = Threads.Condition()
+
+    # Create a real socket pair for type correctness
+    server = listen(getipaddr(), 0)
+    port = getsockname(server)[2]
+    client = connect(getipaddr(), port)
+    accepted = accept(server)
+
+    AzManagers.handle(mgr, AzManagers.SocketAccepted(client))
+    @test length(mgr.socket_batch) == 1
+    @test isdefined(mgr, :timer_batch_flush)
+
+    close(client)
+    close(accepted)
+    close(server)
+    close(mgr.events)
+end
+
+@testset "WorkersChanged notifies condition" begin
+    mgr = AzManagers.AzManager()
+    mgr.workers_changed = Threads.Condition()
+    mgr.events = Channel{AzManagers.ManagerEvent}(8)
+    mgr.lock = ReentrantLock()
+
+    notified = Ref(false)
+    t = @async begin
+        lock(mgr.workers_changed) do
+            wait(mgr.workers_changed)
+            notified[] = true
+        end
+    end
+    yield()
+
+    AzManagers.handle(mgr, AzManagers.WorkersChanged(5))
+    wait(t)
+    @test notified[]
+    close(mgr.events)
+end
+
+@testset "DeletionStarted handler tracks pending deletion" begin
+    mgr = AzManagers.AzManager()
+    mgr.events = Channel{AzManagers.ManagerEvent}(8)
+    mgr.pending_deletions = @NamedTuple{vmname::String, url::String, session::AzSessions.AzSessionAbstract, started::Float64}[]
+
+    sess = AzSessions.AzSession(;lazy=true)
+    event = AzManagers.DeletionStarted("testvm", "https://example.com/op/123", sess)
+    AzManagers.handle(mgr, event)
+
+    @test length(mgr.pending_deletions) == 1
+    @test mgr.pending_deletions[1].vmname == "testvm"
+    @test mgr.pending_deletions[1].url == "https://example.com/op/123"
+    close(mgr.events)
+end
+
+@testset "deregister_worker_safe — missing pid is no-op" begin
+    AzManagers.deregister_worker_safe(999_999)
+    @test true
+end
+
+@testset "AzManager field inventory" begin
+    mgr = AzManagers.AzManager()
+
+    # New fields undefined on bare constructor
+    @test !isdefined(mgr, :events)
+    @test !isdefined(mgr, :socket_batch)
+    @test !isdefined(mgr, :task_accept)
+    @test !isdefined(mgr, :task_event_loop)
+    @test !isdefined(mgr, :timer_prune)
+    @test !isdefined(mgr, :timer_clean)
+    @test !isdefined(mgr, :preempt_channel_ready)
+    @test !isdefined(mgr, :pending_deletions)
+
+    # Old deleted fields must not exist
+    @test !hasfield(AzManagers.AzManager, :pending_up)
+    @test !hasfield(AzManagers.AzManager, :task_add)
+    @test !hasfield(AzManagers.AzManager, :task_process)
+    @test !hasfield(AzManagers.AzManager, :task_prune)
+    @test !hasfield(AzManagers.AzManager, :task_clean)
+end
+
+@testset "flush_socket_batch — empty batch is no-op" begin
+    mgr = AzManagers.AzManager()
+    mgr.events = Channel{AzManagers.ManagerEvent}(16)
+    mgr.socket_batch = Sockets.TCPSocket[]
+    mgr.batch_max = 64
+    mgr.lock = ReentrantLock()
+    mgr.timer_batch_flush = Timer(999)
+    mgr.workers_changed = Threads.Condition()
+
+    AzManagers.flush_socket_batch(mgr)
+
+    @test isempty(mgr.socket_batch)
+    @test !isopen(mgr.timer_batch_flush)
+    close(mgr.events)
 end
