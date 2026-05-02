@@ -16,7 +16,7 @@ include("event_loop.jl")
 include("detached_service.jl")
 include("detached.jl")
 
-export AzManager, DetachedJob, addproc, machine_preempt_channel_future, metrics, nphysical_cores, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
+export default_manager, DetachedJob, addproc, machine_preempt_channel_future, metrics, nphysical_cores, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
 
 if !isdefined(Base, :get_extension)
     include("../ext/MPIExt.jl")

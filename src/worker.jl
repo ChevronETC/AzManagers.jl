@@ -192,7 +192,7 @@ function machine_preempt_channel_future(pid)
     end
 
     if haskey(manager.preempt_channel_futures, pid)
-        return manager.preempt_channel_futures[pid]
+        return fetch(manager.preempt_channel_futures[pid])::Channel{Bool}
     end
     @warn "unable to obtain preemption channel from worker $pid"
     return nothing

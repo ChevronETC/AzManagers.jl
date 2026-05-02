@@ -95,6 +95,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
 end
 
 azmanager() = _manager
+default_manager() = azmanager()
 
 function __init__()
     if myid() == 1

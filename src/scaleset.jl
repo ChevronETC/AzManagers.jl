@@ -1,5 +1,8 @@
 scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : Dict{ScaleSet,Int}()
-scalesets() = scalesets(azmanager())
+function scalesets()
+    d = scalesets(azmanager())
+    Dict{String,Int}(s.scalesetname => n for (s, n) in d)
+end
 pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Set{String}}()
 
 function delete_scaleset(manager, scaleset)
