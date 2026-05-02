@@ -31,8 +31,6 @@ function handle(manager, ::CleanTick)
         delete_pending_down_vms()
         delete_empty_scalesets()
         scaleset_sync()
-        all_vms = list_all_scaleset_vms(manager)
-        prune_cluster(all_vms)
         isdefined(manager, :metrics) && record_clean_time!(manager.metrics)
     catch e
         @warn "scaleset cleaning error" exception=(e, catch_backtrace())
@@ -54,34 +52,38 @@ function check_pending_deletions(manager)
     !isdefined(manager, :pending_deletions) && return
     isempty(manager.pending_deletions) && return
 
-    completed = Int[]
-    for (i, entry) in enumerate(manager.pending_deletions)
-        try
-            r = HTTP.request("GET", entry.url,
-                ["Authorization" => "Bearer $(token(entry.session))"];
-                readtimeout=10, retry=false, redirect=false)
-            body = JSON.parse(String(r.body))
-            status = get(body, "status", "Unknown")
+    completed = Vector{Int}()
+    lk = ReentrantLock()
 
-            if status == "Succeeded"
-                @info "VM deletion confirmed" vmname=entry.vmname
-                push!(completed, i)
-            elseif status == "Failed"
-                @warn "VM deletion reported failure" vmname=entry.vmname body
-                push!(completed, i)
-            else
-                elapsed = time() - entry.started
-                if elapsed > 600
-                    @warn "VM deletion still in progress" vmname=entry.vmname elapsed_seconds=round(elapsed, digits=0)
+    @sync for (i, entry) in enumerate(manager.pending_deletions)
+        @async begin
+            try
+                r = HTTP.request("GET", entry.url,
+                    ["Authorization" => "Bearer $(token(entry.session))"];
+                    readtimeout=10, retry=false, redirect=false)
+                body = JSON.parse(String(r.body))
+                status = get(body, "status", "Unknown")
+
+                if status == "Succeeded"
+                    @info "VM deletion confirmed" vmname=entry.vmname
+                    lock(lk) do; push!(completed, i); end
+                elseif status == "Failed"
+                    @warn "VM deletion reported failure" vmname=entry.vmname body
+                    lock(lk) do; push!(completed, i); end
+                else
+                    elapsed = time() - entry.started
+                    if elapsed > 600
+                        @warn "VM deletion still in progress" vmname=entry.vmname elapsed_seconds=round(elapsed, digits=0)
+                    end
                 end
-            end
-        catch e
-            # 404 means the operation completed and the resource is gone
-            if e isa HTTP.StatusError && e.status == 404
-                @info "VM deletion confirmed (resource gone)" vmname=entry.vmname
-                push!(completed, i)
-            else
-                @debug "error checking deletion status" vmname=entry.vmname exception=(e, catch_backtrace())
+            catch e
+                # 404 means the operation completed and the resource is gone
+                if e isa HTTP.StatusError && e.status == 404
+                    @info "VM deletion confirmed (resource gone)" vmname=entry.vmname
+                    lock(lk) do; push!(completed, i); end
+                else
+                    @debug "error checking deletion status" vmname=entry.vmname exception=(e, catch_backtrace())
+                end
             end
         end
     end
@@ -106,8 +108,7 @@ function handle(manager, event::ConnectionValidated)
 
     # Arm flush timer on first wconfig in a new batch
     if length(manager.wconfig_batch) == 1
-        flush_delay = parse(Float64, get(ENV, "JULIA_AZMANAGERS_BATCH_FLUSH_DELAY",
-            get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "5.0")))
+        flush_delay = parse(Float64, get(ENV, "JULIA_AZMANAGERS_BATCH_FLUSH_DELAY", "5.0"))
         manager.timer_batch_flush = Timer(flush_delay) do _
             try
                 put!(manager.events, BatchFlushTick())
