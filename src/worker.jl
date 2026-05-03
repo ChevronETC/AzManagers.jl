@@ -243,8 +243,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
             "localid" => 1,
             "name" => r["compute"]["name"],
             "mpi" => mpi_size > 0,
-            "mpi_size" => mpi_size,
-            "physical_hostname" => azure_physical_name()))
+            "mpi_size" => mpi_size))
 
     _vm = base64encode(JSON.json(vm))
 

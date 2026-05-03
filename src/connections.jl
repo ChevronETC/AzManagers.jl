@@ -449,6 +449,27 @@ end
 function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfig, op::Symbol)
     if op == :register
         remote_do(AzManagers.logging, id)
+
+        # Enrich with physical hostname from worker VM (reads Hyper-V KVP)
+        # Uses remotecall_eval into Main to avoid requiring AzManagers on the worker
+        userdata = isdefined(config, :userdata) ? config.userdata : nothing
+        if userdata isa Dict
+            let _id = id, _userdata = userdata
+                @async try
+                    phname = Distributed.remotecall_eval(Main, _id,
+                        :(try
+                            s = split(read("/var/lib/hyperv/.kvp_pool_3", String), '\0'; keepempty=false)
+                            i = findfirst(==("PhysicalHostName"), s)
+                            i !== nothing && i < length(s) ? s[i+1] : "unknown"
+                        catch
+                            "unknown"
+                        end))
+                    _userdata["physical_hostname"] = phname
+                catch e
+                    @debug "Could not fetch physical hostname" pid=_id exception=e
+                end
+            end
+        end
     end
     if op == :interrupt
         # TODO

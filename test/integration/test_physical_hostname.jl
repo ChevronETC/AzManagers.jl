@@ -11,6 +11,9 @@ include(joinpath(@__DIR__, "common.jl"))
             @info "Sub-test 1/2: Scale set with 2 workers → expect physical_hostname set on each worker" group
             addprocs(AzManager(), Dict{Any,Any}(TEMPLATE), 2; waitfor=true, group=group, session=SESSION, exename=EXENAME, overprovision=false)
 
+            # Physical hostname is enriched asynchronously after registration
+            sleep(5)
+
             wrkers = Distributed.map_pid_wrkr
             for i in workers()
                 userdata = wrkers[i].config.userdata
