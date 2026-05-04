@@ -75,12 +75,16 @@ function preempted(instanceid::AbstractString, clusterid::Int)
         if time() - tic > 55 # 55 seconds, simply because it is less that 60, and 60 seconds is the eviction notice.
             @debug "$(now()), took longer than 55 seconds to query the meta-data server for scheduled events (elapsed time=$(time() - tic))."
         end
-    catch
-        @warn "unable to get scheduledevents."
+    catch e
+        @warn "unable to get scheduledevents" exception=(e, catch_backtrace())
         return false, ""
     end
     r = JSON.parse(String(_r.body))
-    for event in get(r, "Events", [])
+    events = get(r, "Events", [])
+    if !isempty(events)
+        @info "IMDS scheduledevents on pid=$clusterid: $(length(events)) event(s)" events
+    end
+    for event in events
         if get(event, "EventType", "") == "Preempt" && instanceid ∈ get(event, "Resources", [])
             @warn "Machine with id $clusterid ($instanceid) is being pre-empted" now(Dates.UTC) event["NotBefore"] event["EventType"] event["EventSource"]
             return true, event["NotBefore"]
@@ -90,7 +94,7 @@ function preempted(instanceid::AbstractString, clusterid::Int)
 end
 
 macro spawn_interactive(ex::Expr)
-    if VERSION > v"1.9"
+    if VERSION >= v"1.9"
         esc(:(Threads.@spawn :interactive $ex))
     else
         esc(:(Threads.@spawn $ex))
@@ -105,28 +109,33 @@ end
 Base.showerror(io::IO, e::SpotPreemptException) = print(io, "spot preemption on process '$(e.clusterid)' ($(e.instanceid)), not before '$(e.notbefore)'")
 
 function machine_preempt_loop(preempt_channel_future)
-    if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
+    ninteractive = VERSION >= v"1.9" ? Threads.nthreads(:interactive) : 0
+    @info "machine_preempt_loop: pid=$(myid()), VERSION=$VERSION, interactive_threads=$ninteractive"
+    if VERSION >= v"1.9" && ninteractive > 0
         tsk = @spawn_interactive begin
             preempt_channel = fetch(preempt_channel_future)::Channel{Bool}
             instanceid = get_instanceid()
             clusterid = myid()
-            @debug "starting preempt loop on $clusterid, $instanceid"
+            @info "preempt loop started on pid=$clusterid, instanceid=$instanceid"
 
+            poll_count = 0
             while true
+                poll_count += 1
                 ispreempted, notbefore = preempted(instanceid, clusterid)
                 if ispreempted
-                    @debug "putting onto preempt_channel"
+                    @info "preempt detected on pid=$clusterid after $poll_count polls"
                     put!(preempt_channel, true)
-                    @debug "done putting onto preempt_channel"
-                    # pid=1 will catch this exception, and remove the worker from the Julia cluster.
                     throw(SpotPreemptException(instanceid, clusterid, notbefore))
+                end
+                if poll_count % 30 == 0
+                    @info "preempt loop heartbeat: pid=$clusterid, polls=$poll_count, no preempt detected"
                 end
                 sleep(1)
             end
         end
         fetch(tsk)
     else
-        @warn "AzManagers is not running the preempt loop for pid=$(myid()) since it requires at least one interactive thread on worker machines."
+        @warn "preempt loop NOT running on pid=$(myid()): requires Julia ≥ 1.9 with interactive threads" VERSION ninteractive
     end
 end
 
@@ -191,8 +200,18 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
     nbytes_written == Distributed.HDR_COOKIE_LEN || error("unable to write bytes")
     flush(c)
 
-    _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false)
-    r = JSON.parse(String(_r.body))
+    local r
+    for attempt in 1:3
+        try
+            _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false, readtimeout=30)
+            r = JSON.parse(String(_r.body))
+            break
+        catch e
+            @warn "IMDS metadata request failed (attempt $attempt/3)" exception=(e, catch_backtrace())
+            attempt == 3 && rethrow()
+            sleep(5 * attempt)
+        end
+    end
     vm = Dict(
         "exeflags" => exeflags,
         "bind_addr" => string(getipaddr(IPv4)),
@@ -287,8 +306,12 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     print(out, '\n')
     flush(out)
 
-    Sockets.nagle(sock, false)
-    Sockets.quickack(sock, true)
+    try
+        Sockets.nagle(sock, false)
+        Sockets.quickack(sock, true)
+    catch e
+        @debug "failed to set socket options" exception=(e, catch_backtrace())
+    end
 
     if ccall(:jl_running_on_valgrind,Cint,()) != 0
         println(out, "PID = $(getpid())")
@@ -781,12 +804,19 @@ function simulate_spot_eviction(pid)
     resourcegroup = Distributed.map_pid_wrkr[pid].config.userdata["resourcegroup"]
     scalesetname = Distributed.map_pid_wrkr[pid].config.userdata["scalesetname"]
 
+    @info "simulate_spot_eviction: pid=$pid, instanceid=$instanceid, scaleset=$scalesetname"
+
     manager = azmanager()
     session = manager.session
 
-    HTTP.request(
+    r = HTTP.request(
         "POST",
         "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname/virtualMachines/$instanceid/simulateEviction?api-version=2023-03-01",
-        ["Authorization" => "Bearer $(token(session))"])
+        ["Authorization" => "Bearer $(token(session))"];
+        status_exception=false)
+    @info "simulate_spot_eviction response" status=r.status body=String(r.body)
+    if r.status >= 300
+        @warn "simulate_spot_eviction failed" status=r.status body=String(r.body)
+    end
     nothing
 end

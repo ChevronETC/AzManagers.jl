@@ -88,7 +88,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     subnetid = vm_template["value"]["properties"]["networkProfile"]["networkInterfaces"][1]["id"]
 
     @debug "getting image info"
-    sigimagename, sigimageversion, imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
+    sigimagename, sigimageversion, imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename, vm_template["value"])
     scaleset_image!(manager, vm_template["value"], sigimagename, sigimageversion, imagename)
 
     vm_template["value"]["properties"]["storageProfile"]["osDisk"]["diskSizeGB"] = max(osdisksize, image_osdisksize(manager, vm_template["value"], sigimagename, sigimageversion, imagename))
@@ -487,6 +487,7 @@ function detached_run(code, ip::String="", port=detached_port();
         sigimagename = "",
         sigimageversion = "",
         imagename = "",
+        exename = "$(Sys.BINDIR)/julia",
         nretry = 10,
         verbose = 0,
         detachedservice = true)
@@ -503,6 +504,7 @@ function detached_run(code, ip::String="", port=detached_port();
             sigimagename = sigimagename,
             sigimageversion = sigimageversion,
             imagename = imagename,
+            exename = exename,
             nretry = nretry,
             verbose = verbose)
     else
