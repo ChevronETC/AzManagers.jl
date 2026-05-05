@@ -79,6 +79,7 @@ source "azure-arm" "cofii" {
         image_name = var.image_name
         image_version = var.image_version
         replication_regions = ["South Central US"]
+        storage_account_type = "Premium_LRS"
     }
     shared_image_gallery_timeout = "120m"
     build_resource_group_name = var.resource_group
@@ -125,9 +126,9 @@ build {
     provisioner "shell" {
         inline = [
             "echo \"**** installing Julia ****\"",
-            "sudo wget https://julialang-s3.julialang.org/bin/linux/x64/${var.julia_version_major}.${var.julia_version_minor}/julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz",
+            "sudo wget -q https://julialang-s3.julialang.org/bin/linux/x64/${var.julia_version_major}.${var.julia_version_minor}/julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz",
             "sudo mkdir -p /opt/julia",
-            "sudo tar --strip-components=1 -xzvf julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz -C /opt/julia",
+            "sudo tar --strip-components=1 -xzf julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz -C /opt/julia",
             "sudo rm -f julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz",
             "sed -i '1 i export PATH=\"/opt/julia/bin:$${PATH}\"' ~/.bashrc",
             "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"720\"' ~/.bashrc"
@@ -154,6 +155,8 @@ build {
             "export TENANT_ID=\"${var.tenant_id}\"",
             "export SUBSCRIPTION_ID=\"${var.subscription_id}\"",
             "export RESOURCE_GROUP=\"${var.resource_group}\"",
+            "export RESOURCE_GROUP_VNET=\"${var.resource_group}\"",
+            "export RESOURCE_GROUP_IMAGE=\"${var.resource_group}\"",
             "export CLIENT_ID=\"${var.client_id}\"",
             "export CLIENT_SECRET=\"${var.client_secret}\"",
             "export IMAGE_NAME=\"${var.image_name}\"",

@@ -4,67 +4,109 @@ on:
     branches: [master]
     tags: ["*"]
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }} - ${{ github.event_name }}
-    runs-on: ${{ matrix.os }}
+  # ─── Unit tests: fast, no Azure infrastructure needed ──────────────────────
+  unit:
+    name: Unit — Julia ${{ matrix.version }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        version:
-          - 1.6
-          - 1
-        os:
-          - ubuntu-latest
-        arch:
-          - x64
+        version: ["1.10", "1"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+      - uses: julia-actions/cache@v2
+      - name: Run unit tests
+        run: |
+          julia --project=. -e '
+            using Pkg
+            Pkg.instantiate()
+            Pkg.test()'
+        env:
+          AZMANAGERS_TEST_SUITE: unit
+
+  # ─── Integration tests: provisions Azure infra per run ─────────────────────
+  integration:
+    name: Integration — Julia ${{ matrix.version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ["1.10", "1"]
     env:
-      TENANT_ID: "${{ secrets.TENANT_ID }}" 
+      TENANT_ID: "${{ secrets.TENANT_ID }}"
       SUBSCRIPTION_ID: "${{ secrets.SUBSCRIPTION_ID }}"
-      RESOURCE_GROUP: "AzureBackupRG-azman-${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}"
       CLIENT_ID: "${{ secrets.CLIENT_ID }}"
       CLIENT_SECRET: "${{ secrets.CLIENT_SECRET }}"
-      GALLERY_NAME: "${{ github.run_id }}${{ matrix.version }}gallery"
-      IMAGE_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-image"
-      VM_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vm"
-      PUBLIC_IP_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-pubip"
-      VNET_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-vnet"
-      NSG_NAME: "${{ matrix.os }}-${{ matrix.version }}-${{ github.run_id }}-nsg"
+      RESOURCE_GROUP: "azman-ci-${{ github.run_id }}-${{ matrix.version }}"
+      # In CI the VNet and image gallery live in the same ephemeral resource group
+      RESOURCE_GROUP_VNET: "azman-ci-${{ github.run_id }}-${{ matrix.version }}"
+      RESOURCE_GROUP_IMAGE: "azman-ci-${{ github.run_id }}-${{ matrix.version }}"
+      GALLERY_NAME: "azmanci${{ github.run_id }}v${{ matrix.version == '1.10' && '110' || 'latest' }}gallery"
+      IMAGE_NAME: "azman-ci-image"
+      VM_NAME: "azman-ci-coordinator"
+      PUBLIC_IP_NAME: "azman-ci-pubip"
+      VNET_NAME: "azman-ci-vnet"
+      NSG_NAME: "azman-ci-nsg"
       SUBNET_NAME: "default"
-      COMMIT_SHA: "${{ github.sha }}"
     steps:
-      - uses: actions/checkout@v3
-      - uses: julia-actions/setup-julia@v1
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
         with:
           version: ${{ matrix.version }}
 
-      - name: Create an SSH Key Pair
-        run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
-
-      - name: Create Prereq. Azure Resources
+      - name: Generate SSH key pair
         run: |
-          az login --service-principal   -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
-          az group create                -g "$RESOURCE_GROUP" -l southcentralus --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com"
-          az group wait                  -g "$RESOURCE_GROUP" --created 
-          az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
-          az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-jammy" -s "22_04-lts-gen2" --os-type linux --hyper-v-generation V2
+          mkdir -p /home/runner/.ssh
+          ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
+
+      - name: Azure login
+        run: |
+          az login --service-principal -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
+
+      - name: Create Azure infrastructure
+        run: |
+          set -euo pipefail
+          az group create -g "$RESOURCE_GROUP" -l southcentralus \
+            --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=ci" \
+                   "OwnerEmail=sam.kaplan@chevron.com" "ServiceID=5038614" \
+                   "GitHubRun=${{ github.run_id }}"
+          az group wait -g "$RESOURCE_GROUP" --created
+
           az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME"
-          az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22
+          az network nsg rule create     -g "$RESOURCE_GROUP" -n "allow-ssh" --nsg-name "$NSG_NAME" \
+            --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22
           az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
-          az network vnet subnet update  -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" --vnet-name "$VNET_NAME" --network-security-group "$NSG_NAME"
+          az network vnet subnet update  -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" --vnet-name "$VNET_NAME" \
+            --network-security-group "$NSG_NAME"
+
+          az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
+          az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" \
+            -p "canonical" -f "0001-com-ubuntu-server-jammy" -s "22_04-lts-gen2" \
+            --os-type linux --hyper-v-generation V2
 
       - name: Install Packer
         run: |
-          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
-          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-          sudo apt-get update && sudo apt-get install packer
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/hashicorp.list
+          sudo apt-get update && sudo apt-get install -y packer
 
-      - name: Build Packer Image
+      - name: Build VM image (Packer)
         run: |
           export JULIA_VERSION_MAJOR=$(julia -e 'print(stdout, VERSION.major)')
           export JULIA_VERSION_MINOR=$(julia -e 'print(stdout, VERSION.minor)')
           export JULIA_VERSION_PATCH=$(julia -e 'print(stdout, VERSION.patch)')
-          packer init ${GITHUB_WORKSPACE}/test/image.pkr.hcl
+
+          packer init test/image.pkr.hcl
           packer build -color=false -timestamp-ui \
             -var "subscription_id=${SUBSCRIPTION_ID}" \
             -var "tenant_id=${TENANT_ID}" \
@@ -73,47 +115,68 @@ jobs:
             -var "resource_group=${RESOURCE_GROUP}" \
             -var "image_name=${IMAGE_NAME}" \
             -var "virtual_network=${VNET_NAME}" \
-            -var "virtual_subnet=default" \
+            -var "virtual_subnet=${SUBNET_NAME}" \
             -var "gallery=${GALLERY_NAME}" \
             -var "julia_version_major=${JULIA_VERSION_MAJOR}" \
             -var "julia_version_minor=${JULIA_VERSION_MINOR}" \
             -var "julia_version_patch=${JULIA_VERSION_PATCH}" \
             -var "azmanagers_version=${{ github.sha }}" \
-            ${GITHUB_WORKSPACE}/test/image.pkr.hcl
+            test/image.pkr.hcl
 
       - name: Create coordinator VM
         run: |
-          az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" --image "$IMAGE_NAME" --public-ip-sku Standard --public-ip-address "$PUBLIC_IP_NAME" --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --nsg "$NSG_NAME" --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub --admin-username cvx
+          az vm create -g "$RESOURCE_GROUP" -n "$VM_NAME" \
+            --image "$IMAGE_NAME" --size Standard_D8s_v3 \
+            --public-ip-sku Standard --public-ip-address "$PUBLIC_IP_NAME" \
+            --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --nsg "$NSG_NAME" \
+            --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub \
+            --admin-username cvx
 
-      - name: Run the unit tests
+      - name: Run integration tests
         run: |
-          echo "Grabbing the coordinator VM's Pubic IP Address..."
-          ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" | jq '.ipAddress' | cut -d "\"" -f 2)
-          echo ""
+          set -euo pipefail
+          IP=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" --query ipAddress -o tsv)
+          echo "Coordinator VM IP: $IP"
 
-          echo "Running the Unit Tests and Code Coverage..."
-          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress "julia -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true); using AzManagers; include(joinpath(pkgdir(AzManagers), \"test\", \"julia-codecov.jl\"))'"
-          echo ""
+          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$IP \
+            "export AZMANAGERS_TEST_SUITE=integration && \
+             export AZMANAGERS_TEST_ENV=ci && \
+             export AZMANAGERS_VERSION=${{ github.sha }} && \
+             export JULIA_WORKER_TIMEOUT=300 && \
+             export JULIA_NUM_THREADS=4 && \
+             julia -t4 -e 'using Pkg; Pkg.test(\"AzManagers\"; coverage=true)'"
 
-          echo "scp-ing the Coverage Report..."
-          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/lcov.info lcov.info
+      - name: Collect coverage
+        if: success()
+        run: |
+          IP=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$PUBLIC_IP_NAME" --query ipAddress -o tsv)
+          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$IP \
+            "julia -e 'using AzManagers; include(joinpath(pkgdir(AzManagers), \"test\", \"julia-codecov.jl\"))'"
+          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$IP:/home/cvx/lcov.info lcov.info
+        continue-on-error: true
 
-      - uses: codecov/codecov-action@v1
+      - uses: codecov/codecov-action@v4
+        if: success()
         with:
           file: lcov.info
+        continue-on-error: true
 
-      - name: Delete CI Resource Group
+      - name: Delete CI resource group
+        if: always()
         run: |
-          az group delete -n "$RESOURCE_GROUP" --yes
-        if: ${{ always() }}
+          az group delete -n "$RESOURCE_GROUP" --yes --no-wait
+        continue-on-error: true
+
+  # ─── Documentation ─────────────────────────────────────────────────────────
   docs:
     name: Documentation
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/'))
     steps:
-      - uses: actions/checkout@v3
-      - uses: julia-actions/setup-julia@v1
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
         with:
-          version: '1'
+          version: "1"
       - run: |
           julia --project=docs -e '
             using Pkg
