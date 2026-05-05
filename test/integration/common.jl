@@ -54,8 +54,9 @@ end
     unique_group() -> String
 
 Generate a unique scale-set group name for a test.
+Uses RandomDevice to avoid collisions when @testset resets the task-local RNG.
 """
-unique_group() = "test$(randstring('a':'z', 6))"
+unique_group() = "test$(randstring(RandomDevice(), 'a':'z', 6))"
 
 """
     scaleset_url(group) -> String

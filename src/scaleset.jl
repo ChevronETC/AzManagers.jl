@@ -18,35 +18,58 @@ end
 
 function delete_empty_scalesets()
     manager = azmanager()
-    lock(manager.lock) do
+
+    # Collect candidates under the lock (no I/O)
+    to_delete = lock(manager.lock) do
         _scalesets = scalesets(manager)
+        candidates = ScaleSet[]
         for (scaleset, capacity) in _scalesets
             if capacity == 0
-                delete_scaleset(manager, scaleset)
+                # Don't delete scalesets with active scaling — the capacity may be
+                # stale due to Resource Graph eventual consistency.
+                if isdefined(manager, :scaling_in_progress) && scaleset ∈ manager.scaling_in_progress
+                    continue
+                end
+                push!(candidates, scaleset)
             end
         end
+        candidates
+    end
+
+    # Delete outside the lock (network I/O)
+    for scaleset in to_delete
+        delete_scaleset(manager, scaleset)
     end
 end
 
 function delete_pending_down_vms()
     manager = azmanager()
-    lock(manager.lock) do
-        for (scaleset, ids) in pending_down(manager)
-            @debug "deleting pending down vms $ids in $scaleset"
-            try
-                delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
-                new_capacity = max(0, scalesets(manager)[scaleset] - length(ids))
+
+    # Snapshot pending work under the lock (no I/O)
+    work = lock(manager.lock) do
+        [(scaleset=ss, ids=copy(ids)) for (ss, ids) in pending_down(manager)]
+    end
+
+    # Delete VMs outside the lock (network I/O)
+    for (; scaleset, ids) in work
+        @debug "deleting pending down vms $ids in $scaleset"
+        try
+            delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
+            lock(manager.lock) do
+                new_capacity = max(0, get(scalesets(manager), scaleset, 0) - length(ids))
                 scalesets(manager)[scaleset] = new_capacity
                 delete!(pending_down(manager), scaleset)
-            catch e
-                if status(e) in (404, 409)
-                    @debug "scaleset not found or conflict during VM deletion" scaleset=scaleset.scalesetname status=status(e)
+            end
+        catch e
+            if status(e) in (404, 409)
+                @debug "scaleset not found or conflict during VM deletion" scaleset=scaleset.scalesetname status=status(e)
+                lock(manager.lock) do
                     if haskey(pending_down(manager), scaleset)
                         delete!(pending_down(manager), scaleset)
                     end
-                else
-                    @error "failed to delete scaleset VMs — manual clean-up may be required" scaleset=scaleset.scalesetname vm_count=length(ids) exception=(e, catch_backtrace())
                 end
+            else
+                @error "failed to delete scaleset VMs — manual clean-up may be required" scaleset=scaleset.scalesetname vm_count=length(ids) exception=(e, catch_backtrace())
             end
         end
     end
@@ -56,43 +79,54 @@ end
     # sync server and client side views of the resources
 function scaleset_sync()
     manager = azmanager()
-    lock(manager.lock) do
-        try
-            _pending_down = pending_down(manager)
-            pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
-            if nprocs()-1+pending_down_count != nworkers_provisioned()
-                @info "client/server scaleset book-keeping mismatch, syncing" client_count=nprocs()-1+pending_down_count server_count=nworkers_provisioned()
+
+    # Snapshot scaleset keys under the lock (no I/O)
+    needs_sync, groups = lock(manager.lock) do
+        _pending_down = pending_down(manager)
+        pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
+        if nprocs()-1+pending_down_count != nworkers_provisioned()
+            @info "client/server scaleset book-keeping mismatch, syncing" client_count=nprocs()-1+pending_down_count server_count=nworkers_provisioned()
+            _scalesets = scalesets(manager)
+            _groups = Dict{Tuple{String,String}, Vector{ScaleSet}}()
+            for ss in keys(_scalesets)
+                key = (ss.subscriptionid, ss.resourcegroup)
+                push!(get!(_groups, key, ScaleSet[]), ss)
+            end
+            return true, _groups
+        end
+        return false, Dict{Tuple{String,String}, Vector{ScaleSet}}()
+    end
+
+    needs_sync || return
+
+    # Query Resource Graph outside the lock (network I/O)
+    try
+        for ((subid, rg), group_scalesets) in groups
+            ss_names = [ss.scalesetname for ss in group_scalesets]
+            name_filter = join(["\"$n\"" for n in ss_names], ", ")
+            body = Dict(
+                "subscriptions" => [subid],
+                "query" => """Resources
+                    | where type =~ "microsoft.compute/virtualmachinescalesets"
+                    | where resourceGroup =~ "$rg"
+                    | where tolower(name) in ($name_filter)
+                    | project name=tolower(name), capacity=toint(sku.capacity)""")
+            results = resourcegraphrequest(manager, body)
+            capacity_map = Dict{String,Int}(get(r, "name", "") => get(r, "capacity", 0) for r in results)
+
+            # Apply results under the lock (state mutation only)
+            lock(manager.lock) do
                 _scalesets = scalesets(manager)
-
-                # Batch query: get all scaleset capacities in one Resource Graph call per (sub, rg) group
-                groups = Dict{Tuple{String,String}, Vector{ScaleSet}}()
-                for ss in keys(_scalesets)
-                    key = (ss.subscriptionid, ss.resourcegroup)
-                    push!(get!(groups, key, ScaleSet[]), ss)
-                end
-
-                for ((subid, rg), group_scalesets) in groups
-                    ss_names = [ss.scalesetname for ss in group_scalesets]
-                    name_filter = join(["\"$n\"" for n in ss_names], ", ")
-                    body = Dict(
-                        "subscriptions" => [subid],
-                        "query" => """Resources
-                            | where type =~ "microsoft.compute/virtualmachinescalesets"
-                            | where resourceGroup =~ "$rg"
-                            | where tolower(name) in ($name_filter)
-                            | project name=tolower(name), capacity=toint(sku.capacity)"""
-                    )
-                    results = resourcegraphrequest(manager, body)
-                    capacity_map = Dict{String,Int}(get(r, "name", "") => get(r, "capacity", 0) for r in results)
-
-                    for ss in group_scalesets
-                        _scalesets[ss] = get(capacity_map, ss.scalesetname, 0)
+                for ss in group_scalesets
+                    if isdefined(manager, :scaling_in_progress) && ss ∈ manager.scaling_in_progress
+                        continue
                     end
+                    _scalesets[ss] = get(capacity_map, ss.scalesetname, 0)
                 end
             end
-        catch e
-            @warn "scaleset sync error" exception=(e, catch_backtrace())
         end
+    catch e
+        @warn "scaleset sync error" exception=(e, catch_backtrace())
     end
 end
 
@@ -196,6 +230,12 @@ function prune_scalesets(all_vms::Dict{ScaleSet, Vector}=Dict{ScaleSet, Vector}(
         # update scale-set instances
         _vms = get(all_vms, scaleset, [])
 
+        # Check if this scaleset has an active addprocs in progress.
+        # If so, the scaler owns join-lifecycle cleanup — skip timeout-based pruning.
+        is_scaling = lock(manager.lock) do
+            isdefined(manager, :scaling_in_progress) && scaleset ∈ manager.scaling_in_progress
+        end
+
         for _vm in _vms
             instanceid = split(_vm["id"],'/')[end]
 
@@ -204,21 +244,41 @@ function prune_scalesets(all_vms::Dict{ScaleSet, Vector}=Dict{ScaleSet, Vector}(
                 continue
             end
 
-            # otherwise, decide if we should remove the instance from the scale-set
-            # Azure returns variable-precision fractional seconds (e.g. "2026-05-02T13:24:15.1234567Z")
-            # Truncate to "yyyy-mm-ddTHH:MM:SS.s" (first 21 chars covers up to tenths)
-            _tc_raw = replace(_vm["properties"]["timeCreated"], r"Z$" => "")
-            _tc_str = _tc_raw[1:min(21, length(_tc_raw))]
-            time_touched = get(get(manager.deleted, scaleset, Dict()), instanceid, DateTime(_tc_str, DateFormat("yyyy-mm-ddTHH:MM:SS.s")))
-            time_elapsed = now(Dates.UTC) - time_touched
             vm_state = lowercase(get(get(_vm, "properties", Dict()), "provisioningState", "none"))
             is_worker_deleting = scaleset ∈ keys(manager.pending_down) && instanceid ∈ manager.pending_down[scaleset]
             is_vm_deleting = lowercase(vm_state) == "deleting"
             ispruned_already = scaleset ∈ keys(manager.pruned) && instanceid ∈ manager.pruned[scaleset]
 
-            doprune = (time_elapsed > worker_timeout || vm_state == "failed") && !is_worker_deleting && !is_vm_deleting && !ispruned_already
+            # Always prune failed VMs regardless of scaling state
+            if vm_state == "failed" && !is_worker_deleting && !is_vm_deleting && !ispruned_already
+                @info "VM queued for deletion" instanceid scaleset=scaleset.scalesetname reason="vm_failed" vm_state
+                isdefined(manager, :metrics) && record_worker_pruned!(manager.metrics)
+                if manager.save_cloud_init_failures
+                    @info "copying cloud-init log" instanceid destination="$(pwd())/cloud-init-output-$(instanceid).log"
+                    try
+                        ipaddress = get_ipaddress_for_scaleset_vm(manager, _vm)
+                        run(`scp -i $(homedir())/.ssh/azmanagers_rsa $(manager.ssh_user)@$(ipaddress):/var/log/cloud-init-output.log ./cloud-init-output-$(instanceid).log`)
+                    catch e
+                        @warn "failed to copy cloud-init log" instanceid=instanceid exception=(e, catch_backtrace())
+                    end
+                end
+                add_instance_to_pruned_list(manager, scaleset, instanceid)
+                add_instance_to_pending_down_list(manager, scaleset, instanceid)
+                continue
+            end
+
+            # Skip timeout-based pruning while the scaler is actively waiting for VMs
+            is_scaling && continue
+
+            # For scalesets not actively scaling: prune VMs that exceeded the join timeout
+            _tc_raw = replace(_vm["properties"]["timeCreated"], r"Z$" => "")
+            _tc_str = _tc_raw[1:min(21, length(_tc_raw))]
+            time_touched = get(get(manager.deleted, scaleset, Dict()), instanceid, DateTime(_tc_str, DateFormat("yyyy-mm-ddTHH:MM:SS.s")))
+            time_elapsed = now(Dates.UTC) - time_touched
+
+            doprune = time_elapsed > worker_timeout && !is_worker_deleting && !is_vm_deleting && !ispruned_already
             if doprune
-                @info "VM queued for deletion" instanceid scaleset=scaleset.scalesetname reason=(vm_state == "failed" ? "vm_failed" : "join_timeout") elapsed=round(time_elapsed, Second) vm_state
+                @info "VM queued for deletion" instanceid scaleset=scaleset.scalesetname reason="join_timeout" elapsed=round(time_elapsed, Second) vm_state
                 isdefined(manager, :metrics) && record_worker_pruned!(manager.metrics)
                 if manager.save_cloud_init_failures
                     @info "copying cloud-init log" instanceid destination="$(pwd())/cloud-init-output-$(instanceid).log"

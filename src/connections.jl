@@ -188,10 +188,10 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
             close(watchdog)
         end
     catch e
+        u = wconfig.userdata
         @warn "worker failed to join cluster" timeout_seconds=timeout instanceid=get(u, "instanceid", "unknown") scaleset=get(u, "scalesetname", "unknown")
         logerror(e, Logging.Debug)
         isdefined(manager, :metrics) && record_worker_join_failed!(manager.metrics)
-        u = wconfig.userdata
         scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
         add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
         add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
@@ -337,6 +337,9 @@ function Distributed.addprocs(::AzManager, template::Dict, n::Int;
     julia_num_threads = nthreads_filter(julia_num_threads)
 
     @info "provisioning VMs" count=n scaleset=group
+    lock(manager.lock) do
+        push!(manager.scaling_in_progress, scaleset)
+    end
     _scalesets[scaleset] = scaleset_create_or_update(manager, user, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, sigimagename,
         sigimageversion, imagename, osdisksize, nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig,
         hyperthreading, julia_num_threads, omp_num_threads, exename, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base,
@@ -344,8 +347,22 @@ function Distributed.addprocs(::AzManager, template::Dict, n::Int;
 
     if waitfor
         @info "Initiating cluster..."
-        progress = start_progress(manager, n_current_workers + n)
-        wait_for_progress(progress)
+        try
+            progress = start_progress(manager, n_current_workers + n)
+            wait_for_progress(progress)
+        catch e
+            # On timeout, clean up unjoined VMs — the scaler owns join-lifecycle cleanup
+            cleanup_unjoined_vms(manager, scaleset)
+            rethrow(e)
+        finally
+            lock(manager.lock) do
+                delete!(manager.scaling_in_progress, scaleset)
+            end
+        end
+    else
+        lock(manager.lock) do
+            delete!(manager.scaling_in_progress, scaleset)
+        end
     end
 
     nothing
@@ -417,6 +434,51 @@ function add_instance_to_deleted_list(manager::AzManager, scaleset::ScaleSet, in
         manager.deleted[scaleset] = Dict(instanceid=>now(Dates.UTC))
     end
     nothing
+end
+
+"""
+    cleanup_unjoined_vms(manager, scaleset)
+
+Called by the scaler when `wait_for_progress` times out. Finds VMs in the given
+scaleset that never registered as Distributed workers and marks them for deletion.
+This is the scaler's responsibility — the prune loop skips scalesets with active scaling.
+"""
+function cleanup_unjoined_vms(manager::AzManager, scaleset::ScaleSet)
+    try
+        all_vms = list_all_scaleset_vms(manager)
+        _vms = get(all_vms, scaleset, [])
+        isempty(_vms) && return
+
+        # Build set of instance IDs that are registered Distributed workers
+        registered = Set{String}()
+        for wrkr in values(Distributed.map_pid_wrkr)
+            isdefined(wrkr, :config) || continue
+            isdefined(wrkr.config, :userdata) || continue
+            isa(wrkr.config.userdata, Dict) || continue
+            ud = wrkr.config.userdata
+            ss = ScaleSet(get(ud, "subscriptionid", ""), get(ud, "resourcegroup", ""), get(ud, "scalesetname", ""))
+            ss == scaleset || continue
+            push!(registered, string(get(ud, "instanceid", "")))
+        end
+
+        for _vm in _vms
+            instanceid = string(split(_vm["id"], '/')[end])
+
+            # Skip VMs that successfully joined as workers
+            instanceid ∈ registered && continue
+
+            # Skip VMs already pending deletion
+            is_pending = haskey(manager.pending_down, scaleset) && instanceid ∈ manager.pending_down[scaleset]
+            is_pending && continue
+
+            vm_state = lowercase(get(get(_vm, "properties", Dict()), "provisioningState", "none"))
+            @info "scaler cleanup: unjoined VM queued for deletion" instanceid scaleset=scaleset.scalesetname vm_state
+            isdefined(manager, :metrics) && record_worker_join_failed!(manager.metrics)
+            add_instance_to_pending_down_list(manager, scaleset, instanceid)
+        end
+    catch e
+        @warn "error during scaler cleanup of unjoined VMs" scaleset=scaleset.scalesetname exception=(e, catch_backtrace())
+    end
 end
 
 function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)

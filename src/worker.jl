@@ -141,32 +141,27 @@ function machine_preempt_loop(preempt_channel_future)
 end
 
 """
-    f = machine_preempt_channel_future(pid)
+    ch = preempt_channel(pid)
 
-If it exists, return a Future for a Channel allocation on the process with id `pid`, and that is used to
-communicate VM preemptions on `pid`.  When a worker is preempted, a Bool is put onto the channel.  Thefore,
-code can detect when this happens and take appropriate action before the machine corresponding to `pid` is
-deleted.
+Return a `Channel{Bool}` for the process with id `pid` that is used to
+communicate VM preemptions.  When a worker is preempted, `true` is put onto
+the channel.  Returns `nothing` if no preemption channel is available.
 
 # Example
 ```julia
-addproc2(template, 2; spot=true)
+addproc(template, 2; spot=true)
 
-f = machine_preempt_channel_future(workers()[1])
+ch = preempt_channel(workers()[1])
 
-remote_do(pid, f) do
-    c = fetch(f)::Channel{Bool}
-    while true
-        if isready(c)
-            @info "the VM is being preempted"
-            break
-        end
-        sleep(1)
+if ch !== nothing
+    @async begin
+        take!(ch)
+        @info "the VM is being preempted"
     end
 end
 ```
 """
-function machine_preempt_channel_future(pid)
+function preempt_channel(pid)
     manager = azmanager()
     timeout = parse(Int, get(ENV, "JULIA_WORKER_TIMEOUT", "60"))
 
@@ -196,6 +191,16 @@ function machine_preempt_channel_future(pid)
     end
     @warn "unable to obtain preemption channel from worker $pid"
     return nothing
+end
+
+"""
+    machine_preempt_channel_future(pid)
+
+Deprecated: use [`preempt_channel`](@ref) instead.
+"""
+function machine_preempt_channel_future(pid)
+    Base.depwarn("`machine_preempt_channel_future(pid)` is deprecated, use `preempt_channel(pid)` instead.", :machine_preempt_channel_future)
+    preempt_channel(pid)
 end
 
 function azure_physical_name(keyval="PhysicalHostName")

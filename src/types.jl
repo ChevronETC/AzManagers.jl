@@ -35,6 +35,7 @@ mutable struct AzManager <: ClusterManager
     wconfig_batch::Vector{WorkerConfig}
     batch_max::Int
     pending_deletions::Vector{@NamedTuple{vmname::String, url::String, session::AzSessionAbstract, started::Float64}}
+    scaling_in_progress::Set{ScaleSet}
     metrics::ManagerMetrics
 
     AzManager() = new()
@@ -69,6 +70,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.wconfig_batch = WorkerConfig[]
     _manager.batch_max = 64
     _manager.pending_deletions = @NamedTuple{vmname::String, url::String, session::AzSessionAbstract, started::Float64}[]
+    _manager.scaling_in_progress = Set{ScaleSet}()
     _manager.metrics = ManagerMetrics()
 
     _manager.task_accept = errormonitor(@async accept_connections(_manager))
