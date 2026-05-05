@@ -32,8 +32,8 @@ function AzManagers.azure_worker_mpi(cookie, master_address, master_port, ppi, e
             fetch(t)
             MPI.Barrier(comm)
         catch e
-            @error "error starting worker, attempt $itry, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
-            logerror(e, Logging.Error)
+            @error "error starting MPI worker" attempt=itry cookie=cookie master_address=master_address master_port=master_port ppi=ppi
+            logerror(e, Logging.Warn)
             if itry > 10
                 throw(e)
             end
@@ -199,8 +199,7 @@ function message_handler_loop_mpi_rankN()
 
             MPI.Barrier(comm)
         catch e
-            @warn "MPI - message_handler_loop_mpi"
-            logerror(e, Logging.Warn)
+            @warn "MPI message_handler_loop error" exception=(e, catch_backtrace())
         end
     end
 end

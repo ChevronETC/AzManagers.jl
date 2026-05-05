@@ -13,24 +13,109 @@ mutable struct AzManager <: ClusterManager
     save_cloud_init_failures::Bool
     show_quota::Bool
     scalesets::Dict{ScaleSet,Int}
-    pending_up::Channel{TCPSocket}
     pending_down::Dict{ScaleSet,Set{String}}
     deleted::Dict{ScaleSet,Dict{String,DateTime}}
     pruned::Dict{ScaleSet,Set{String}}
     preempted::Dict{ScaleSet,Set{String}}
     preempt_channel_futures::Dict{Int,Future}
+    preempt_channel_ready::Dict{Int,Base.Event}
     port::UInt16
     server::Sockets.TCPServer
     worker_socket::TCPSocket
-    task_add::Task
-    task_process::Task
+    task_accept::Task
+    task_event_loop::Task
+    timer_prune::Timer
+    timer_clean::Timer
+    timer_batch_flush::Timer
     lock::ReentrantLock
     scaleset_request_counter::Int
     ssh_user::String
     workers_changed::Threads.Condition
+    events::Channel{ManagerEvent}
+    wconfig_batch::Vector{WorkerConfig}
+    batch_max::Int
+    pending_deletions::Vector{@NamedTuple{vmname::String, url::String, session::AzSessionAbstract, started::Float64}}
+    metrics::ManagerMetrics
 
     AzManager() = new()
 end
 
 const _manager = AzManager()
+
+function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures, show_quota)
+    _manager.session = session
+    _manager.nretry = nretry
+    _manager.verbose = verbose
+    _manager.save_cloud_init_failures = save_cloud_init_failures
+    _manager.show_quota = show_quota
+    _manager.ssh_user = ssh_user
+
+    if isdefined(_manager, :events)
+        return _manager
+    end
+
+    _manager.port,_manager.server = listenany(getipaddr(), 9000)
+    _manager.pending_down = Dict{ScaleSet,Set{String}}()
+    _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
+    _manager.pruned = Dict{ScaleSet,Set{String}}()
+    _manager.preempted = Dict{ScaleSet,Set{String}}()
+    _manager.preempt_channel_futures = Dict{Int,Future}()
+    _manager.preempt_channel_ready = Dict{Int,Base.Event}()
+    _manager.scalesets = Dict{ScaleSet,Int}()
+    _manager.lock = ReentrantLock()
+    _manager.scaleset_request_counter = 0
+    _manager.workers_changed = Threads.Condition()
+    _manager.events = Channel{ManagerEvent}(256)
+    _manager.wconfig_batch = WorkerConfig[]
+    _manager.batch_max = 64
+    _manager.pending_deletions = @NamedTuple{vmname::String, url::String, session::AzSessionAbstract, started::Float64}[]
+    _manager.metrics = ManagerMetrics()
+
+    _manager.task_accept = errormonitor(@async accept_connections(_manager))
+    _manager.task_event_loop = errormonitor(@async run_event_loop(_manager))
+
+    prune_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "30"))
+    clean_interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_CLEAN_POLL_INTERVAL", "30"))
+    _manager.timer_prune = Timer(0.0; interval=prune_interval) do _
+        try
+            put!(_manager.events, PruneTick())
+        catch e
+            @debug "failed to enqueue PruneTick" exception=(e, catch_backtrace())
+        end
+    end
+    _manager.timer_clean = Timer(Float64(clean_interval); interval=clean_interval) do _
+        try
+            put!(_manager.events, CleanTick())
+        catch e
+            @debug "failed to enqueue CleanTick" exception=(e, catch_backtrace())
+        end
+    end
+
+    _manager
+end
+
 azmanager() = _manager
+
+function __init__()
+    if myid() == 1
+        atexit() do
+            manager = azmanager()
+            if isdefined(manager, :events) && isopen(manager.events)
+                try
+                    put!(manager.events, ShutdownRequested())
+                    # Give the event loop a moment to process shutdown
+                    sleep(0.5)
+                catch e
+                    @debug "failed to enqueue ShutdownRequested" exception=(e, catch_backtrace())
+                end
+            else
+                # Fallback if event loop isn't running
+                try
+                    delete_scalesets()
+                catch e
+                    @warn "failed to delete scalesets during shutdown" exception=(e, catch_backtrace())
+                end
+            end
+        end
+    end
+end

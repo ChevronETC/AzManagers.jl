@@ -135,7 +135,7 @@ function detachedrun(request::HTTP.Request)
         cmd = pipeline(Cmd(String.(vcat(exename_parts, ["-t", julia_num_threads, "--project=$projectdir", _tempname_wrapper]))))
         process = open(cmd)
         pid = getpid(process)
-        @info "executing $_tempname_wrapper with executable '$exename', $nthreads Julia threads, environment '$projectdir', and pid $pid"
+        @info "executing detached job" wrapper=_tempname_wrapper exename=exename nthreads=nthreads nthreads_interactive=nthreads_interactive project=projectdir pid=pid job_id=id
 
         DETACHED_JOBS[string(id)] = Dict("process"=>process, "request"=>request, "stdout"=>outfile, "stderr"=>errfile, "codefile"=>_tempname, "code"=>code)
     catch e
@@ -152,14 +152,15 @@ function detachedrun(request::HTTP.Request)
     Threads.@spawn begin
         try
             wait(process)
-        catch
+        catch e
+            @debug "detached process wait error" job_id=id exception=(e, catch_backtrace())
         end
         if !r["persist"]
             try
                 vm = AzManagers.DETACHED_VM[]
                 rmproc(vm; session=AzSession(;protocal=AzClientCredentials))
             catch e
-                @error "persist=false auto-delete failed" exception=(e, catch_backtrace())
+                @error "persist=false auto-delete failed" vm_name=get(AzManagers.DETACHED_VM[], "name", "unknown") exception=(e, catch_backtrace())
             end
         end
     end
@@ -282,8 +283,7 @@ function detachedwait(request::HTTP.Request)
         process = DETACHED_JOBS[id]["process"]
         wait(process)
     catch e
-        @error "caught error waiting for process for job $id to finish"
-        logerror(e, Logging.Debug)
+        @error "error waiting for detached job" job_id=id exception=(e, catch_backtrace())
 
         io = IOBuffer()
         write(io, "\n\n")
