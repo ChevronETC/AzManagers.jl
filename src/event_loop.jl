@@ -2,6 +2,7 @@ function run_event_loop(manager)
     for event in manager.events
         try
             handle(manager, event)
+            _notify_observers(manager, event)
         catch e
             if e isa InvalidStateException && !isopen(manager.events)
                 @debug "event loop shutting down"
@@ -10,6 +11,40 @@ function run_event_loop(manager)
             @error "event loop error handling $(typeof(event))" exception=(e, catch_backtrace())
         end
     end
+end
+
+function _notify_observers(manager, event::ManagerEvent)
+    isdefined(manager, :event_observers) || return
+    for observer in manager.event_observers
+        try
+            observer(event)
+        catch e
+            @debug "event observer error" observer exception=(e, catch_backtrace())
+        end
+    end
+end
+
+"""
+    add_event_observer!(f::Function, [manager]) -> Function
+
+Register a callback `f(event::ManagerEvent)` that is called after each event
+is processed by the event loop.  Returns `f` for use with `remove_event_observer!`.
+"""
+function add_event_observer!(f::Function, manager=azmanager())
+    isdefined(manager, :event_observers) || (manager.event_observers = Function[])
+    push!(manager.event_observers, f)
+    f
+end
+
+"""
+    remove_event_observer!(f::Function, [manager])
+
+Remove a previously registered event observer.
+"""
+function remove_event_observer!(f::Function, manager=azmanager())
+    isdefined(manager, :event_observers) || return
+    filter!(obs -> obs !== f, manager.event_observers)
+    nothing
 end
 
 # fallback

@@ -37,6 +37,7 @@ mutable struct AzManager <: ClusterManager
     pending_deletions::Vector{@NamedTuple{vmname::String, url::String, session::AzSessionAbstract, started::Float64}}
     scaling_in_progress::Set{ScaleSet}
     metrics::ManagerMetrics
+    event_observers::Vector{Function}
 
     AzManager() = new()
 end
@@ -72,6 +73,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.pending_deletions = @NamedTuple{vmname::String, url::String, session::AzSessionAbstract, started::Float64}[]
     _manager.scaling_in_progress = Set{ScaleSet}()
     _manager.metrics = ManagerMetrics()
+    _manager.event_observers = Function[]
 
     _manager.task_accept = errormonitor(@async accept_connections(_manager))
     _manager.task_event_loop = errormonitor(@async run_event_loop(_manager))
