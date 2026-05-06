@@ -195,6 +195,25 @@ function prune_cluster(all_vms::Dict{ScaleSet, Vector}=Dict{ScaleSet, Vector}())
     end
 end
 
+function _should_fetch_cloud_init(manager)
+    manager.save_cloud_init_failures && return true
+    isdefined(manager, :cloud_init_log_dir) && !isempty(manager.cloud_init_log_dir) && return true
+    false
+end
+
+function _fetch_cloud_init_log(manager, _vm, instanceid)
+    dir = isdefined(manager, :cloud_init_log_dir) && !isempty(manager.cloud_init_log_dir) ? manager.cloud_init_log_dir : pwd()
+    isdir(dir) || mkpath(dir)
+    dest = joinpath(dir, "cloud-init-output-$(instanceid).log")
+    @info "copying cloud-init log" instanceid destination=dest
+    try
+        ipaddress = get_ipaddress_for_scaleset_vm(manager, _vm)
+        run(`scp -o StrictHostKeyChecking=no -i $(homedir())/.ssh/azmanagers_rsa $(manager.ssh_user)@$(ipaddress):/var/log/cloud-init-output.log $dest`)
+    catch e
+        @warn "failed to copy cloud-init log" instanceid=instanceid exception=(e, catch_backtrace())
+    end
+end
+
 function prune_scalesets(all_vms::Dict{ScaleSet, Vector}=Dict{ScaleSet, Vector}())
     worker_timeout = Second(parse(Int, get(ENV, "JULIA_AZMANAGERS_VM_JOIN_TIMEOUT", "720")))
     manager = azmanager()
@@ -253,14 +272,8 @@ function prune_scalesets(all_vms::Dict{ScaleSet, Vector}=Dict{ScaleSet, Vector}(
             if vm_state == "failed" && !is_worker_deleting && !is_vm_deleting && !ispruned_already
                 @info "VM queued for deletion" instanceid scaleset=scaleset.scalesetname reason="vm_failed" vm_state
                 isdefined(manager, :metrics) && record_worker_pruned!(manager.metrics)
-                if manager.save_cloud_init_failures
-                    @info "copying cloud-init log" instanceid destination="$(pwd())/cloud-init-output-$(instanceid).log"
-                    try
-                        ipaddress = get_ipaddress_for_scaleset_vm(manager, _vm)
-                        run(`scp -i $(homedir())/.ssh/azmanagers_rsa $(manager.ssh_user)@$(ipaddress):/var/log/cloud-init-output.log ./cloud-init-output-$(instanceid).log`)
-                    catch e
-                        @warn "failed to copy cloud-init log" instanceid=instanceid exception=(e, catch_backtrace())
-                    end
+                if _should_fetch_cloud_init(manager)
+                    _fetch_cloud_init_log(manager, _vm, instanceid)
                 end
                 add_instance_to_pruned_list(manager, scaleset, instanceid)
                 add_instance_to_pending_down_list(manager, scaleset, instanceid)
@@ -280,14 +293,8 @@ function prune_scalesets(all_vms::Dict{ScaleSet, Vector}=Dict{ScaleSet, Vector}(
             if doprune
                 @info "VM queued for deletion" instanceid scaleset=scaleset.scalesetname reason="join_timeout" elapsed=round(time_elapsed, Second) vm_state
                 isdefined(manager, :metrics) && record_worker_pruned!(manager.metrics)
-                if manager.save_cloud_init_failures
-                    @info "copying cloud-init log" instanceid destination="$(pwd())/cloud-init-output-$(instanceid).log"
-                    try
-                        ipaddress = get_ipaddress_for_scaleset_vm(manager, _vm)
-                        run(`scp -i $(homedir())/.ssh/azmanagers_rsa $(manager.ssh_user)@$(ipaddress):/var/log/cloud-init-output.log ./cloud-init-output-$(instanceid).log`)
-                    catch e
-                        @warn "failed to copy cloud-init log" instanceid=instanceid exception=(e, catch_backtrace())
-                    end
+                if _should_fetch_cloud_init(manager)
+                    _fetch_cloud_init_log(manager, _vm, instanceid)
                 end
                 add_instance_to_pruned_list(manager, scaleset, instanceid)
                 add_instance_to_pending_down_list(manager, scaleset, instanceid)

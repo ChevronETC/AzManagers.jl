@@ -47,6 +47,18 @@ function remove_event_observer!(f::Function, manager=azmanager())
     nothing
 end
 
+"""
+    set_cloud_init_log_dir!(dir::AbstractString, [manager])
+
+Set the directory where cloud-init logs from failed VMs are saved.
+When non-empty, overrides the default behaviour of saving to the current
+working directory.  The directory is created if it does not exist.
+"""
+function set_cloud_init_log_dir!(dir::AbstractString, manager=azmanager())
+    manager.cloud_init_log_dir = String(dir)
+    nothing
+end
+
 # fallback
 handle(manager, event::ManagerEvent) = @warn "unhandled event type: $(typeof(event))"
 

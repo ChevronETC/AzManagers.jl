@@ -38,6 +38,7 @@ mutable struct AzManager <: ClusterManager
     scaling_in_progress::Set{ScaleSet}
     metrics::ManagerMetrics
     event_observers::Vector{Function}
+    cloud_init_log_dir::String
 
     AzManager() = new()
 end
@@ -51,6 +52,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.save_cloud_init_failures = save_cloud_init_failures
     _manager.show_quota = show_quota
     _manager.ssh_user = ssh_user
+    _manager.cloud_init_log_dir = ""
 
     if isdefined(_manager, :events)
         return _manager
