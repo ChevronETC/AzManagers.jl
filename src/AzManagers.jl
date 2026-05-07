@@ -187,6 +187,7 @@ mutable struct AzManager <: ClusterManager
     save_cloud_init_failures::Bool
     show_quota::Bool
     scalesets::Dict{ScaleSet,Int}
+    ppi::Int
     pending_up::Channel{TCPSocket}
     pending_down::Dict{ScaleSet,Set{String}}
     deleted::Dict{ScaleSet,Dict{String,DateTime}}
@@ -207,13 +208,14 @@ end
 
 const _manager = AzManager()
 
-function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures, show_quota)
+function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures, show_quota, ppi=1)
     _manager.session = session
     _manager.nretry = nretry
     _manager.verbose = verbose
     _manager.save_cloud_init_failures = save_cloud_init_failures
     _manager.show_quota = show_quota
     _manager.ssh_user = ssh_user
+    _manager.ppi = ppi
 
     if isdefined(_manager, :pending_up)
         return _manager
@@ -350,7 +352,7 @@ function scaleset_sync()
     lock(manager.lock)
     try
         _pending_down = pending_down(manager)
-        pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
+        pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))*manager.ppi
         if nprocs()-1+pending_down_count != nworkers_provisioned()
             @debug "client/server scaleset book-keeping mismatch, synching client to server."
             _scalesets = scalesets(manager)
@@ -843,7 +845,7 @@ function Distributed.addprocs(template::Dict, n::Int;
     resourcegroup == "" && (resourcegroup = get(template, "resourcegroup", _manifest["resourcegroup"]))
     user == "" && (user = _manifest["ssh_user"])
 
-    manager = azmanager!(session, user, nretry, verbose, save_cloud_init_failures, show_quota)
+    manager = azmanager!(session, user, nretry, verbose, save_cloud_init_failures, show_quota, ppi)
     sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
@@ -1040,14 +1042,14 @@ function nworkers_provisioned(service=false)
     n = 0
     for (scaleset, N) in _scalesets
         if service
-            n += scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+            n += scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose) * manager.ppi
         else
-            n += N
+            n += N * manager.ppi
         end
     end
 
     _pending_down = pending_down(manager)
-    pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
+    pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down)) * manager.ppi
     max(0, n - pending_down_count)
 end
 
