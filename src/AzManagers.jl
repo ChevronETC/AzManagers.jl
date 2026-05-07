@@ -399,9 +399,14 @@ function prune_cluster()
         end
     end
 
-    # remove from list workers that are already scheduled for removal from the cluster
-    for id in pending_down(manager)
-        delete!(wrkrs, id)
+    # remove from list workers that are already scheduled for removal from the cluster via the pending_down set
+    for (scaleset, instanceids) in pending_down(manager)
+        for (pid, wrkr) in wrkrs
+            _scaleset = ScaleSet(get(wrkr, "subscriptionid", ""), get(wrkr, "resourcegroup", ""), get(wrkr, "scalesetname", ""))
+            if _scaleset == scaleset && get(wrkr, "instanceid", "") ∈ instanceids
+                delete!(wrkrs, pid)
+            end
+        end
     end
 
     # remove from list workers that are in TERMINATED or TERMINATING cluster state
