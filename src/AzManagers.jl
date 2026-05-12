@@ -188,6 +188,7 @@ mutable struct AzManager <: ClusterManager
     show_quota::Bool
     scalesets::Dict{ScaleSet,Int}
     pending_up::Channel{TCPSocket}
+    pending_validated::Channel{WorkerConfig}
     pending_down::Dict{ScaleSet,Set{String}}
     deleted::Dict{ScaleSet,Dict{String,DateTime}}
     pruned::Dict{ScaleSet,Set{String}}
@@ -221,6 +222,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
 
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(64)
+    _manager.pending_validated = Channel{WorkerConfig}(64)
     _manager.pending_down = Dict{ScaleSet,Set{String}}()
     _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
     _manager.pruned = Dict{ScaleSet,Set{String}}()
@@ -504,9 +506,17 @@ function add_pending_connections()
     while true
         try
             let s = accept(manager.server)
-                @debug "pushing new socket onto manger.pending_up" manager.pending_up.n_avail_items
-                put!(manager.pending_up, s)
-                @debug "done pushing new socket onto manger.pending_up" manager.pending_up.n_avail_items
+                @debug "accepted new socket, spawning validation"
+                @async try
+                    wconfig = validate_connection(manager, s)
+                    if wconfig !== nothing
+                        put!(manager.pending_validated, wconfig)
+                        @debug "validated connection queued" manager.pending_validated.n_avail_items
+                    end
+                catch e
+                    @error "AzManagers, error validating connection"
+                    logerror(e, Logging.Debug)
+                end
             end
         catch e
             @error "AzManagers, error adding pending connection"
@@ -515,13 +525,57 @@ function add_pending_connections()
     end
 end
 
-function Distributed.addprocs(manager::AzManager; sockets)
+function validate_connection(manager, socket)
+    validation_timeout = parse(Float64, get(ENV, "JULIA_AZMANAGERS_VALIDATION_TIMEOUT", "30.0"))
+    tsk = @async _read_worker_config(socket)
+
+    watchdog = Timer(validation_timeout) do _
+        if !istaskdone(tsk)
+            @async Base.throwto(tsk, InterruptException())
+        end
+    end
+
+    local wconfig
+    try
+        wconfig = fetch(tsk)
+    catch e
+        @debug "connection validation failed, discarding socket" exception=(e, catch_backtrace())
+        close(socket)
+        return nothing
+    finally
+        close(watchdog)
+    end
+
+    wconfig
+end
+
+function _read_worker_config(socket)
+    _cookie = read(socket, Distributed.HDR_COOKIE_LEN)
+    cookie = String(_cookie)
+    cookie == Distributed.cluster_cookie() || error("Invalid cookie sent by remote worker.")
+
+    _connection_string = readline(socket)
+    connection_string = String(base64decode(_connection_string))
+    vm = JSON.parse(connection_string)
+
+    wconfig = WorkerConfig()
+    wconfig.io = socket
+    wconfig.bind_addr = vm["bind_addr"]
+    wconfig.count = vm["ppi"]
+    wconfig.exename = "julia"
+    wconfig.exeflags = `$(vm["exeflags"])`
+    wconfig.userdata = vm["userdata"]
+
+    wconfig
+end
+
+function Distributed.addprocs(manager::AzManager; wconfigs)
     pids = []
     try
         Distributed.init_multi()
         Distributed.cluster_mgmt_from_master_check()
         lock(Distributed.worker_lock)
-        pids = Distributed.addprocs_locked(manager; sockets)
+        pids = Distributed.addprocs_locked(manager; wconfigs)
     catch e
         @debug "AzManagers, error processing pending connection"
         logerror(e, Logging.Debug)
@@ -531,11 +585,11 @@ function Distributed.addprocs(manager::AzManager; sockets)
     pids
 end
 
-function addprocs_with_timeout(manager; sockets)
+function addprocs_with_timeout(manager; wconfigs)
     # Distributed.setup_launched_worker also uses Distributed.worker_timeout, so we add a grace period
     # to allow for the Distributed.setup_launched_worker to hit its timeout.
     timeout = Distributed.worker_timeout() + 30
-    tsk_addprocs = @async addprocs(manager; sockets)
+    tsk_addprocs = @async addprocs(manager; wconfigs)
     tic = time()
     pids = []
     interrupted = false
@@ -566,32 +620,32 @@ end
 
 function process_pending_connections()
     manager = azmanager()
-    sockets = TCPSocket[]
+    wconfigs = WorkerConfig[]
 
-    max_sockets = manager.pending_up.sz_max
+    max_wconfigs = manager.pending_validated.sz_max
     min_instances_per_second = parse(Float64, get(ENV, "JULIA_AZMANAGERS_MIN_INSTANCES_PER_MINUTE", "10")) / 60 # if we drop below N new instances per minute, then we trigger addprocs
     min_cadence = parse(Int, get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "60"))
     tic = time()
     while true
         try
-            if isempty(sockets)
-                @debug "taking from manager.pending_up" manager.pending_up.n_avail_items
-                push!(sockets, take!(manager.pending_up))
-                @debug "done taking from manager.pending_up" manager.pending_up.n_avail_items length(sockets)
-            elseif isready(manager.pending_up) && length(sockets) < max_sockets
-                @debug "taking from manager.pending_up" manager.pending_up.n_avail_items
-                push!(sockets, take!(manager.pending_up))
-                @debug "done taking from manager.pending_up" manager.pending_up.n_avail_items length(sockets)
+            if isempty(wconfigs)
+                @debug "taking from manager.pending_validated" manager.pending_validated.n_avail_items
+                push!(wconfigs, take!(manager.pending_validated))
+                @debug "done taking from manager.pending_validated" manager.pending_validated.n_avail_items length(wconfigs)
+            elseif isready(manager.pending_validated) && length(wconfigs) < max_wconfigs
+                @debug "taking from manager.pending_validated" manager.pending_validated.n_avail_items
+                push!(wconfigs, take!(manager.pending_validated))
+                @debug "done taking from manager.pending_validated" manager.pending_validated.n_avail_items length(wconfigs)
             else
                 sleep(0.1)
             end
 
             elapsedtime = time() - tic
-            instances_per_second = length(sockets)/elapsedtime
-            if length(sockets) == 0 || (elapsedtime < min_cadence && instances_per_second > min_instances_per_second && length(sockets) < max_sockets)
+            instances_per_second = length(wconfigs)/elapsedtime
+            if length(wconfigs) == 0 || (elapsedtime < min_cadence && instances_per_second > min_instances_per_second && length(wconfigs) < max_wconfigs)
                 continue
             else
-                @debug "triggered adding machines" elapsedtime min_cadence instances_per_second min_instances_per_second length(sockets) max_sockets nworkers_provisioned()
+                @debug "triggered adding machines" elapsedtime min_cadence instances_per_second min_instances_per_second length(wconfigs) max_wconfigs nworkers_provisioned()
             end
         catch e
             @error "AzManagers, error retrieving pending connection"
@@ -600,9 +654,9 @@ function process_pending_connections()
         end
 
         @debug "calling addprocs_with_timeout from process_pending_connections"
-        pids = addprocs_with_timeout(manager; sockets)
+        pids = addprocs_with_timeout(manager; wconfigs)
         @debug "done calling addprocs_with_timeout from process_pending_connections"
-        empty!(sockets)
+        empty!(wconfigs)
         tic = time()
 
         @debug "starting preempt loops" pids
@@ -804,7 +858,7 @@ used on the Julia workers.  This feature makes use of package extensions, meanin
 that `using MPI` is somewhere in your calling script.
 [5] This may result in a re-boot of the VMs
 """
-function Distributed.addprocs(_::AzManager, template::Dict, n::Int;
+function Distributed.addprocs(::AzManager, template::Dict, n::Int;
         subscriptionid = "",
         resourcegroup = "",
         sigimagename = "",
@@ -883,59 +937,12 @@ function Distributed.addprocs(mgr::AzManager, template::AbstractString, n::Int; 
 end
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)
-    sockets = params[:sockets]
+    wconfigs = params[:wconfigs]
 
-    @sync for socket in sockets
-        @async try
-            Distributed.launch_on_machine(manager, launched, c, socket)
-        catch e
-            @error "failed to launch on machine for socket=$socket"
-            logerror(e, Logging.Debug)
-        end
+    for wconfig in wconfigs
+        push!(launched, wconfig)
+        notify(c)
     end
-    notify(c)
-end
-
-function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
-    local _cookie
-    try
-        _cookie = read(socket, Distributed.HDR_COOKIE_LEN)
-    catch e
-        @error "unable to read cookie from socket"
-        logerror(e, Logging.Debug)
-        return
-    end
-
-    cookie = String(_cookie)
-    cookie == Distributed.cluster_cookie() || error("Invalid cookie sent by remote worker.")
-
-    local _connection_string
-    try
-        _connection_string = readline(socket)
-    catch e
-        @error "unable to read connection string from socket"
-        throw(e)
-    end
-
-    connection_string = String(base64decode(_connection_string))
-
-    local vm
-    try
-        vm = JSON.parse(connection_string)
-    catch e
-        @error "unable to parse connection string, string=$connection_string, cookie=$cookie"
-        throw(e)
-    end
-
-    wconfig = WorkerConfig()
-    wconfig.io = socket
-    wconfig.bind_addr = vm["bind_addr"]
-    wconfig.count = vm["ppi"]
-    wconfig.exename = "julia"
-    wconfig.exeflags = `$(vm["exeflags"])`
-    wconfig.userdata = vm["userdata"]
-
-    push!(launched, wconfig)
     notify(c)
 end
 
