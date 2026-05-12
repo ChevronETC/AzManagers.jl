@@ -188,6 +188,7 @@ mutable struct AzManager <: ClusterManager
     show_quota::Bool
     scalesets::Dict{ScaleSet,Int}
     pending_up::Channel{TCPSocket}
+    pending_validated::Channel{WorkerConfig}
     pending_down::Dict{ScaleSet,Set{String}}
     deleted::Dict{ScaleSet,Dict{String,DateTime}}
     pruned::Dict{ScaleSet,Set{String}}
@@ -221,6 +222,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
 
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(64)
+    _manager.pending_validated = Channel{WorkerConfig}(64)
     _manager.pending_down = Dict{ScaleSet,Set{String}}()
     _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
     _manager.pruned = Dict{ScaleSet,Set{String}}()
@@ -509,9 +511,17 @@ function add_pending_connections()
     while true
         try
             let s = accept(manager.server)
-                @debug "pushing new socket onto manger.pending_up" manager.pending_up.n_avail_items
-                put!(manager.pending_up, s)
-                @debug "done pushing new socket onto manger.pending_up" manager.pending_up.n_avail_items
+                @debug "accepted new socket, spawning validation"
+                @async try
+                    wconfig = validate_connection(manager, s)
+                    if wconfig !== nothing
+                        put!(manager.pending_validated, wconfig)
+                        @debug "validated connection queued" manager.pending_validated.n_avail_items
+                    end
+                catch e
+                    @error "AzManagers, error validating connection"
+                    logerror(e, Logging.Debug)
+                end
             end
         catch e
             @error "AzManagers, error adding pending connection"
@@ -617,32 +627,22 @@ function process_pending_connections()
     manager = azmanager()
     wconfigs = WorkerConfig[]
 
-    max_wconfigs = manager.pending_up.sz_max
+    max_wconfigs = manager.pending_validated.sz_max
     min_instances_per_second = parse(Float64, get(ENV, "JULIA_AZMANAGERS_MIN_INSTANCES_PER_MINUTE", "10")) / 60 # if we drop below N new instances per minute, then we trigger addprocs
     min_cadence = parse(Int, get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "60"))
     tic = time()
     while true
         try
-            local socket
             if isempty(wconfigs)
-                @debug "taking from manager.pending_up" manager.pending_up.n_avail_items
-                socket = take!(manager.pending_up)
-                @debug "done taking from manager.pending_up" manager.pending_up.n_avail_items
-            elseif isready(manager.pending_up) && length(wconfigs) < max_wconfigs
-                @debug "taking from manager.pending_up" manager.pending_up.n_avail_items
-                socket = take!(manager.pending_up)
-                @debug "done taking from manager.pending_up" manager.pending_up.n_avail_items
+                @debug "taking from manager.pending_validated" manager.pending_validated.n_avail_items
+                push!(wconfigs, take!(manager.pending_validated))
+                @debug "done taking from manager.pending_validated" manager.pending_validated.n_avail_items length(wconfigs)
+            elseif isready(manager.pending_validated) && length(wconfigs) < max_wconfigs
+                @debug "taking from manager.pending_validated" manager.pending_validated.n_avail_items
+                push!(wconfigs, take!(manager.pending_validated))
+                @debug "done taking from manager.pending_validated" manager.pending_validated.n_avail_items length(wconfigs)
             else
                 sleep(0.1)
-                socket = nothing
-            end
-
-            if socket !== nothing
-                wconfig = validate_connection(manager, socket)
-                if wconfig !== nothing
-                    push!(wconfigs, wconfig)
-                    @debug "validated connection added to batch" length(wconfigs)
-                end
             end
 
             elapsedtime = time() - tic
