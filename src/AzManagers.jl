@@ -544,7 +544,7 @@ function validate_connection(manager, socket)
     try
         wconfig = fetch(tsk)
     catch e
-        @warn "connection validation failed, discarding socket" exception=(e, catch_backtrace())
+        @debug "connection validation failed, discarding socket" exception=(e, catch_backtrace())
         close(socket)
         return nothing
     finally
