@@ -293,11 +293,11 @@ scalesets() = scalesets(azmanager())
 pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Set{String}}()
 
 function delete_scaleset(manager, scaleset)
-    @debug "deleting scaleset, $scaleset"
+    @info "deleting scaleset" scalesetname=scaleset.scalesetname resourcegroup=scaleset.resourcegroup
     try
         rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose, manager.show_quota)
     catch e
-        @warn "unable to remove scaleset $(scaleset.resourcegroup), $(scaleset.scalesetname)"
+        @warn "unable to remove scaleset" scalesetname=scaleset.scalesetname resourcegroup=scaleset.resourcegroup
     end
     delete!(scalesets(manager), scaleset)
 end
@@ -323,11 +323,13 @@ function delete_pending_down_vms()
     lock(manager.lock)
 
     for (scaleset, ids) in pending_down(manager)
-        @debug "deleting pending down vms $ids in $scaleset"
+        old_capacity = get(scalesets(manager), scaleset, 0)
+        @info "deleting pending_down vms" scalesetname=scaleset.scalesetname count=length(ids) ids=ids current_capacity=old_capacity
         try
             delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
             new_capacity = max(0, scalesets(manager)[scaleset] - length(ids))
             scalesets(manager)[scaleset] = new_capacity
+            @info "deleted pending_down vms" scalesetname=scaleset.scalesetname old_capacity=old_capacity new_capacity=new_capacity
             delete!(pending_down(manager), scaleset)
         catch e
             if status(e) == 404
@@ -353,11 +355,14 @@ function scaleset_sync()
     try
         _pending_down = pending_down(manager)
         pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
-        if nprocs()-1+pending_down_count != nworkers_provisioned()
-            @debug "client/server scaleset book-keeping mismatch, synching client to server."
+        _nworkers_provisioned = nworkers_provisioned()
+        if nprocs()-1+pending_down_count != _nworkers_provisioned
+            @info "scaleset sync: client/server mismatch" cluster_workers=nprocs()-1 pending_down=pending_down_count provisioned=_nworkers_provisioned
             _scalesets = scalesets(manager)
             for scaleset in keys(_scalesets)
+                old_capacity = _scalesets[scaleset]
                 _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+                @info "scaleset sync: updated capacity" scalesetname=scaleset.scalesetname old=old_capacity new=_scalesets[scaleset]
             end
         end
     catch e
@@ -481,9 +486,11 @@ function prune_scalesets()
 
             doprune = (time_elapsed > worker_timeout || vm_state == "failed") && !is_worker_deleting && !is_vm_deleting && !ispruned_already
             if doprune
-                @info "Putting machine with instance id $instanceid in $(scaleset.scalesetname) onto the deletion queue because it failed to join the Julia cluster after $(round(time_elapsed, Second)), vm_state=$vm_state."
+                vm_name = get(_vm, "name", "unknown")
+                power_state = lowercase(get(get(get(_vm, "properties", Dict()), "instanceView", Dict()), "powerState", get(get(_vm, "properties", Dict()), "provisioningState", "unknown")))
+                @warn "worker failed to join cluster" instanceid=instanceid vm_name=vm_name scalesetname=scaleset.scalesetname elapsed=round(time_elapsed, Second) vm_state=vm_state power_state=power_state timeout=worker_timeout
                 if manager.save_cloud_init_failures
-                    @info "copying cloud init output log to '$(pwd())/cloud-init-output-$(instanceid).log'."
+                    @debug "copying cloud init output log to '$(pwd())/cloud-init-output-$(instanceid).log'."
                     try
                         ipaddress = get_ipaddress_for_scaleset_vm(manager, _vm)
                         run(`scp -i $(homedir())/.ssh/azmanagers_rsa $(manager.ssh_user)@$(ipaddress):/var/log/cloud-init-output.log ./cloud-init-output-$(instanceid).log`)
@@ -519,7 +526,8 @@ function add_pending_connections()
                         @debug "validated connection queued" manager.pending_validated.n_avail_items
                     end
                 catch e
-                    @error "AzManagers, error validating connection"
+                    peer = try string(getpeername(s)) catch; "unknown" end
+                    @warn "connection validation error" peer=peer
                     logerror(e, Logging.Debug)
                 end
             end
@@ -544,7 +552,8 @@ function validate_connection(manager, socket)
     try
         wconfig = fetch(tsk)
     catch e
-        @debug "connection validation failed, discarding socket" exception=(e, catch_backtrace())
+        peer = try string(getpeername(socket)) catch; "unknown" end
+        @warn "connection validation failed, discarding socket" peer=peer timeout=validation_timeout exception=(e, catch_backtrace())
         close(socket)
         return nothing
     finally
@@ -650,7 +659,7 @@ function process_pending_connections()
             if length(wconfigs) == 0 || (elapsedtime < min_cadence && instances_per_second > min_instances_per_second && length(wconfigs) < max_wconfigs)
                 continue
             else
-                @debug "triggered adding machines" elapsedtime min_cadence instances_per_second min_instances_per_second length(wconfigs) max_wconfigs nworkers_provisioned()
+                @info "batch ready: adding workers" batch_size=length(wconfigs) elapsed=round(elapsedtime, digits=1) rate=round(instances_per_second, digits=3) provisioned=nworkers_provisioned()
             end
         catch e
             @error "AzManagers, error retrieving pending connection"
@@ -659,8 +668,9 @@ function process_pending_connections()
         end
 
         @debug "calling addprocs_with_timeout from process_pending_connections"
+        batch_size = length(wconfigs)
         pids = addprocs_with_timeout(manager; wconfigs)
-        @debug "done calling addprocs_with_timeout from process_pending_connections"
+        @info "batch complete" submitted=batch_size registered=length(pids) dropped=batch_size-length(pids)
         empty!(wconfigs)
         tic = time()
 
@@ -679,7 +689,7 @@ function process_pending_connections()
                             @info "caught preempt exception for $(ex.clusterid), removing not before $notbefore UTC"
                             _now = now(UTC)
                             if notbefore > _now
-                                @info "sleeping for $(notbefore - _now)"
+                                @debug "sleeping for preempt grace period" duration=notbefore - _now
                                 sleep(notbefore - _now)
                             end
                             u = wrkr.config.userdata
@@ -687,7 +697,7 @@ function process_pending_connections()
                                 scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
                                 add_instance_to_preempted_list(manager, scaleset, u["instanceid"])
                             catch e
-                                @info "error adding instance to preempted list"
+                                @error "error adding instance to preempted list" instanceid=get(u, "instanceid", "unknown")
                             end
 
                             try
@@ -732,9 +742,11 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
             sleep(1)
         end
     catch e
-        @warn "unable to create worker within $timeout seconds, adding vm to pending down list"
-        logerror(e, Logging.Debug)
         u = wconfig.userdata
+        instanceid = get(u, "instanceid", "unknown")
+        vm_name = get(u, "name", "unknown")
+        @warn "worker failed to register" instanceid=instanceid vm_name=vm_name scalesetname=get(u, "scalesetname", "unknown") timeout=timeout
+        logerror(e, Logging.Debug)
         scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
         add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
         add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
@@ -952,10 +964,10 @@ end
 
 function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSet, instanceid)
     if haskey(manager.pending_down, scaleset)
-        @debug "pushing worker with id=$instanceid onto pending_down"
+        @info "adding instance to pending_down" instanceid=instanceid scalesetname=scaleset.scalesetname pending_down_size=length(manager.pending_down[scaleset])+1
         push!(manager.pending_down[scaleset], string(instanceid))
     else
-        @debug "creating pending_down vector for id=$instanceid"
+        @info "adding instance to pending_down (new set)" instanceid=instanceid scalesetname=scaleset.scalesetname
         manager.pending_down[scaleset] = Set{String}([string(instanceid)])
     end
     nothing
@@ -1000,7 +1012,10 @@ function add_instance_to_deleted_list(manager::AzManager, scaleset::ScaleSet, in
 end
 
 function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
-    @debug "kill for id=$id"
+    u = config.userdata
+    instanceid = get(u, "instanceid", "unknown")
+    vm_name = get(u, "name", "unknown")
+    @info "killing worker" pid=id instanceid=instanceid vm_name=vm_name scalesetname=get(u, "scalesetname", "unknown")
 
     if ispreempted(manager, config)
         @debug "kill on id=$id because it was preempted"
@@ -1432,7 +1447,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     try
         while true
             Distributed.check_master_connect()
-            @info "message loop..."
+            @debug "message loop..."
             wait(t)
             istaskfailed(t) && fetch(t)
             sleep(10)
@@ -1765,7 +1780,7 @@ function nvidia_gpumode(feature)
     else
         @warn "unable to retrieve status for feature='$feature'"
     end
-    @info "NVIDIA $feature is $isenabled"
+    @debug "NVIDIA $feature is $isenabled"
     isenabled
 end
 
@@ -1774,12 +1789,12 @@ function nvidia_gpumode!(feature, switch)
     p = open(`sudo nvidia-smi $feature $_switch`)
     wait(p)
     success(p) || @error "unable to toggle NVIDIA GPU feature='$feature' to '$_switch'."
-    @info "NVIDIA $feature is toggled to $_switch"
+    @debug "NVIDIA $feature is toggled to $_switch"
 end
 
 function nvidia_gpucheck(enable_ecc=true, enable_mig=false)
     if !nvidia_has_nvidia_smi()
-        @info "no NVIDIA devices detected."
+        @debug "no NVIDIA devices detected."
         return
     end
 
@@ -1801,7 +1816,7 @@ end
 
 function build_lvm()
     if isfile("/usr/sbin/azure_nvme.sh")
-        @info "Building scratch.."
+        @debug "Building scratch.."
         run(`sudo bash /usr/sbin/azure_nvme.sh`)
     else 
         @warn "No scratch nvme script found!"
@@ -2499,6 +2514,8 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
 
     @debug "done checking quota, δn=$(δn), n=$n"
 
+    @info "scaling scaleset" scalesetname=scalesetname target_capacity=n added=δn spot=spot
+
     _template["sku"]["capacity"] = n
     _r = @retry nretry azrequest(
         "PUT",
@@ -2531,7 +2548,7 @@ end
 # see https://docs.microsoft.com/en-us/azure/virtual-machines/linux/add-disk
 function mount_datadisks()
     try
-        @info "mounting data disks"
+        @debug "mounting data disks"
         _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false)
         r = JSON.parse(String(_r.body))
         luns = String[]
@@ -2549,7 +2566,7 @@ function mount_datadisks()
                 if lun ∈ luns
                     try
                         name = blk["name"]
-                        @info "mounting data disk with lun $lun ($name)..."
+                        @debug "mounting data disk with lun $lun ($name)..."
                         run(`sudo parted /dev/$name --script mklabel gpt mkpart xfspart xfs 0% 100%`)
                         sleep(1) # I'm not sure why this is needed, but the following command often fails without it
                         run(`sudo mkfs.xfs /dev/$(name)1`)
@@ -2557,7 +2574,7 @@ function mount_datadisks()
                         run(`sudo mkdir /scratch$lun`)
                         run(`sudo mount /dev/$(name)1 /scratch$lun`)
                         run(`sudo chmod 777 /scratch$lun`)
-                        @info "done mounting data disk with lun $lun ($name)"
+                        @debug "done mounting data disk with lun $lun ($name)"
                     catch e
                         @error "caught error formatting mounting data disk lun=$lun ($name)"
                         logerror(e, Logging.Debug)
@@ -2656,7 +2673,7 @@ function detachedservice(address=ip"0.0.0.0"; server=nothing, subscriptionid="",
 end
 
 function detachedrun(request::HTTP.Request)
-    @info "inside detachedrun"
+    @debug "inside detachedrun"
     local process, id, pid, r
 
     try
@@ -2791,7 +2808,7 @@ function detachedkill(request::HTTP.Request)
 end
 
 function detachedstatus(request::HTTP.Request)
-    @info "inside detachedstatus"
+    @debug "inside detachedstatus"
     local id
     try
         id = split(request.target, '/')[5]
