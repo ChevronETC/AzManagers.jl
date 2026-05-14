@@ -222,7 +222,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
 
     _manager.port,_manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(64)
-    _manager.pending_validated = Channel{WorkerConfig}(64)
+    _manager.pending_validated = Channel{WorkerConfig}(parse(Int, get(ENV, "JULIA_AZMANAGERS_VALIDATED_CHANNEL_SIZE", "512")))
     _manager.pending_down = Dict{ScaleSet,Set{String}}()
     _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
     _manager.pruned = Dict{ScaleSet,Set{String}}()
@@ -636,9 +636,10 @@ function process_pending_connections()
     manager = azmanager()
     wconfigs = WorkerConfig[]
 
-    max_wconfigs = manager.pending_validated.sz_max
+    max_wconfigs = parse(Int, get(ENV, "JULIA_AZMANAGERS_MAX_BATCH_SIZE", "64"))
     min_instances_per_second = parse(Float64, get(ENV, "JULIA_AZMANAGERS_MIN_INSTANCES_PER_MINUTE", "10")) / 60 # if we drop below N new instances per minute, then we trigger addprocs
-    min_cadence = parse(Int, get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "60"))
+    min_cadence = parse(Int, get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "5"))
+    tsk_addprocs = nothing  # track in-flight addprocs task
     tic = time()
     while true
         try
@@ -667,57 +668,67 @@ function process_pending_connections()
             continue
         end
 
+        # Wait for any in-flight addprocs to finish before starting a new batch
+        # (Distributed.worker_lock prevents concurrent addprocs_locked calls)
+        if tsk_addprocs !== nothing && !istaskdone(tsk_addprocs)
+            @debug "waiting for previous addprocs batch to complete"
+            wait(tsk_addprocs)
+        end
+
         @debug "calling addprocs_with_timeout from process_pending_connections"
         batch_size = length(wconfigs)
-        pids = addprocs_with_timeout(manager; wconfigs)
-        @info "batch complete" submitted=batch_size registered=length(pids) dropped=batch_size-length(pids)
+        local batch_wconfigs = copy(wconfigs)
         empty!(wconfigs)
         tic = time()
+        tsk_addprocs = @async begin
+            pids = addprocs_with_timeout(manager; wconfigs=batch_wconfigs)
+            @info "batch complete" submitted=batch_size registered=length(pids) dropped=batch_size-length(pids)
 
-        @debug "starting preempt loops" pids
-        for pid in pids
-            @async begin
-                wrkr = Distributed.map_pid_wrkr[pid]
-                if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata) && lowercase(get(wrkr.config.userdata, "priority", "")) == "spot"
-                    try
-                        manager.preempt_channel_futures[pid] = remotecall(Channel{Bool}, pid, 1)
-                        remotecall_fetch(machine_preempt_loop, pid, manager.preempt_channel_futures[pid])
-                    catch e
-                        if isa(e, RemoteException) && isa(e.captured.ex, TaskFailedException) && isa(e.captured.ex.task.result.ex, SpotPreemptException)
-                            ex = e.captured.ex.task.result.ex
-                            notbefore = DateTime(ex.notbefore, dateformat"e, dd u yyyy HH:MM:SS \G\M\T")
-                            @info "caught preempt exception for $(ex.clusterid), removing not before $notbefore UTC"
-                            _now = now(UTC)
-                            if notbefore > _now
-                                @debug "sleeping for preempt grace period" duration=notbefore - _now
-                                sleep(notbefore - _now)
-                            end
-                            u = wrkr.config.userdata
-                            try
-                                scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
-                                add_instance_to_preempted_list(manager, scaleset, u["instanceid"])
-                            catch e
-                                @error "error adding instance to preempted list" instanceid=get(u, "instanceid", "unknown")
-                            end
-
-                            try
-                                lock(Distributed.worker_lock)
-                                if haskey(Distributed.map_pid_wrkr, pid)
-                                    # We can't use rmprocs here since the worker process might already be gone due to preemption.  The
-                                    # worker process would usually do the following two lines (see the Distributed.message_handler_loop function)
-                                    Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
-                                    Distributed.deregister_worker(pid)
+            @debug "starting preempt loops" pids
+            for pid in pids
+                @async begin
+                    wrkr = Distributed.map_pid_wrkr[pid]
+                    if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata) && lowercase(get(wrkr.config.userdata, "priority", "")) == "spot"
+                        try
+                            manager.preempt_channel_futures[pid] = remotecall(Channel{Bool}, pid, 1)
+                            remotecall_fetch(machine_preempt_loop, pid, manager.preempt_channel_futures[pid])
+                        catch e
+                            if isa(e, RemoteException) && isa(e.captured.ex, TaskFailedException) && isa(e.captured.ex.task.result.ex, SpotPreemptException)
+                                ex = e.captured.ex.task.result.ex
+                                notbefore = DateTime(ex.notbefore, dateformat"e, dd u yyyy HH:MM:SS \G\M\T")
+                                @info "caught preempt exception for $(ex.clusterid), removing not before $notbefore UTC"
+                                _now = now(UTC)
+                                if notbefore > _now
+                                    @debug "sleeping for preempt grace period" duration=notbefore - _now
+                                    sleep(notbefore - _now)
                                 end
-                            catch
-                            finally
-                                unlock(Distributed.worker_lock)
+                                u = wrkr.config.userdata
+                                try
+                                    scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
+                                    add_instance_to_preempted_list(manager, scaleset, u["instanceid"])
+                                catch e
+                                    @error "error adding instance to preempted list" instanceid=get(u, "instanceid", "unknown")
+                                end
+
+                                try
+                                    lock(Distributed.worker_lock)
+                                    if haskey(Distributed.map_pid_wrkr, pid)
+                                        # We can't use rmprocs here since the worker process might already be gone due to preemption.  The
+                                        # worker process would usually do the following two lines (see the Distributed.message_handler_loop function)
+                                        Distributed.set_worker_state(Distributed.map_pid_wrkr[pid], Distributed.W_TERMINATED)
+                                        Distributed.deregister_worker(pid)
+                                    end
+                                catch
+                                finally
+                                    unlock(Distributed.worker_lock)
+                                end
                             end
                         end
                     end
                 end
             end
+            @debug "done starting preempt loops"
         end
-        @debug "done starting preempt loops"
     end
 end
 
