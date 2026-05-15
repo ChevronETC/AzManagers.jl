@@ -441,7 +441,8 @@ function prune_cluster()
 end
 
 function prune_scalesets()
-    worker_timeout = Second(parse(Int, get(ENV, "JULIA_AZMANAGERS_VM_JOIN_TIMEOUT", "720")))
+    _join_timeout = parse(Int, get(ENV, "JULIA_AZMANAGERS_VM_JOIN_TIMEOUT", "720"))
+    worker_timeout = Second(max(_join_timeout, ceil(Int, Distributed.worker_timeout()) + 30))
     manager = azmanager()
 
     _scalesets = scalesets(manager)
@@ -579,6 +580,7 @@ function _read_worker_config(socket)
     wconfig.exename = "julia"
     wconfig.exeflags = `$(vm["exeflags"])`
     wconfig.userdata = vm["userdata"]
+    wconfig.userdata["_validated_at"] = time()
 
     wconfig
 end
@@ -637,6 +639,7 @@ function process_pending_connections()
     wconfigs = WorkerConfig[]
 
     max_wconfigs = parse(Int, get(ENV, "JULIA_AZMANAGERS_MAX_BATCH_SIZE", "64"))
+    staleness_timeout = parse(Float64, get(ENV, "JULIA_AZMANAGERS_STALENESS_TIMEOUT", "60"))
     min_instances_per_second = parse(Float64, get(ENV, "JULIA_AZMANAGERS_MIN_INSTANCES_PER_MINUTE", "10")) / 60 # if we drop below N new instances per minute, then we trigger addprocs
     min_cadence = parse(Int, get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "5"))
     tsk_addprocs = nothing  # track in-flight addprocs task
@@ -645,11 +648,25 @@ function process_pending_connections()
         try
             if isempty(wconfigs)
                 @debug "taking from manager.pending_validated" manager.pending_validated.n_avail_items
-                push!(wconfigs, take!(manager.pending_validated))
+                wc = take!(manager.pending_validated)
+                age = time() - get(wc.userdata, "_validated_at", time())
+                if age > staleness_timeout
+                    @warn "discarding stale validated connection" age=round(age, digits=1) staleness_timeout instanceid=get(wc.userdata, "instanceid", "unknown")
+                    close(wc.io)
+                else
+                    push!(wconfigs, wc)
+                end
                 @debug "done taking from manager.pending_validated" manager.pending_validated.n_avail_items length(wconfigs)
             elseif isready(manager.pending_validated) && length(wconfigs) < max_wconfigs
                 @debug "taking from manager.pending_validated" manager.pending_validated.n_avail_items
-                push!(wconfigs, take!(manager.pending_validated))
+                wc = take!(manager.pending_validated)
+                age = time() - get(wc.userdata, "_validated_at", time())
+                if age > staleness_timeout
+                    @warn "discarding stale validated connection" age=round(age, digits=1) staleness_timeout instanceid=get(wc.userdata, "instanceid", "unknown")
+                    close(wc.io)
+                else
+                    push!(wconfigs, wc)
+                end
                 @debug "done taking from manager.pending_validated" manager.pending_validated.n_avail_items length(wconfigs)
             else
                 sleep(0.1)
@@ -756,16 +773,14 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
         u = wconfig.userdata
         instanceid = get(u, "instanceid", "unknown")
         vm_name = get(u, "name", "unknown")
-        @warn "worker failed to register" instanceid=instanceid vm_name=vm_name scalesetname=get(u, "scalesetname", "unknown") timeout=timeout
+        @warn "worker failed to register, VM kept alive for worker retry" instanceid=instanceid vm_name=vm_name scalesetname=get(u, "scalesetname", "unknown") timeout=timeout
         logerror(e, Logging.Debug)
-        scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
-        add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
-        add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
 
         #=
-        We don't rethrow the exception because we don't want addprocs_locked to throw.
-        Instead, we want it to add whatever machines are successfull, and ignore those
-        that are not.
+        We don't add to pending_down here — the worker may have been blocked by the
+        all-to-all PID ordering (collateral damage from another worker's failure).
+        The worker-side retry loop (azure_worker) will reconnect via Phase 1.
+        prune_scalesets() handles cleanup for VMs that never rejoin.
         =#
         return
     end
