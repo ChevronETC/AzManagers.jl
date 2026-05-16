@@ -755,9 +755,9 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
     cookie_ok = !isempty(Distributed.LPROC.cookie) && all(b -> b != 0x00, codeunits(Distributed.LPROC.cookie))
     @info "Phase 2 starting" instanceid=instanceid vm_name=vm_name bind_addr=bind_addr staleness=round(staleness, digits=1) cookie_ok=cookie_ok timeout=timeout
 
+    tic = time()
     try
         tsk_create_worker = @async Distributed.create_worker(manager, wconfig)
-        tic = time()
         while true
             if istaskdone(tsk_create_worker)
                 pid = fetch(tsk_create_worker)
