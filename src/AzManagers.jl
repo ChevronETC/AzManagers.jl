@@ -646,7 +646,7 @@ function process_pending_connections()
     max_wconfigs = parse(Int, get(ENV, "JULIA_AZMANAGERS_MAX_BATCH_SIZE", "64"))
     min_instances_per_second = parse(Float64, get(ENV, "JULIA_AZMANAGERS_MIN_INSTANCES_PER_MINUTE", "10")) / 60 # if we drop below N new instances per minute, then we trigger addprocs
     min_cadence = parse(Int, get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "5"))
-    tsk_addprocs = nothing  # track in-flight addprocs task
+    inflight_tasks = Task[]  # track in-flight addprocs tasks
     tic = time()
     while true
         try
@@ -675,19 +675,15 @@ function process_pending_connections()
             continue
         end
 
-        # Wait for any in-flight addprocs to finish before starting a new batch
-        # (Distributed.worker_lock prevents concurrent addprocs_locked calls)
-        if tsk_addprocs !== nothing && !istaskdone(tsk_addprocs)
-            @debug "waiting for previous addprocs batch to complete"
-            wait(tsk_addprocs)
-        end
+        # Clean up completed in-flight tasks
+        filter!(!istaskdone, inflight_tasks)
+        @debug "dispatching batch" n_inflight=length(inflight_tasks)
 
-        @debug "calling addprocs_with_timeout from process_pending_connections"
         batch_size = length(wconfigs)
         local batch_wconfigs = copy(wconfigs)
         empty!(wconfigs)
         tic = time()
-        tsk_addprocs = @async begin
+        tsk = @async begin
             pids = addprocs_with_timeout(manager; wconfigs=batch_wconfigs)
             @info "batch complete" submitted=batch_size registered=length(pids) dropped=batch_size-length(pids)
 
@@ -736,6 +732,7 @@ function process_pending_connections()
             end
             @debug "done starting preempt loops"
         end
+        push!(inflight_tasks, tsk)
     end
 end
 
@@ -752,6 +749,18 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
     bind_addr = something(wconfig.bind_addr, "unknown")
     validated_at = get(u, "_validated_at", NaN)
     staleness = isnan(validated_at) ? NaN : time() - validated_at
+
+    # Skip connections that are too stale — their sockets are likely dead
+    max_staleness = parse(Float64, get(ENV, "JULIA_AZMANAGERS_MAX_STALENESS", string(Distributed.worker_timeout())))
+    if !isnan(staleness) && staleness > max_staleness
+        @warn "Phase 2 skipped: connection too stale" instanceid=instanceid vm_name=vm_name staleness=round(staleness, digits=1) max_staleness=max_staleness
+        try; close(wconfig.io); catch; end
+        scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
+        add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
+        add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
+        return
+    end
+
     cookie_ok = !isempty(Distributed.LPROC.cookie) && all(b -> b != 0x00, codeunits(Distributed.LPROC.cookie))
     @info "Phase 2 starting" instanceid=instanceid vm_name=vm_name bind_addr=bind_addr staleness=round(staleness, digits=1) cookie_ok=cookie_ok timeout=timeout
 
