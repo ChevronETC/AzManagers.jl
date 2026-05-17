@@ -441,7 +441,10 @@ function prune_cluster()
 end
 
 function prune_scalesets()
-    worker_timeout = Second(parse(Int, get(ENV, "JULIA_AZMANAGERS_VM_JOIN_TIMEOUT", "720")))
+    _join_timeout = parse(Int, get(ENV, "JULIA_AZMANAGERS_VM_JOIN_TIMEOUT", "720"))
+    # Ensure prune timeout is at least as long as the batch timeout (worker_timeout + 30)
+    # to avoid pruning VMs that are still being processed by addprocs_with_timeout.
+    worker_timeout = Second(max(_join_timeout, ceil(Int, Distributed.worker_timeout()) + 30))
     manager = azmanager()
 
     _scalesets = scalesets(manager)
@@ -579,6 +582,10 @@ function _read_worker_config(socket)
     wconfig.exename = "julia"
     wconfig.exeflags = `$(vm["exeflags"])`
     wconfig.userdata = vm["userdata"]
+    wconfig.userdata["_validated_at"] = time()
+
+    peer = try string(getpeername(socket)) catch; "unknown" end
+    @info "Phase 1 validated" bind_addr=vm["bind_addr"] instanceid=get(vm["userdata"], "instanceid", "unknown") name=get(vm["userdata"], "name", "unknown") peer=peer
 
     wconfig
 end
@@ -639,7 +646,7 @@ function process_pending_connections()
     max_wconfigs = parse(Int, get(ENV, "JULIA_AZMANAGERS_MAX_BATCH_SIZE", "64"))
     min_instances_per_second = parse(Float64, get(ENV, "JULIA_AZMANAGERS_MIN_INSTANCES_PER_MINUTE", "10")) / 60 # if we drop below N new instances per minute, then we trigger addprocs
     min_cadence = parse(Int, get(ENV, "JULIA_AZMANAGERS_PENDING_CADENCE", "5"))
-    tsk_addprocs = nothing  # track in-flight addprocs task
+    inflight_tasks = Task[]  # track in-flight addprocs tasks
     tic = time()
     while true
         try
@@ -668,19 +675,15 @@ function process_pending_connections()
             continue
         end
 
-        # Wait for any in-flight addprocs to finish before starting a new batch
-        # (Distributed.worker_lock prevents concurrent addprocs_locked calls)
-        if tsk_addprocs !== nothing && !istaskdone(tsk_addprocs)
-            @debug "waiting for previous addprocs batch to complete"
-            wait(tsk_addprocs)
-        end
+        # Clean up completed in-flight tasks
+        filter!(!istaskdone, inflight_tasks)
+        @debug "dispatching batch" n_inflight=length(inflight_tasks)
 
-        @debug "calling addprocs_with_timeout from process_pending_connections"
         batch_size = length(wconfigs)
         local batch_wconfigs = copy(wconfigs)
         empty!(wconfigs)
         tic = time()
-        tsk_addprocs = @async begin
+        tsk = @async begin
             pids = addprocs_with_timeout(manager; wconfigs=batch_wconfigs)
             @info "batch complete" submitted=batch_size registered=length(pids) dropped=batch_size-length(pids)
 
@@ -729,6 +732,7 @@ function process_pending_connections()
             end
             @debug "done starting preempt loops"
         end
+        push!(inflight_tasks, tsk)
     end
 end
 
@@ -738,9 +742,31 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
     timeout = Distributed.worker_timeout() + 10
     interrupted = false
     local pid
+
+    u = wconfig.userdata
+    instanceid = get(u, "instanceid", "unknown")
+    vm_name = get(u, "name", "unknown")
+    bind_addr = something(wconfig.bind_addr, "unknown")
+    validated_at = get(u, "_validated_at", NaN)
+    staleness = isnan(validated_at) ? NaN : time() - validated_at
+
+    # Skip connections that are too stale — their sockets are likely dead
+    max_staleness = parse(Float64, get(ENV, "JULIA_AZMANAGERS_MAX_STALENESS", string(Distributed.worker_timeout())))
+    if !isnan(staleness) && staleness > max_staleness
+        @warn "Phase 2 skipped: connection too stale" instanceid=instanceid vm_name=vm_name staleness=round(staleness, digits=1) max_staleness=max_staleness
+        try; close(wconfig.io); catch; end
+        scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
+        add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
+        add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
+        return
+    end
+
+    cookie_ok = !isempty(Distributed.LPROC.cookie) && all(b -> b != 0x00, codeunits(Distributed.LPROC.cookie))
+    @info "Phase 2 starting" instanceid=instanceid vm_name=vm_name bind_addr=bind_addr staleness=round(staleness, digits=1) cookie_ok=cookie_ok timeout=timeout
+
+    tic = time()
     try
         tsk_create_worker = @async Distributed.create_worker(manager, wconfig)
-        tic = time()
         while true
             if istaskdone(tsk_create_worker)
                 pid = fetch(tsk_create_worker)
@@ -753,10 +779,8 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
             sleep(1)
         end
     catch e
-        u = wconfig.userdata
-        instanceid = get(u, "instanceid", "unknown")
-        vm_name = get(u, "name", "unknown")
-        @warn "worker failed to register" instanceid=instanceid vm_name=vm_name scalesetname=get(u, "scalesetname", "unknown") timeout=timeout
+        elapsed = time() - tic
+        @warn "Phase 2 failed" instanceid=instanceid vm_name=vm_name scalesetname=get(u, "scalesetname", "unknown") elapsed=round(elapsed, digits=1) timeout=timeout staleness=round(staleness, digits=1)
         logerror(e, Logging.Debug)
         scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
         add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
@@ -770,6 +794,7 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
         return
     end
 
+    @info "Phase 2 complete" instanceid=instanceid vm_name=vm_name pid=pid elapsed=round(time() - tic, digits=1)
     push!(launched_q, pid)
 
     # When starting workers on remote multi-core hosts, `launch` can (optionally) start only one
@@ -1413,6 +1438,8 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
     t = errormonitor(@async while isopen(sock)
         client = accept(sock)
+        peer = try string(getpeername(client)) catch; "unknown" end
+        @info "Phase 2 accept" peer=peer local_port=Distributed.LPROC.bind_port
 
         #=
         We observe that a valid machine often receive UInt(0)'s instead
@@ -1430,13 +1457,18 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
 
         cookie_from_master = read(client, Distributed.HDR_COOKIE_LEN)
         if cookie_from_master[1] == 0x00
+            null_count = count(==(0x00), cookie_from_master)
+            hex = join(string.(cookie_from_master, base=16, pad=2), " ")
+            @error "null cookie received" peer=peer null_count=null_count total=length(cookie_from_master) hex=hex
             error("received cookie with at least one null character")
         end
 
         if String(cookie_from_master) != cookie
+            @error "invalid cookie received" peer=peer
             error("received invalid cookie.")
         end
 
+        @info "Phase 2 cookie valid" peer=peer
         Distributed.process_messages(client, client, false)
     end)
     print(out, "julia_worker:")  # print header
@@ -2500,6 +2532,17 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
             break
         end
     end
+
+    # Subtract pending_down VMs from the Azure-reported capacity to avoid
+    # overprovisioning due to TOCTOU race with delete_pending_down_vms.
+    _pending_down = pending_down(manager)
+    _scaleset = ScaleSet(subscriptionid, resourcegroup, scalesetname)
+    pending_count = haskey(_pending_down, _scaleset) ? length(_pending_down[_scaleset]) : 0
+    if pending_count > 0
+        @info "adjusting capacity for pending_down" scalesetname=scalesetname azure_capacity=n pending_down=pending_count adjusted=max(0, n - pending_count)
+        n = max(0, n - pending_count)
+    end
+
     n += δn
 
     @debug "about to check quota"
