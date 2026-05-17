@@ -606,10 +606,15 @@ function Distributed.addprocs(manager::AzManager; wconfigs)
     pids
 end
 
+function _batch_timeout()
+    parse(Float64, get(ENV, "JULIA_AZMANAGERS_BATCH_TIMEOUT", "120"))
+end
+
 function addprocs_with_timeout(manager; wconfigs)
-    # Distributed.setup_launched_worker also uses Distributed.worker_timeout, so we add a grace period
-    # to allow for the Distributed.setup_launched_worker to hit its timeout.
-    timeout = Distributed.worker_timeout() + 30
+    # By the time workers reach here, Phase 1 is complete (they've connected and sent their cookie).
+    # Phase 2 (master back-connection) should be fast, so we use a dedicated batch timeout
+    # rather than the much longer JULIA_WORKER_TIMEOUT.
+    timeout = _batch_timeout()
     tsk_addprocs = @async addprocs(manager; wconfigs)
     tic = time()
     pids = []
@@ -740,9 +745,9 @@ function process_pending_connections()
 end
 
 function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched_q)
-    # Distributed.create_worker also uses Distributed.worker_timeout, so we add a grace period
-    # to allow for the Distributed.create_worker to hit its timeout.
-    timeout = Distributed.worker_timeout() + 10
+    # Per-worker timeout: slightly less than batch timeout to let individual workers
+    # fail before the whole batch is interrupted.
+    timeout = _batch_timeout() - 10
     interrupted = false
     local pid
 

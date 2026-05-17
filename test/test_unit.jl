@@ -325,6 +325,29 @@ using AzManagers
         @test result_fail.staleness >= 0
     end
 
+    # ===== Batch Timeout =====
+
+    @testset "_batch_timeout" begin
+        # Default
+        timeout_default = withenv("JULIA_AZMANAGERS_BATCH_TIMEOUT" => nothing) do
+            AzManagers._batch_timeout()
+        end
+        @test timeout_default == 120.0
+
+        # Custom
+        timeout_custom = withenv("JULIA_AZMANAGERS_BATCH_TIMEOUT" => "30") do
+            AzManagers._batch_timeout()
+        end
+        @test timeout_custom == 30.0
+
+        # Decoupled from JULIA_WORKER_TIMEOUT
+        timeout_decoupled = withenv("JULIA_AZMANAGERS_BATCH_TIMEOUT" => "60",
+                                     "JULIA_WORKER_TIMEOUT" => "800") do
+            AzManagers._batch_timeout()
+        end
+        @test timeout_decoupled == 60.0  # not 830 like before
+    end
+
     # ===== Prune Timeout Arithmetic =====
 
     @testset "prune timeout alignment" begin
