@@ -2532,6 +2532,17 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
             break
         end
     end
+
+    # Subtract pending_down VMs from the Azure-reported capacity to avoid
+    # overprovisioning due to TOCTOU race with delete_pending_down_vms.
+    _pending_down = pending_down(manager)
+    _scaleset = ScaleSet(subscriptionid, resourcegroup, scalesetname)
+    pending_count = haskey(_pending_down, _scaleset) ? length(_pending_down[_scaleset]) : 0
+    if pending_count > 0
+        @info "adjusting capacity for pending_down" scalesetname=scalesetname azure_capacity=n pending_down=pending_count adjusted=max(0, n - pending_count)
+        n = max(0, n - pending_count)
+    end
+
     n += δn
 
     @debug "about to check quota"
