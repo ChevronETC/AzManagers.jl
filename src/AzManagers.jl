@@ -441,7 +441,9 @@ function prune_cluster()
 end
 
 function prune_scalesets()
-    worker_timeout = Second(parse(Int, get(ENV, "JULIA_AZMANAGERS_VM_JOIN_TIMEOUT", "720")))
+    # Invariant: prune_timeout > worker_timeout > batch_timeout
+    _join_timeout = parse(Int, get(ENV, "JULIA_AZMANAGERS_VM_JOIN_TIMEOUT", "720"))
+    worker_timeout = Second(max(_join_timeout, ceil(Int, Distributed.worker_timeout()) + 30))
     manager = azmanager()
 
     _scalesets = scalesets(manager)
@@ -600,9 +602,9 @@ function Distributed.addprocs(manager::AzManager; wconfigs)
 end
 
 function addprocs_with_timeout(manager; wconfigs)
-    # Distributed.setup_launched_worker also uses Distributed.worker_timeout, so we add a grace period
-    # to allow for the Distributed.setup_launched_worker to hit its timeout.
-    timeout = Distributed.worker_timeout() + 30
+    # Workers have already completed Phase 1 (connected + validated), so Phase 2 should be fast.
+    # Invariant: batch_timeout < worker_timeout < prune_timeout
+    timeout = parse(Float64, get(ENV, "JULIA_AZMANAGERS_BATCH_TIMEOUT", "10"))
     tsk_addprocs = @async addprocs(manager; wconfigs)
     tic = time()
     pids = []
@@ -733,9 +735,9 @@ function process_pending_connections()
 end
 
 function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched_q)
-    # Distributed.create_worker also uses Distributed.worker_timeout, so we add a grace period
-    # to allow for the Distributed.create_worker to hit its timeout.
-    timeout = Distributed.worker_timeout() + 10
+    # Per-worker Phase 2 timeout. Workers already completed Phase 1, so this should be short.
+    # Invariant: setup_timeout < batch_timeout
+    timeout = parse(Float64, get(ENV, "JULIA_AZMANAGERS_BATCH_TIMEOUT", "10")) - 2
     interrupted = false
     local pid
     try
