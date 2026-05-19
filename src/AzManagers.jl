@@ -487,7 +487,12 @@ function prune_scalesets()
             is_vm_deleting = lowercase(vm_state) == "deleting"
             ispruned_already = scaleset ∈ keys(manager.pruned) && instanceid ∈ manager.pruned[scaleset]
 
-            doprune = (time_elapsed > worker_timeout || vm_state == "failed") && !is_worker_deleting && !is_vm_deleting && !ispruned_already
+            # Re-prune VMs stuck in Azure "Deleting" state past 2× the join
+            # timeout. Azure's delete API can return 202 (accepted) without
+            # completing — these ghost VMs inflate nworkers_provisioned()
+            # indefinitely because the !is_vm_deleting guard skips them.
+            is_stuck_deleting = is_vm_deleting && time_elapsed > 2 * worker_timeout
+            doprune = ((time_elapsed > worker_timeout || vm_state == "failed") && !is_worker_deleting && !is_vm_deleting && !ispruned_already) || is_stuck_deleting
             if doprune
                 vm_name = get(_vm, "name", "unknown")
                 power_state = lowercase(get(get(get(_vm, "properties", Dict()), "instanceView", Dict()), "powerState", get(get(_vm, "properties", Dict()), "provisioningState", "unknown")))
