@@ -1083,10 +1083,7 @@ function nworkers_provisioned(service=false)
             n += N
         end
     end
-
-    _pending_down = pending_down(manager)
-    pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
-    max(0, n - pending_down_count)
+    n
 end
 
 """
