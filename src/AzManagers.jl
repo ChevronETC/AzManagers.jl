@@ -361,8 +361,9 @@ function scaleset_sync()
     catch e
         @error "scaleset syncing error"
         logerror(e, Logging.Debug)
+    finally
+        unlock(manager.lock)
     end
-    unlock(manager.lock)
 end
 
 function prune_cluster()
