@@ -357,12 +357,12 @@ function scaleset_sync()
         pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
         _nworkers_provisioned = nworkers_provisioned()
         if nprocs()-1+pending_down_count != _nworkers_provisioned
-            @info "scaleset sync: client/server mismatch" cluster_workers=nprocs()-1 pending_down=pending_down_count provisioned=_nworkers_provisioned
+            @debug "scaleset sync: client/server mismatch" cluster_workers=nprocs()-1 pending_down=pending_down_count provisioned=_nworkers_provisioned
             _scalesets = scalesets(manager)
             for scaleset in keys(_scalesets)
                 old_capacity = _scalesets[scaleset]
                 _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
-                @info "scaleset sync: updated capacity" scalesetname=scaleset.scalesetname old=old_capacity new=_scalesets[scaleset]
+                @debug "scaleset sync: updated capacity" scalesetname=scaleset.scalesetname old=old_capacity new=_scalesets[scaleset]
             end
         end
     catch e
@@ -660,7 +660,7 @@ function process_pending_connections()
             if length(wconfigs) == 0 || (elapsedtime < min_cadence && instances_per_second > min_instances_per_second && length(wconfigs) < max_wconfigs)
                 continue
             else
-                @info "batch ready: adding workers" batch_size=length(wconfigs) elapsed=round(elapsedtime, digits=1) rate=round(instances_per_second, digits=3) provisioned=nworkers_provisioned()
+                @debug "batch ready: adding workers" batch_size=length(wconfigs) elapsed=round(elapsedtime, digits=1) rate=round(instances_per_second, digits=3) provisioned=nworkers_provisioned()
             end
         catch e
             @error "AzManagers, error retrieving pending connection"
@@ -682,7 +682,7 @@ function process_pending_connections()
         tic = time()
         tsk_addprocs = @async begin
             pids = addprocs_with_timeout(manager; wconfigs=batch_wconfigs)
-            @info "batch complete" submitted=batch_size registered=length(pids) dropped=batch_size-length(pids)
+            @debug "batch complete" submitted=batch_size registered=length(pids) dropped=batch_size-length(pids)
 
             @debug "starting preempt loops" pids
             for pid in pids
