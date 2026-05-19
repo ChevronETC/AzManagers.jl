@@ -303,17 +303,22 @@ end
 function delete_empty_scalesets()
     manager = azmanager()
     lock(manager.lock)
-    _scalesets = scalesets(manager)
-    for (scaleset, capacity) in _scalesets
-        if capacity == 0
-            # double-check capacity in case there is client/server mis-match
-            _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+    try
+        _scalesets = scalesets(manager)
+        for (scaleset, capacity) in _scalesets
+            if capacity == 0
+                # double-check capacity in case there is client/server mis-match
+                _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+            end
+            if _scalesets[scaleset] == 0
+                delete_scaleset(manager, scaleset)
+            end
         end
-        if _scalesets[scaleset] == 0
-            delete_scaleset(manager, scaleset)
-        end
+    catch e
+        throw(e)
+    finally
+        unlock(manager.lock)
     end
-    unlock(manager.lock)
 end
 
 function delete_pending_down_vms()
