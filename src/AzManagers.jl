@@ -1472,7 +1472,17 @@ function Distributed.launch_n_additional_processes(manager::AzManager, frompid, 
     @sync begin
         exename = Distributed.notnothing(fromconfig.exename)
         exeflags = something(fromconfig.exeflags, ``)
-        cmd = `$exename $exeflags --worker`
+
+        projectinfo = Pkg.project()
+        envname = splitpath(projectinfo.path)[end-1]
+
+        local cmd
+        if isempty(envname)
+            cmd = `$exename $exeflags --worker`
+        else
+            envdir = joinpath(Pkg.envdir(), envname)
+            cmd = `$exename $exeflags --project=$envdir --worker`
+        end
 
         new_addresses = remotecall_fetch(Distributed.launch_additional, frompid, cnt, cmd)
         for (localid,address) in enumerate(new_addresses)
