@@ -443,7 +443,7 @@ function prune_scalesets()
     instanceids = Dict{ScaleSet,Array{String}}()
     for wrkr in values(Distributed.map_pid_wrkr)
         if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
-            if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
+            if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, AbstractDict)
                 userdata = wrkr.config.userdata
                 if haskey(userdata, "instanceid") && haskey(userdata, "scalesetname") && haskey(userdata, "resourcegroup") && haskey(userdata, "subscriptionid")
                     ss = ScaleSet(userdata["subscriptionid"], userdata["resourcegroup"], userdata["scalesetname"])
