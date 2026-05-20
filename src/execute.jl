@@ -20,7 +20,7 @@ function execute!(state::ManagerState, action::DeleteScaleSet)
 end
 
 function execute!(state::ManagerState, action::DeregisterWorker)
-    Distributed.set_worker_state(Distributed.map_pid_wrkr[action.pid], Distributed.W_TERMINATED])
+    Distributed.set_worker_state(Distributed.map_pid_wrkr[action.pid], Distributed.W_TERMINATED)
     Distributed.deregister_worker(action.pid)
 end
 
