@@ -99,7 +99,7 @@ function list_scaleset_nics(state::ManagerState, ss::ScaleSet)
         end
         nic_map
     catch e
-        @warn "failed to list NICs" scalesetname=ss.name
+        @warn "failed to list NICs" scalesetname=ss.name exception=(e, catch_backtrace())
         Dict{String,String}()
     end
 end
