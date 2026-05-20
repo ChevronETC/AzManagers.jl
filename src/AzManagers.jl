@@ -469,9 +469,6 @@ function prune_scalesets()
                 continue
             end
 
-            @info "instanceid $instanceid is not registered with the Julia cluster, checking for removal."
-            @info "instanceids=$(instanceids)"
-
             # otherwise, decide if we should remove the instance from the scale-set
             time_touched = get(get(manager.deleted, scaleset, Dict()), instanceid, DateTime(_vm["properties"]["timeCreated"][1:23], DateFormat("yyyy-mm-ddTHH:MM:SS.s")))
             time_elapsed = now(Dates.UTC) - time_touched
@@ -483,8 +480,6 @@ function prune_scalesets()
             doprune = time_elapsed > worker_timeout && !is_worker_deleting && !is_vm_deleting && !ispruned_already
             if doprune
                 @info "Putting machine with instance id $instanceid in $(scaleset.scalesetname) onto the deletion queue because it failed to join the Julia cluster after $(round(time_elapsed, Second)), vm_state=$vm_state."
-                @info "is_worker_deleting=$is_worker_deleting, is_vm_deleting=$is_vm_deleting, ispruned_already=$ispruned_already"
-                @info "instanceids=$instanceids"
                 if manager.save_cloud_init_failures
                     @info "copying cloud init output log to '$(pwd())/cloud-init-output-$(instanceid).log'."
                     try
