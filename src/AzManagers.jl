@@ -6,51 +6,8 @@ using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, JSON, JWTs, Loggi
 
 include("types.jl")
 include("logging.jl")
-include("azure_api.jl")
-include("handlers.jl")
-include("execute.jl")
-include("reconcile.jl")
-include("connection.jl")
-include("cloud_init.jl")
-include("worker.jl")
-include("provisioning.jl")
 
-# ─── Manifest ───
-
-const _manifest = Dict("resourcegroup"=>"", "ssh_user"=>"", "ssh_private_key_file"=>"", "ssh_public_key_file"=>"", "subscriptionid"=>"")
-
-manifestpath() = joinpath(homedir(), ".azmanagers")
-manifestfile() = joinpath(manifestpath(), "manifest.json")
-
-function write_manifest(;
-        resourcegroup="",
-        subscriptionid="",
-        ssh_user="",
-        ssh_private_key_file=joinpath(homedir(), ".ssh", "azmanagers_rsa"),
-        ssh_public_key_file=joinpath(homedir(), ".ssh", "azmanagers_rsa.pub"))
-    manifest = Dict(
-        "resourcegroup" => resourcegroup,
-        "subscriptionid" => subscriptionid,
-        "ssh_user" => ssh_user,
-        "ssh_private_key_file" => ssh_private_key_file,
-        "ssh_public_key_file" => ssh_public_key_file)
-    isdir(manifestpath()) || mkdir(manifestpath(); mode=0o700)
-    write(manifestfile(), JSON.json(manifest, 1))
-    chmod(manifestfile(), 0o600)
-end
-
-function load_manifest()
-    if isfile(manifestfile())
-        manifest = JSON.parsefile(manifestfile())
-        for key in keys(_manifest)
-            _manifest[key] = get(manifest, key, "")
-        end
-    else
-        error("Manifest file ($(manifestfile())) does not exist. Use AzManagers.write_manifest to generate a manifest file.")
-    end
-end
-
-# ─── Retry infrastructure ───
+# ─── Retry infrastructure (must precede azure_api.jl) ───
 
 const RETRYABLE_HTTP_ERRORS = (409, 429, 500)
 
@@ -107,6 +64,50 @@ macro retry(retries, ex::Expr)
             end
         end
         r
+    end
+end
+
+include("azure_api.jl")
+include("handlers.jl")
+include("execute.jl")
+include("reconcile.jl")
+include("connection.jl")
+include("cloud_init.jl")
+include("worker.jl")
+include("provisioning.jl")
+
+# ─── Manifest ───
+
+const _manifest = Dict("resourcegroup"=>"", "ssh_user"=>"", "ssh_private_key_file"=>"", "ssh_public_key_file"=>"", "subscriptionid"=>"")
+
+manifestpath() = joinpath(homedir(), ".azmanagers")
+manifestfile() = joinpath(manifestpath(), "manifest.json")
+
+function write_manifest(;
+        resourcegroup="",
+        subscriptionid="",
+        ssh_user="",
+        ssh_private_key_file=joinpath(homedir(), ".ssh", "azmanagers_rsa"),
+        ssh_public_key_file=joinpath(homedir(), ".ssh", "azmanagers_rsa.pub"))
+    manifest = Dict(
+        "resourcegroup" => resourcegroup,
+        "subscriptionid" => subscriptionid,
+        "ssh_user" => ssh_user,
+        "ssh_private_key_file" => ssh_private_key_file,
+        "ssh_public_key_file" => ssh_public_key_file)
+    isdir(manifestpath()) || mkdir(manifestpath(); mode=0o700)
+    write(manifestfile(), JSON.json(manifest, 1))
+    chmod(manifestfile(), 0o600)
+end
+
+function load_manifest()
+    if isfile(manifestfile())
+        manifest = JSON.parsefile(manifestfile())
+        for key in keys(_manifest)
+            _manifest[key] = get(manifest, key, "")
+        end
+    else
+        error("Manifest file ($(manifestfile())) does not exist. Use AzManagers.write_manifest to generate a manifest file.")
     end
 end
 
