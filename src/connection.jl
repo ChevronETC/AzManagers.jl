@@ -12,8 +12,9 @@ function validate_connection(state::ManagerState, socket)
     try
         return fetch(tsk)
     catch e
-        peer = try string(getpeername(socket)) catch; "unknown" end
-        @warn "connection validation failed, discarding socket" peer exception=(e, catch_backtrace())
+        peer = try getpeername(socket) catch; "unknown" end
+        cause = e isa TaskFailedException ? e.task.result : e
+        @warn "connection validation failed, discarding socket" peer exception=(cause, catch_backtrace())
         close(socket)
         return nothing
     finally

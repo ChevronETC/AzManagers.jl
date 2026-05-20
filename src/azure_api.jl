@@ -20,7 +20,7 @@ scaleset_vms_url(ss::ScaleSet) =
     "$(scaleset_url(ss))/virtualMachines?api-version=$API_VERSION_VM&\$expand=instanceView"
 
 scaleset_nics_url(ss::ScaleSet) =
-    "$(scaleset_url(ss))/networkInterfaces?api-version=$API_VERSION_NETWORK"
+    "$(scaleset_url(ss))/networkInterfaces?api-version=$API_VERSION_COMPUTE"
 
 scaleset_delete_vms_url(ss::ScaleSet) =
     "$(scaleset_url(ss))/delete?forceDeletion=True&api-version=$API_VERSION_COMPUTE_DELETE"
