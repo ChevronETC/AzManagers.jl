@@ -190,6 +190,7 @@ mutable struct AzManager <: ClusterManager
     pending_up::Channel{TCPSocket}
     pending_validated::Channel{WorkerConfig}
     pending_down::Dict{ScaleSet,Set{String}}
+    orphan_pending_down::Dict{ScaleSet,Set{String}}
     deleted::Dict{ScaleSet,Dict{String,DateTime}}
     pruned::Dict{ScaleSet,Set{String}}
     preempted::Dict{ScaleSet,Set{String}}
@@ -227,6 +228,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.pending_up = Channel{TCPSocket}(64)
     _manager.pending_validated = Channel{WorkerConfig}(parse(Int, get(ENV, "JULIA_AZMANAGERS_VALIDATED_CHANNEL_SIZE", "512")))
     _manager.pending_down = Dict{ScaleSet,Set{String}}()
+    _manager.orphan_pending_down = Dict{ScaleSet,Set{String}}()
     _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
     _manager.pruned = Dict{ScaleSet,Set{String}}()
     _manager.preempted = Dict{ScaleSet,Set{String}}()
@@ -259,11 +261,13 @@ function scaleset_pruning()
 
     while true
         try
-            # fetch VM lists once per scaleset, shared by both prune passes
+            # fetch VM lists and NIC maps once per scaleset, shared by both prune passes
             manager = azmanager()
             vm_lists = Dict{ScaleSet,Vector}()
+            nic_lists = Dict{ScaleSet,Dict{String,String}}()
             for scaleset in keys(scalesets(manager))
                 vm_lists[scaleset] = list_scaleset_vms(manager, scaleset)
+                nic_lists[scaleset] = list_scaleset_nics(manager, scaleset)
             end
 
             #=
@@ -275,7 +279,7 @@ function scaleset_pruning()
             The following handles vms that are provisioined, but that fail to
             join the cluster.
             =#
-            prune_scalesets(vm_lists)
+            prune_scalesets(vm_lists, nic_lists)
         catch e
             @error "scaleset pruning error"
             logerror(e, Logging.Debug)
@@ -293,6 +297,7 @@ function scaleset_cleaning()
             sleep(interval)
             reimage_pending_vms()
             delete_pending_down_vms()
+            delete_orphan_pending_down_vms()
             delete_empty_scalesets()
             scaleset_sync()
         catch e
@@ -305,6 +310,7 @@ end
 scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : Dict{ScaleSet,Int}()
 scalesets() = scalesets(azmanager())
 pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Set{String}}()
+orphan_pending_down(manager::AzManager) = isdefined(manager, :orphan_pending_down) ? manager.orphan_pending_down : Dict{ScaleSet,Set{String}}()
 
 function delete_scaleset(manager, scaleset)
     @info "deleting scaleset" scalesetname=scaleset.scalesetname resourcegroup=scaleset.resourcegroup
@@ -397,18 +403,52 @@ function delete_pending_down_vms()
     nothing
 end
 
+function delete_orphan_pending_down_vms()
+    manager = azmanager()
+    lock(manager.lock)
+
+    for (scaleset, ids) in orphan_pending_down(manager)
+        old_capacity = get(scalesets(manager), scaleset, 0)
+        @info "deleting orphan pending_down vms" scalesetname=scaleset.scalesetname count=length(ids) ids=ids current_capacity=old_capacity
+        try
+            delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
+            # Do NOT subtract from client-side capacity: these VMs never joined as workers,
+            # so they were never counted toward the working cluster. The capacity will be
+            # corrected by scaleset_sync on the next cycle.
+            @info "deleted orphan pending_down vms" scalesetname=scaleset.scalesetname count=length(ids) old_capacity=old_capacity
+            delete!(orphan_pending_down(manager), scaleset)
+        catch e
+            if status(e) == 404
+                @debug "scaleset $(scaleset.scalesetname) not found when attempting to delete orphan vms, assuming it was already deleted."
+                if haskey(orphan_pending_down(manager), scaleset)
+                    delete!(orphan_pending_down(manager), scaleset)
+                end
+            else
+                @error "error deleting orphan scaleset vms, manual clean-up may be required."
+                logerror(e, Logging.Debug)
+            end
+        end
+    end
+    unlock(manager.lock)
+    nothing
+end
+
 # sync server and client side views of the resources
 function scaleset_sync()
     manager = azmanager()
     lock(manager.lock)
     try
+        _pending_down = pending_down(manager)
+        pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
+        _orphan_pending_down = orphan_pending_down(manager)
+        orphan_pending_down_count = isempty(_orphan_pending_down) ? 0 : mapreduce(length, +, values(_orphan_pending_down))
         _in_flight = manager.in_flight
         in_flight_count = isempty(_in_flight) ? 0 : mapreduce(length, +, values(_in_flight))
         _pending_reimage = manager.pending_reimage
         pending_reimage_count = isempty(_pending_reimage) ? 0 : mapreduce(length, +, values(_pending_reimage))
         _nworkers_provisioned = nworkers_provisioned()
-        if nprocs()-1+in_flight_count+pending_reimage_count != _nworkers_provisioned
-            @info "scaleset sync: client/server mismatch" cluster_workers=nprocs()-1 in_flight=in_flight_count pending_reimage=pending_reimage_count provisioned=_nworkers_provisioned
+        if nprocs()-1+pending_down_count+orphan_pending_down_count+in_flight_count+pending_reimage_count != _nworkers_provisioned
+            @info "scaleset sync: client/server mismatch" cluster_workers=nprocs()-1 pending_down=pending_down_count orphan_pending_down=orphan_pending_down_count in_flight=in_flight_count pending_reimage=pending_reimage_count provisioned=_nworkers_provisioned
             _scalesets = scalesets(manager)
             for scaleset in keys(_scalesets)
                 old_capacity = _scalesets[scaleset]
@@ -488,7 +528,7 @@ function prune_cluster(vm_lists::Dict{ScaleSet,Vector})
     end
 end
 
-function prune_scalesets(vm_lists::Dict{ScaleSet,Vector})
+function prune_scalesets(vm_lists::Dict{ScaleSet,Vector}, nic_lists::Dict{ScaleSet,Dict{String,String}}=Dict{ScaleSet,Dict{String,String}}())
     # Invariant: prune_timeout > worker_timeout > batch_timeout
     _join_timeout = parse(Int, get(ENV, "JULIA_AZMANAGERS_VM_JOIN_TIMEOUT", "720"))
     worker_timeout = Second(max(_join_timeout, ceil(Int, Distributed.worker_timeout()) + 30))
@@ -526,6 +566,7 @@ function prune_scalesets(vm_lists::Dict{ScaleSet,Vector})
             time_elapsed = now(Dates.UTC) - time_touched
             vm_state = lowercase(get(get(_vm, "properties", Dict()), "provisioningState", "none"))
             is_worker_deleting = scaleset ∈ keys(manager.pending_down) && instanceid ∈ manager.pending_down[scaleset]
+            is_worker_deleting = is_worker_deleting || (scaleset ∈ keys(manager.orphan_pending_down) && instanceid ∈ manager.orphan_pending_down[scaleset])
             is_vm_deleting = lowercase(vm_state) == "deleting"
             ispruned_already = scaleset ∈ keys(manager.pruned) && instanceid ∈ manager.pruned[scaleset]
             is_in_flight = scaleset ∈ keys(manager.in_flight) && instanceid ∈ manager.in_flight[scaleset]
@@ -541,23 +582,28 @@ function prune_scalesets(vm_lists::Dict{ScaleSet,Vector})
                 is_pending_reimage = false
             end
 
+            # check NIC provisioning state — a succeeded VM with a failed NIC has no network
+            nic_map = get(nic_lists, scaleset, Dict{String,String}())
+            nic_state = get(nic_map, string(instanceid), "unknown")
+            nic_failed = nic_state == "failed"
+
             can_act = !is_worker_deleting && !is_vm_deleting && !ispruned_already && !is_in_flight && !is_pending_reimage
 
-            if can_act && vm_state == "failed" && !was_reimaged
+            if can_act && (vm_state == "failed" || nic_failed) && !was_reimaged
                 # first failure: attempt reimage
                 vm_name = get(_vm, "name", "unknown")
                 power_state = _vm_power_state(_vm)
-                @warn "worker failed provisioning, queuing reimage" instanceid=instanceid vm_name=vm_name scalesetname=scaleset.scalesetname vm_state=vm_state power_state=power_state
+                @warn "worker failed provisioning, queuing reimage" instanceid=instanceid vm_name=vm_name scalesetname=scaleset.scalesetname vm_state=vm_state nic_state=nic_state power_state=power_state
                 if haskey(manager.pending_reimage, scaleset)
                     push!(manager.pending_reimage[scaleset], string(instanceid))
                 else
                     manager.pending_reimage[scaleset] = Set{String}([string(instanceid)])
                 end
-            elseif can_act && (time_elapsed > worker_timeout || (vm_state == "failed" && was_reimaged))
+            elseif can_act && (time_elapsed > worker_timeout || ((vm_state == "failed" || nic_failed) && was_reimaged))
                 # timeout or second failure after reimage: delete
                 vm_name = get(_vm, "name", "unknown")
                 power_state = _vm_power_state(_vm)
-                @warn "worker failed to join cluster" instanceid=instanceid vm_name=vm_name scalesetname=scaleset.scalesetname elapsed=round(time_elapsed, Second) vm_state=vm_state power_state=power_state timeout=worker_timeout was_reimaged=was_reimaged
+                @warn "worker failed to join cluster" instanceid=instanceid vm_name=vm_name scalesetname=scaleset.scalesetname elapsed=round(time_elapsed, Second) vm_state=vm_state nic_state=nic_state power_state=power_state timeout=worker_timeout was_reimaged=was_reimaged
                 if manager.save_cloud_init_failures
                     @debug "copying cloud init output log to '$(pwd())/cloud-init-output-$(instanceid).log'."
                     try
@@ -569,7 +615,7 @@ function prune_scalesets(vm_lists::Dict{ScaleSet,Vector})
                     end
                 end
                 add_instance_to_pruned_list(manager, scaleset, instanceid)
-                add_instance_to_pending_down_list(manager, scaleset, instanceid)
+                add_instance_to_orphan_pending_down_list(manager, scaleset, instanceid)
             end
         end
     end
@@ -1065,6 +1111,17 @@ function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSe
     else
         @info "adding instance to pending_down (new set)" instanceid=instanceid scalesetname=scaleset.scalesetname
         manager.pending_down[scaleset] = Set{String}([string(instanceid)])
+    end
+    nothing
+end
+
+function add_instance_to_orphan_pending_down_list(manager::AzManager, scaleset::ScaleSet, instanceid)
+    if haskey(manager.orphan_pending_down, scaleset)
+        @info "adding orphan instance to pending_down" instanceid=instanceid scalesetname=scaleset.scalesetname orphan_pending_down_size=length(manager.orphan_pending_down[scaleset])+1
+        push!(manager.orphan_pending_down[scaleset], string(instanceid))
+    else
+        @info "adding orphan instance to pending_down (new set)" instanceid=instanceid scalesetname=scaleset.scalesetname
+        manager.orphan_pending_down[scaleset] = Set{String}([string(instanceid)])
     end
     nothing
 end
@@ -2423,6 +2480,85 @@ function _vm_power_state(vm)
     return lowercase(get(get(vm, "properties", Dict()), "provisioningState", "unknown"))
 end
 
+function list_scaleset_nics(manager, scaleset)
+    try
+        _r = @retry manager.nretry azrequest(
+            "GET",
+            manager.verbose,
+            "https://management.azure.com/subscriptions/$(scaleset.subscriptionid)/resourceGroups/$(scaleset.resourcegroup)/providers/Microsoft.Compute/virtualMachineScaleSets/$(scaleset.scalesetname)/networkInterfaces?api-version=2018-10-01",
+            ["Authorization"=>"Bearer $(token(manager.session))"])
+        r = JSON.parse(String(_r.body))
+        nics, _r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), manager.nretry, manager.verbose)
+        # index by instance id for O(1) lookup
+        nic_map = Dict{String,String}()
+        for nic in nics
+            # NIC id format: .../virtualMachines/{instanceId}/networkInterfaces/{nicName}
+            parts = split(get(nic, "id", ""), '/')
+            vm_idx = findfirst(==( "virtualMachines"), parts)
+            if vm_idx !== nothing && vm_idx < length(parts)
+                iid = parts[vm_idx + 1]
+                nic_state = lowercase(get(get(nic, "properties", Dict()), "provisioningState", "unknown"))
+                nic_map[iid] = nic_state
+            end
+        end
+        return nic_map
+    catch e
+        @warn "failed to list NICs for scaleset, skipping NIC checks" scalesetname=scaleset.scalesetname
+        logerror(e, Logging.Debug)
+        return Dict{String,String}()
+    end
+end
+
+"""
+    check_service_health(manager, subscriptionid, region) -> (blocked::Bool, reason::String)
+
+Query Azure Service Health for active incidents affecting Virtual Machines or
+Virtual Network in the given region.  Returns `(true, description)` if scaling
+should be paused, `(false, "")` otherwise.
+"""
+function check_service_health(manager::AzManager, subscriptionid, region)
+    try
+        query_start = Dates.format(now(Dates.UTC) - Day(1), "m/d/yyyy")
+        filter_str = HTTP.escapeuri("service eq 'Virtual Machines' or service eq 'Virtual Network'")
+        _r = @retry manager.nretry azrequest(
+            "GET",
+            manager.verbose,
+            "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.ResourceHealth/events?api-version=2025-05-01&\$filter=$filter_str&queryStartTime=$query_start",
+            ["Authorization"=>"Bearer $(token(manager.session))"])
+        r = JSON.parse(String(_r.body))
+        events = get(r, "value", [])
+
+        for event in events
+            props = get(event, "properties", Dict())
+            event_type = get(props, "eventType", "")
+            event_status = get(props, "status", "")
+            event_level = get(props, "eventLevel", "")
+
+            # only care about active service issues
+            event_type == "ServiceIssue" && event_status == "Active" || continue
+
+            # check if our region is impacted
+            for impact in get(props, "impact", [])
+                for impacted_region in get(impact, "impactedRegions", [])
+                    region_name = lowercase(replace(get(impacted_region, "impactedRegion", ""), " "=>""))
+                    region_status = get(impacted_region, "status", "")
+                    if region_name == lowercase(replace(region, " "=>"")) && region_status == "Active"
+                        service = get(impact, "impactedService", "unknown")
+                        title = get(props, "title", "unknown")
+                        summary = get(props, "summary", "")
+                        return (true, "Active $service incident in $region: $title")
+                    end
+                end
+            end
+        end
+        return (false, "")
+    catch e
+        # If the health API is unavailable, don't block scaling
+        @warn "failed to check service health, proceeding with scaling" exception=(e, catch_backtrace())
+        return (false, "")
+    end
+end
+
 function list_scaleset_vms_uniform(manager, scaleset)
     _r = @retry manager.nretry azrequest(
             "GET",
@@ -2524,6 +2660,16 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         omp_num_threads, exename, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base, verbose, custom_environment, overprovision, use_lvm)
     load_manifest()
     ssh_key = _manifest["ssh_public_key_file"]
+
+    # Check Azure Service Health before scaling — abort if there's an active incident
+    region = get(get(template, "value", Dict()), "location", "")
+    if region != ""
+        blocked, reason = check_service_health(manager, subscriptionid, region)
+        if blocked
+            @warn "scaling paused due to Azure service health incident, will retry on next cycle" reason=reason region=region scalesetname=scalesetname
+            return -1
+        end
+    end
 
     @debug "scaleset_create_or_update"
     _r = @retry nretry azrequest(
