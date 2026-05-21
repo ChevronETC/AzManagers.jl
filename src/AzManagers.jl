@@ -422,13 +422,6 @@ function prune_cluster()
         end
     end
 
-    # remove from list workers that are in Distributed's deletion pool
-    for (id,wrkr) in Distributed.map_pid_wrkr
-        if isdefined(wrkr, :state) && wrkr.state ∈ (Distributed.W_TERMINATED, Distributed.W_TERMINATING)
-            delete!(wrkrs, id)
-        end
-    end
-
     # remove workers that do not have a corresponding scale-set vm instance
     for pid in keys(wrkrs)
         @info "Removing worker $pid from the Julia cluster since it is no longer in the scaleset." wrkrs[pid]
