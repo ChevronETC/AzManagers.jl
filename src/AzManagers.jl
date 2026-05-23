@@ -197,6 +197,7 @@ mutable struct AzManager <: ClusterManager
     in_flight::Dict{ScaleSet,Set{String}}
     pending_reimage::Dict{ScaleSet,Set{String}}
     reimaged::Dict{ScaleSet,Set{String}}
+    reimage_failures::Dict{ScaleSet,Dict{String,Int}}
     preempt_channel_futures::Dict{Int,Future}
     port::UInt16
     server::Sockets.TCPServer
@@ -235,6 +236,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.in_flight = Dict{ScaleSet,Set{String}}()
     _manager.pending_reimage = Dict{ScaleSet,Set{String}}()
     _manager.reimaged = Dict{ScaleSet,Set{String}}()
+    _manager.reimage_failures = Dict{ScaleSet,Dict{String,Int}}()
     _manager.preempt_channel_futures = Dict{Int,Future}()
     _manager.scalesets = Dict{ScaleSet,Int}()
     _manager.task_add = @async add_pending_connections()
@@ -320,6 +322,9 @@ function delete_scaleset(manager, scaleset)
         @warn "unable to remove scaleset" scalesetname=scaleset.scalesetname resourcegroup=scaleset.resourcegroup
     end
     delete!(scalesets(manager), scaleset)
+    haskey(manager.pending_reimage, scaleset) && delete!(manager.pending_reimage, scaleset)
+    haskey(manager.reimaged, scaleset) && delete!(manager.reimaged, scaleset)
+    haskey(manager.reimage_failures, scaleset) && delete!(manager.reimage_failures, scaleset)
 end
 
 function delete_empty_scalesets()
@@ -365,8 +370,27 @@ function reimage_pending_vms()
             # keep in pending_reimage until prune_scalesets observes VM left updating/creating
             @info "reimaged failed vms" scalesetname=scaleset.scalesetname count=length(ids_to_reimage)
         catch e
-            @error "error reimaging scaleset vms, will retry next cycle."
+            @warn "error reimaging scaleset vms, will retry next cycle." scalesetname=scaleset.scalesetname count=length(ids_to_reimage)
             logerror(e, Logging.Debug)
+            # track per-instance reimage failures and escalate to delete after 2 attempts
+            if !haskey(manager.reimage_failures, scaleset)
+                manager.reimage_failures[scaleset] = Dict{String,Int}()
+            end
+            escalate_ids = String[]
+            for id in ids_to_reimage
+                manager.reimage_failures[scaleset][id] = get(manager.reimage_failures[scaleset], id, 0) + 1
+                if manager.reimage_failures[scaleset][id] >= 2
+                    push!(escalate_ids, id)
+                end
+            end
+            for id in escalate_ids
+                @warn "reimage failed 2 times, escalating to delete" instanceid=id scalesetname=scaleset.scalesetname
+                delete!(manager.pending_reimage[scaleset], id)
+                delete!(manager.reimage_failures[scaleset], id)
+                add_instance_to_orphan_pending_down_list(manager, scaleset, id)
+            end
+            isempty(manager.pending_reimage[scaleset]) && delete!(manager.pending_reimage, scaleset)
+            isempty(manager.reimage_failures[scaleset]) && delete!(manager.reimage_failures, scaleset)
         end
     end
     unlock(manager.lock)
@@ -384,6 +408,25 @@ function delete_pending_down_vms()
             delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
             new_capacity = max(0, scalesets(manager)[scaleset] - length(ids))
             scalesets(manager)[scaleset] = new_capacity
+            # purge deleted instance IDs from pending_reimage/reimaged to prevent stale ghost entries
+            if haskey(manager.pending_reimage, scaleset)
+                for id in ids
+                    delete!(manager.pending_reimage[scaleset], id)
+                end
+                isempty(manager.pending_reimage[scaleset]) && delete!(manager.pending_reimage, scaleset)
+            end
+            if haskey(manager.reimaged, scaleset)
+                for id in ids
+                    delete!(manager.reimaged[scaleset], id)
+                end
+                isempty(manager.reimaged[scaleset]) && delete!(manager.reimaged, scaleset)
+            end
+            if haskey(manager.reimage_failures, scaleset)
+                for id in ids
+                    haskey(manager.reimage_failures[scaleset], id) && delete!(manager.reimage_failures[scaleset], id)
+                end
+                isempty(manager.reimage_failures[scaleset]) && delete!(manager.reimage_failures, scaleset)
+            end
             @info "deleted pending_down vms" scalesetname=scaleset.scalesetname old_capacity=old_capacity new_capacity=new_capacity
             delete!(pending_down(manager), scaleset)
         catch e
@@ -393,6 +436,9 @@ function delete_pending_down_vms()
                 if haskey(pending_down(manager), scaleset)
                     delete!(pending_down(manager), scaleset)
                 end
+                haskey(manager.pending_reimage, scaleset) && delete!(manager.pending_reimage, scaleset)
+                haskey(manager.reimaged, scaleset) && delete!(manager.reimaged, scaleset)
+                haskey(manager.reimage_failures, scaleset) && delete!(manager.reimage_failures, scaleset)
             else
                 @error "error deleting scaleset vms, manual clean-up may be required."
                 logerror(e, Logging.Debug)
@@ -415,6 +461,25 @@ function delete_orphan_pending_down_vms()
             # Do NOT subtract from client-side capacity: these VMs never joined as workers,
             # so they were never counted toward the working cluster. The capacity will be
             # corrected by scaleset_sync on the next cycle.
+            # purge deleted instance IDs from pending_reimage/reimaged to prevent stale ghost entries
+            if haskey(manager.pending_reimage, scaleset)
+                for id in ids
+                    delete!(manager.pending_reimage[scaleset], id)
+                end
+                isempty(manager.pending_reimage[scaleset]) && delete!(manager.pending_reimage, scaleset)
+            end
+            if haskey(manager.reimaged, scaleset)
+                for id in ids
+                    delete!(manager.reimaged[scaleset], id)
+                end
+                isempty(manager.reimaged[scaleset]) && delete!(manager.reimaged, scaleset)
+            end
+            if haskey(manager.reimage_failures, scaleset)
+                for id in ids
+                    haskey(manager.reimage_failures[scaleset], id) && delete!(manager.reimage_failures[scaleset], id)
+                end
+                isempty(manager.reimage_failures[scaleset]) && delete!(manager.reimage_failures, scaleset)
+            end
             @info "deleted orphan pending_down vms" scalesetname=scaleset.scalesetname count=length(ids) old_capacity=old_capacity
             delete!(orphan_pending_down(manager), scaleset)
         catch e
@@ -423,6 +488,9 @@ function delete_orphan_pending_down_vms()
                 if haskey(orphan_pending_down(manager), scaleset)
                     delete!(orphan_pending_down(manager), scaleset)
                 end
+                haskey(manager.pending_reimage, scaleset) && delete!(manager.pending_reimage, scaleset)
+                haskey(manager.reimaged, scaleset) && delete!(manager.reimaged, scaleset)
+                haskey(manager.reimage_failures, scaleset) && delete!(manager.reimage_failures, scaleset)
             else
                 @error "error deleting orphan scaleset vms, manual clean-up may be required."
                 logerror(e, Logging.Debug)
@@ -805,7 +873,37 @@ function process_pending_connections()
         tic = time()
         tsk_addprocs = @async begin
             pids = addprocs_with_timeout(manager; wconfigs=batch_wconfigs)
-            @info "batch complete" submitted=batch_size registered=length(pids) dropped=batch_size-length(pids)
+            dropped = batch_size - length(pids)
+            @info "batch complete" submitted=batch_size registered=length(pids) dropped=dropped
+
+            # For workers that didn't complete registration, close their sockets
+            # (so the worker detects failure and retries via azure_worker's retry loop)
+            # and remove from in_flight (so prune_scalesets can act on them if retry also fails).
+            # Do NOT add to pending_down — give the worker a chance to reconnect.
+            if dropped > 0
+                registered_instanceids = Set{String}()
+                for pid in pids
+                    if haskey(Distributed.map_pid_wrkr, pid)
+                        wrkr = Distributed.map_pid_wrkr[pid]
+                        if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata)
+                            push!(registered_instanceids, string(get(wrkr.config.userdata, "instanceid", "")))
+                        end
+                    end
+                end
+                for wconfig in batch_wconfigs
+                    u = wconfig.userdata
+                    instanceid = string(get(u, "instanceid", ""))
+                    if instanceid ∉ registered_instanceids
+                        scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
+                        try
+                            close(wconfig.io)
+                        catch
+                        end
+                        haskey(manager.in_flight, scaleset) && delete!(manager.in_flight[scaleset], instanceid)
+                        @warn "batch worker not registered, closing socket for retry" instanceid=instanceid scalesetname=scaleset.scalesetname
+                    end
+                end
+            end
 
             @debug "starting preempt loops" pids
             for pid in pids
