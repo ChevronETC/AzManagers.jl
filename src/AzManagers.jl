@@ -289,6 +289,7 @@ end
 scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : Dict{ScaleSet,Int}()
 scalesets() = scalesets(azmanager())
 pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Set{String}}()
+pending_down(manager::AzManager, scaleset::ScaleSet) = get(pending_down(manager), scaleset, Set{String}())
 
 function delete_scaleset(manager, scaleset)
     @debug "deleting scaleset, $scaleset"
@@ -331,6 +332,7 @@ function delete_pending_down_vms()
             delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
             new_capacity = max(0, scalesets(manager)[scaleset] - length(ids))
             scalesets(manager)[scaleset] = new_capacity
+            @debug "new scaleset capacity for $scaleset is $new_capacity"
             delete!(pending_down(manager), scaleset)
         catch e
             if status(e) == 404
@@ -853,8 +855,6 @@ function Distributed.addprocs(_::AzManager, template::Dict, n::Int;
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
 
-    @async delete_pending_down_vms()
-
     _scalesets = scalesets(manager)
     scaleset = ScaleSet(subscriptionid, resourcegroup, group)
 
@@ -863,7 +863,7 @@ function Distributed.addprocs(_::AzManager, template::Dict, n::Int;
     julia_num_threads = nthreads_filter(julia_num_threads)
 
     @info "Provisioning $n virtual machines in scale-set $group..."
-    _scalesets[scaleset] = scaleset_create_or_update(manager, user, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, sigimagename,
+    scaleset_create_or_update(manager, user, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, sigimagename,
         sigimageversion, imagename, osdisksize, nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig,
         hyperthreading, julia_num_threads, omp_num_threads, exename, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base,
         verbose, customenv, overprovision, use_lvm)
@@ -1011,8 +1011,15 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
 
     scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
 
-    add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
-    add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
+    lock(manager.lock)
+    try
+        add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
+        add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
+    catch e
+        throw(e)
+    finally
+        unlock(manager.lock)
+    end
 
     @debug "...kill, pushed."
     nothing
@@ -2382,16 +2389,6 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     ssh_key = _manifest["ssh_public_key_file"]
 
     @debug "scaleset_create_or_update"
-    _r = @retry nretry azrequest(
-        "GET",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2023-03-01",
-        ["Authorization"=>"Bearer $(token(manager.session))"])
-    r = JSON.parse(String(_r.body))
-
-    if manager.show_quota
-        @info "Quota after getting a list of existing scale-sets" remaining_resource(_r)
-    end
 
     _template = deepcopy(template["value"])
 
@@ -2454,18 +2451,6 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         _template["tags"]["platformsettings.host_environment.disablehyperthreading"] = hyperthreading ? "False" : "True"
     end
 
-    n = 0
-    scalesets = get(r, "value", [])
-    scaleset_exists = false
-    for scaleset in scalesets
-        if scaleset["name"] == scalesetname
-            n = scaleset_capacity(manager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
-            scaleset_exists = true
-            break
-        end
-    end
-    n += δn
-
     @debug "about to check quota"
 
     # check usage/quotas
@@ -2487,21 +2472,32 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         end
     end
 
-    @debug "done checking quota, δn=$(δn), n=$n"
+    @debug "done checking quota, δn=$(δn)"
 
-    _template["sku"]["capacity"] = n
-    _r = @retry nretry azrequest(
-        "PUT",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
-        ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
-        String(JSON.json(_template)))
+    lock(manager.lock)
+    try
+        _scaleset = ScaleSet(subscriptionid, resourcegroup, scalesetname)
+        _template["sku"]["capacity"] = manager.scalesets[_scaleset] = _scaleset ∈ keys(scalesets(manager)) ? manager.scalesets[_scaleset] + δn : δn
 
-    if manager.show_quota
-        @info "Quota after requesting that the scale-set is created or grows" remaining_resource(_r)
+        @info "setting capacity of scale-set $scalesetname to $(_template["sku"]["capacity"]), scaleset=$(manager.scalesets[_scaleset])"
+
+        _r = @retry nretry azrequest(
+            "PUT",
+            verbose,
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
+            ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
+            String(JSON.json(_template)))
+
+        if manager.show_quota
+            @info "Quota after requesting that the scale-set is created or grows" remaining_resource(_r)
+        end
+    catch e
+        throw(e)
+    finally
+        unlock(manager.lock)
     end
 
-    n
+    nothing
 end
 
 function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, ids, nretry, verbose)
