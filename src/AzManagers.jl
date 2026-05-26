@@ -2479,7 +2479,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         _scaleset = ScaleSet(subscriptionid, resourcegroup, scalesetname)
         _template["sku"]["capacity"] = manager.scalesets[_scaleset] = _scaleset ∈ keys(scalesets(manager)) ? manager.scalesets[_scaleset] + δn : δn
 
-        @info "setting capacity of scale-set $scalesetname to $(_template["sku"]["capacity"]), scaleset=$(manager.scalesets[_scaleset])"
+        @debug "setting capacity of scale-set $scalesetname to $(_template["sku"]["capacity"]), scaleset=$(manager.scalesets[_scaleset])"
 
         _r = @retry nretry azrequest(
             "PUT",
