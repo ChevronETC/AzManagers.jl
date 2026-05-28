@@ -2616,12 +2616,11 @@ should be paused, `(false, "")` otherwise.
 """
 function check_service_health(manager::AzManager, subscriptionid, region)
     try
-        query_start = Dates.format(now(Dates.UTC) - Day(1), "yyyy-mm-ddTHH:MM:SSZ")
-        filter_str = HTTP.escapeuri("service eq 'Virtual Machines'")
+        query_start = Dates.format(now(Dates.UTC) - Day(1), "m/d/yyyy")
         _r = @retry manager.nretry azrequest(
             "GET",
             manager.verbose,
-            "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.ResourceHealth/events?api-version=2024-02-01&\$filter=$filter_str&queryStartTime=$query_start",
+            "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.ResourceHealth/events?api-version=2024-02-01&queryStartTime=$query_start",
             ["Authorization"=>"Bearer $(token(manager.session))"])
         r = JSON.parse(String(_r.body))
         events = get(r, "value", [])
