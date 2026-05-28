@@ -2621,7 +2621,7 @@ function check_service_health(manager::AzManager, subscriptionid, region)
         _r = @retry manager.nretry azrequest(
             "GET",
             manager.verbose,
-            "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.ResourceHealth/events?api-version=2025-05-01&\$filter=$filter_str&queryStartTime=$query_start",
+            "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.ResourceHealth/events?api-version=2024-02-01&\$filter=$filter_str&queryStartTime=$query_start",
             ["Authorization"=>"Bearer $(token(manager.session))"])
         r = JSON.parse(String(_r.body))
         events = get(r, "value", [])
