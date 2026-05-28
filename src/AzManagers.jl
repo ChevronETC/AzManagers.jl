@@ -2617,7 +2617,7 @@ should be paused, `(false, "")` otherwise.
 function check_service_health(manager::AzManager, subscriptionid, region)
     try
         query_start = Dates.format(now(Dates.UTC) - Day(1), "m/d/yyyy")
-        filter_str = "service eq 'Virtual Machines' or service eq 'Virtual Network'"
+        filter_str = HTTP.escapeuri("service eq 'Virtual Machines'")
         _r = @retry manager.nretry azrequest(
             "GET",
             manager.verbose,
