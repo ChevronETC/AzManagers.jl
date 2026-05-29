@@ -1,184 +1,17 @@
 module AzManagers
 
-using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, JSON, JWTs, LibCURL, LibGit2, Logging, Pkg, Printf, Random, Serialization, Sockets, TOML
-
-function logerror(e, loglevel=Logging.Info)
-    io = IOBuffer()
-    showerror(io, e)
-    write(io, "\n\terror type: $(typeof(e))\n")
-
-    my_catch_stack = VERSION < v"1.7" ? Base.catch_stack : current_exceptions
-
-    for (exc, bt) in my_catch_stack()
-        showerror(io, exc, bt)
-        println(io)
-    end
-    @logmsg loglevel String(take!(io))
-    close(io)
-end
-
-const _manifest = Dict("resourcegroup"=>"", "ssh_user"=>"", "ssh_private_key_file"=>"", "ssh_public_key_file"=>"", "subscriptionid"=>"")
-
-manifestpath() = joinpath(homedir(), ".azmanagers")
-manifestfile() = joinpath(manifestpath(), "manifest.json")
-
-"""
-    AzManagers.write_manifest(;resourcegroup="", subscriptionid="", ssh_user="", ssh_public_key_file="~/.ssh/azmanagers_rsa.pub", ssh_private_key_file="~/.ssh/azmanagers_rsa")
-
-Write an AzManagers manifest file (~/.azmanagers/manifest.json).  The
-manifest file contains information specific to your Azure account.
-"""
-function write_manifest(;
-        resourcegroup="",
-        subscriptionid="",
-        ssh_user="",
-        ssh_private_key_file=joinpath(homedir(), ".ssh", "azmanagers_rsa"),
-        ssh_public_key_file=joinpath(homedir(), ".ssh", "azmanagers_rsa.pub"))
-    manifest = Dict("resourcegroup"=>resourcegroup, "subscriptionid"=>subscriptionid, "ssh_user"=>ssh_user, "ssh_private_key_file"=>ssh_private_key_file, "ssh_public_key_file"=>ssh_public_key_file)
-    try
-        isdir(manifestpath()) || mkdir(manifestpath(); mode=0o700)
-        write(manifestfile(), JSON.json(manifest, 1))
-        chmod(manifestfile(), 0o600)
-    catch e
-        @error "Failed to write manifest file, $(AzManagers.manifestfile())"
-        throw(e)
-    end
-end
-
-function load_manifest()
-    if isfile(manifestfile())
-        try
-            manifest = JSON.parse(read(manifestfile(), String))
-            for key in keys(_manifest)
-                _manifest[key] = get(manifest, key, "")
-            end
-        catch e
-            @error "Manifest file ($(AzManagers.manifestfile())) is not valid JSON"
-            throw(e)
-        end
-    else
-        @error "Manifest file ($(AzManagers.manifestfile())) does not exist.  Use AzManagers.write_manifest to generate a manifest file."
-    end
-end
-
-const RETRYABLE_HTTP_ERRORS = (
-    409,  # Conflict
-    429,  # Too many requests
-    500)  # Internal server error
-
-function isretryable(e::HTTP.StatusError)
-    e.status ∈ RETRYABLE_HTTP_ERRORS && (return true)
-    false
-end
-isretryable(e::Base.IOError) = true
-isretryable(e::HTTP.Exceptions.ConnectError) = true
-isretryable(e::HTTP.Exceptions.HTTPError) = true
-isretryable(e::HTTP.Exceptions.RequestError) = true
-isretryable(e::HTTP.Exceptions.TimeoutError) = true
-isretryable(e::Base.EOFError) = true
-isretryable(e::Sockets.DNSError) = true
-isretryable(e) = false
-
-status(e::HTTP.StatusError) = e.status
-status(e) = 999
-
-function retrywarn(i, retries, s, e)
-    if isa(e, HTTP.ExceptionRequest.StatusError)
-        @debug "$(e.status): $(String(e.response.body)), retry $i of $retries, retrying in $s seconds"
-        if e.status == 429
-            remaining_resource = nothing
-            for header in e.response.headers
-                if header[1] == "x-ms-ratelimit-remaining-resource"
-                    remaining_resource = header
-                    break
-                end
-            end
-            @warn "The Azure service is throttling the request, asking to retry after $s seconds.  Quota information:" remaining_resource[2]
-        elseif e.status == 500
-            b = JSON.parse(String(e.response.body))
-            errorcode = get(get(b, "error", Dict()), "code", "")
-            @warn "errorcode: $errorcode, retry $i, retrying in $s seconds"
-        elseif e.status == 409
-            b = JSON.parse(String(e.response.body))
-            errorcode = get(get(b, "error", Dict()), "code", "")
-            errormessage = get(get(b, "error", Dict()), "message", "")
-            @warn "($errorcode): $errormessage; retry $i of $retries, retrying in $s seconds"
-        else
-            @warn "status=$(e.status): $(String(e.response.body)), retry $i of $retries, retrying in $s seconds"
-        end
-    else
-        @warn "warn: $(typeof(e)) -- retry $i, retrying in $s seconds"
-        logerror(e, Logging.Debug)
-    end
-end
-
-macro retry(retries, ex::Expr)
-    quote
-        r = nothing
-        for i = 0:$(esc(retries))
-            try
-                r = $(esc(ex))
-                break
-            catch e
-                (i < $(esc(retries)) && isretryable(e)) || throw(e)
-                maximum_backoff = 256
-                s = min(2.0^(i-1), maximum_backoff) + rand()
-                if status(e) ∈ (429,500)
-                    for header in e.response.headers
-                        if lowercase(header[1]) == "retry-after"
-                            s = parse(Int, header[2]) + rand()
-                            break
-                        end
-                    end
-                end
-                retrywarn(i, $(esc(retries)), s, e)
-                sleep(s)
-            end
-        end
-        r
-    end
-end
-
-function azrequest(rtype, verbose, url, headers, body=nothing)
-    if contains(url, "virtualMachineScaleSets")
-        manager = azmanager()
-        if isdefined(manager, :scaleset_request_counter)
-            manager.scaleset_request_counter += 1
-        else
-            manager.scaleset_request_counter = 1
-        end
-    end
-
-    options = (retry=false, status_exception=false)
-    if body === nothing
-        r = HTTP.request(rtype, url, headers; verbose=verbose, options...)
-    else
-        r = HTTP.request(rtype, url, headers, body; verbose=verbose, options...)
-    end
-    
-    if r.status >= 300
-        throw(HTTP.Exceptions.StatusError(r.status, r.request.method, r.request.target, r))
-    end
-    
-    r
-end
-
-function scaleset_request_counter()
-    manager = azmanager()
-    if isdefined(manager, :scaleset_request_counter)
-        return manager.scaleset_request_counter
-    else
-        return 1
-    end
-end
+using AzSessions, Base64, CodecZlib, Dates, Distributed, HTTP, Hwloc, JSON, JWTs, LibCURL, LibGit2, Logging, Pkg, Printf, Random, Serialization, Sockets, ThreadPinning, TOML
 
 struct ScaleSet
     subscriptionid
     resourcegroup
     scalesetname
-    ScaleSet(subscriptionid, resourcegroup, scalesetname) = new(lowercase(subscriptionid), lowercase(resourcegroup), lowercase(scalesetname))
+
+    ScaleSet(subscriptionid, resourcegroup, scalesetname) = new(
+        lowercase(subscriptionid),
+        lowercase(resourcegroup),
+        lowercase(scalesetname))
 end
-Base.Dict(scaleset::ScaleSet) = Dict("subscriptionid"=>scaleset.subscriptionid, "resourcegroup"=>scaleset.resourcegroup, "name"=>scaleset.scalesetname)
 
 mutable struct AzManager <: ClusterManager
     session::AzSessionAbstract
@@ -205,7 +38,278 @@ mutable struct AzManager <: ClusterManager
     AzManager() = new()
 end
 
+mutable struct CurlDataStruct
+    body::Vector{UInt8}
+    currentsize::Csize_t
+end
+
+struct SpotPreemptException <: Exception
+    instanceid::String
+    clusterid::Int
+    notbefore::String
+end
+
+struct DetachedJob
+    vm::Dict{String,String}
+    id::String
+    pid::String
+    logurl::String
+end
+
+struct DetachedServiceTimeoutException <: Exception
+    vm
+end
+
+mutable struct AzManagersManifest
+    resourcegroup::String
+    ssh_user::String
+    ssh_private_key_file::String
+    ssh_public_key_file::String
+    subscriptionid::String
+end
+
+mutable struct DetachedServiceState
+    jobs::Dict{String,Dict{String,Any}}
+    vm::Base.RefValue{Dict{String,String}}
+end
+
+struct VariableBundleState
+    bundle::Dict{Symbol,Any}
+end
+
+const MANIFEST_FIELDS = ("resourcegroup", "ssh_user", "ssh_private_key_file",
+                        "ssh_public_key_file", "subscriptionid")
+
+const DETACHED_STATE = DetachedServiceState(
+    Dict{String,Dict{String,Any}}(),
+    Ref(Dict{String,String}()))
+
+const VARIABLE_BUNDLE_STATE = VariableBundleState(Dict{Symbol,Any}())
+
+AzManagersManifest() = AzManagersManifest("", "", "", "", "")
+
+function Base.getindex(manifest::AzManagersManifest, key::AbstractString)
+    key in MANIFEST_FIELDS ||
+        throw(KeyError(key))
+    getfield(manifest, Symbol(key))
+end
+
+function Base.setindex!(manifest::AzManagersManifest, value, key::AbstractString)
+    key in MANIFEST_FIELDS ||
+        throw(KeyError(key))
+    setfield!(manifest, Symbol(key), String(value))
+end
+
+Base.keys(::AzManagersManifest) = MANIFEST_FIELDS
+
+Base.haskey(manifest::AzManagersManifest, key::AbstractString) = key in MANIFEST_FIELDS
+
+include("placement.jl")
+
+
+
+function logerror(e, loglevel=Logging.Info)
+    io = IOBuffer()
+    showerror(io, e)
+    write(io, "\n\terror type: $(typeof(e))\n")
+
+    my_catch_stack = VERSION < v"1.7" ? Base.catch_stack : current_exceptions
+
+    for (exc, bt) in my_catch_stack()
+        showerror(io, exc, bt)
+        println(io)
+    end
+    @logmsg loglevel String(take!(io))
+    close(io)
+end
+
+
+const _manifest = AzManagersManifest()
+
+
+manifestpath() = joinpath(homedir(), ".azmanagers")
+
+manifestfile() = joinpath(manifestpath(), "manifest.json")
+
+
+"""
+    AzManagers.write_manifest(;resourcegroup="", subscriptionid="", ssh_user="", ssh_public_key_file="~/.ssh/azmanagers_rsa.pub", ssh_private_key_file="~/.ssh/azmanagers_rsa")
+
+Write an AzManagers manifest file (~/.azmanagers/manifest.json).  The
+manifest file contains information specific to your Azure account.
+"""
+function write_manifest(;
+        resourcegroup="",
+        subscriptionid="",
+        ssh_user="",
+        ssh_private_key_file=joinpath(homedir(), ".ssh", "azmanagers_rsa"),
+        ssh_public_key_file=joinpath(homedir(), ".ssh", "azmanagers_rsa.pub"))
+    manifest = Dict("resourcegroup"=>resourcegroup, "subscriptionid"=>subscriptionid, "ssh_user"=>ssh_user, "ssh_private_key_file"=>ssh_private_key_file, "ssh_public_key_file"=>ssh_public_key_file)
+    try
+        isdir(manifestpath()) || mkdir(manifestpath(); mode=0o700)
+        write(manifestfile(), JSON.json(manifest, 1))
+        chmod(manifestfile(), 0o600)
+    catch e
+        @error "Failed to write manifest file, $(AzManagers.manifestfile())"
+        throw(e)
+    end
+end
+
+
+function load_manifest()
+    if isfile(manifestfile())
+        try
+            manifest = JSON.parse(read(manifestfile(), String))
+            for key in keys(_manifest)
+                _manifest[key] = get(manifest, key, "")
+            end
+        catch e
+            @error "Manifest file ($(AzManagers.manifestfile())) is not valid JSON"
+            throw(e)
+        end
+    else
+        @error "Manifest file ($(AzManagers.manifestfile())) does not exist.  Use AzManagers.write_manifest to generate a manifest file."
+    end
+    _manifest
+end
+
+
+const RETRYABLE_HTTP_ERRORS = (
+    409,  # Conflict
+    429,  # Too many requests
+    500)  # Internal server error
+
+
+function isretryable(e::HTTP.StatusError)
+    e.status ∈ RETRYABLE_HTTP_ERRORS && (return true)
+    false
+end
+
+isretryable(e::Base.IOError) = true
+
+isretryable(e::HTTP.Exceptions.ConnectError) = true
+
+isretryable(e::HTTP.Exceptions.HTTPError) = true
+
+isretryable(e::HTTP.Exceptions.RequestError) = true
+
+isretryable(e::HTTP.Exceptions.TimeoutError) = true
+
+isretryable(e::Base.EOFError) = true
+
+isretryable(e::Sockets.DNSError) = true
+
+isretryable(e) = false
+
+
+
+function retrywarn(i, retries, seconds, e)
+    if isa(e, HTTP.ExceptionRequest.StatusError)
+        @debug "$(e.status): $(String(e.response.body)), retry $i of $retries, retrying in $seconds seconds"
+        if e.status == 429
+            remaining_resource_header = nothing
+            for header in e.response.headers
+                if header[1] == "x-ms-ratelimit-remaining-resource"
+                    remaining_resource_header = header
+                    break
+                end
+            end
+            @warn "The Azure service is throttling the request, asking to retry after $seconds seconds. Quota information:" remaining_resource_header[2]
+        elseif e.status == 500
+            body = JSON.parse(String(e.response.body))
+            errorcode = get(get(body, "error", Dict()), "code", "")
+            @warn "errorcode: $errorcode, retry $i, retrying in $seconds seconds"
+        elseif e.status == 409
+            body = JSON.parse(String(e.response.body))
+            errorcode = get(get(body, "error", Dict()), "code", "")
+            errormessage = get(get(body, "error", Dict()), "message", "")
+            @warn "($errorcode): $errormessage; retry $i of $retries, retrying in $seconds seconds"
+        else
+            @warn "status=$(e.status): $(String(e.response.body)), retry $i of $retries, retrying in $seconds seconds"
+        end
+    else
+        @warn "warn: $(typeof(e)) -- retry $i, retrying in $seconds seconds"
+        logerror(e, Logging.Debug)
+    end
+end
+
+
+macro retry(retries, ex::Expr)
+    quote
+        result = nothing
+        for i = 0:$(esc(retries))
+            try
+                result = $(esc(ex))
+                break
+            catch e
+                (i < $(esc(retries)) && isretryable(e)) || throw(e)
+                maximum_backoff = 256
+                seconds = min(2.0^(i - 1), maximum_backoff) + rand()
+                if status(e) ∈ (429, 500)
+                    for header in e.response.headers
+                        if lowercase(header[1]) == "retry-after"
+                            seconds = parse(Int, header[2]) + rand()
+                            break
+                        end
+                    end
+                end
+                retrywarn(i, $(esc(retries)), seconds, e)
+                sleep(seconds)
+            end
+        end
+        result
+    end
+end
+
+
+function azrequest(rtype, verbose, url, headers, body=nothing)
+    if contains(url, "virtualMachineScaleSets")
+        manager = azmanager()
+        if isdefined(manager, :scaleset_request_counter)
+            manager.scaleset_request_counter += 1
+        else
+            manager.scaleset_request_counter = 1
+        end
+    end
+
+    options = (retry=false, status_exception=false)
+    if body === nothing
+        response = HTTP.request(rtype, url, headers; verbose=verbose, options...)
+    else
+        response = HTTP.request(rtype, url, headers, body; verbose=verbose, options...)
+    end
+
+    if response.status >= 300
+        throw(HTTP.Exceptions.StatusError(
+            response.status,
+            response.request.method,
+            response.request.target,
+            response))
+    end
+
+    response
+end
+
+
+function scaleset_request_counter()
+    manager = azmanager()
+    if isdefined(manager, :scaleset_request_counter)
+        return manager.scaleset_request_counter
+    else
+        return 1
+    end
+end
+
+
+Base.Dict(scaleset::ScaleSet) = Dict(
+    "subscriptionid" => scaleset.subscriptionid,
+    "resourcegroup" => scaleset.resourcegroup,
+    "name" => scaleset.scalesetname)
+
+
+
 const _manager = AzManager()
+
 
 function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures, show_quota)
     _manager.session = session
@@ -219,7 +323,7 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
         return _manager
     end
 
-    _manager.port,_manager.server = listenany(getipaddr(), 9000)
+    _manager.port, _manager.server = listenany(getipaddr(), 9000)
     _manager.pending_up = Channel{TCPSocket}(64)
     _manager.pending_down = Dict{ScaleSet,Set{String}}()
     _manager.deleted = Dict{ScaleSet,Dict{String,DateTime}}()
@@ -238,13 +342,16 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager
 end
 
+
 azmanager() = _manager
+
 
 function __init__()
     if myid() == 1
         atexit(AzManagers.delete_scalesets)
     end
 end
+
 
 function scaleset_pruning()
     interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_PRUNE_POLL_INTERVAL", "600"))
@@ -270,6 +377,7 @@ function scaleset_pruning()
     end
 end
 
+
 function scaleset_cleaning()
     interval = parse(Int, get(ENV, "JULIA_AZMANAGERS_CLEAN_POLL_INTERVAL", "60"))
 
@@ -286,10 +394,15 @@ function scaleset_cleaning()
     end
 end
 
+
 scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : Dict{ScaleSet,Int}()
+
 scalesets() = scalesets(azmanager())
+
 pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Set{String}}()
+
 pending_down(manager::AzManager, scaleset::ScaleSet) = get(pending_down(manager), scaleset, Set{String}())
+
 
 function delete_scaleset(manager, scaleset)
     @debug "deleting scaleset, $scaleset"
@@ -300,6 +413,7 @@ function delete_scaleset(manager, scaleset)
     end
     delete!(scalesets(manager), scaleset)
 end
+
 
 function delete_empty_scalesets()
     manager = azmanager()
@@ -321,6 +435,7 @@ function delete_empty_scalesets()
         unlock(manager.lock)
     end
 end
+
 
 function delete_pending_down_vms()
     manager = azmanager()
@@ -351,6 +466,7 @@ function delete_pending_down_vms()
     nothing
 end
 
+
 # sync server and client side views of the resources
 function scaleset_sync()
     manager = azmanager()
@@ -372,6 +488,7 @@ function scaleset_sync()
         unlock(manager.lock)
     end
 end
+
 
 function prune_cluster()
     manager = azmanager()
@@ -434,6 +551,7 @@ function prune_cluster()
     end
 end
 
+
 function prune_scalesets()
     worker_timeout = Second(parse(Int, get(ENV, "JULIA_AZMANAGERS_VM_JOIN_TIMEOUT", "720")))
     manager = azmanager()
@@ -444,7 +562,7 @@ function prune_scalesets()
     instanceids = Dict{ScaleSet,Array{String}}()
     for wrkr in values(Distributed.map_pid_wrkr)
         if isdefined(wrkr, :id) && isdefined(wrkr, :config) && isa(wrkr, Distributed.Worker)
-            if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, AbstractDict)
+            if isdefined(wrkr.config, :userdata) && isa(wrkr.config.userdata, Dict)
                 userdata = wrkr.config.userdata
                 if haskey(userdata, "instanceid") && haskey(userdata, "scalesetname") && haskey(userdata, "resourcegroup") && haskey(userdata, "subscriptionid")
                     ss = ScaleSet(userdata["subscriptionid"], userdata["resourcegroup"], userdata["scalesetname"])
@@ -498,12 +616,14 @@ function prune_scalesets()
     end
 end
 
+
 function delete_scalesets()
     manager = azmanager()
     @sync for scaleset in keys(scalesets(manager))
         @async rmgroup(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose, manager.show_quota)
     end
 end
+
 
 function add_pending_connections()
     manager = azmanager()
@@ -521,21 +641,7 @@ function add_pending_connections()
     end
 end
 
-function Distributed.addprocs(manager::AzManager; sockets)
-    pids = []
-    try
-        Distributed.init_multi()
-        Distributed.cluster_mgmt_from_master_check()
-        lock(Distributed.worker_lock)
-        pids = Distributed.addprocs_locked(manager; sockets)
-    catch e
-        @debug "AzManagers, error processing pending connection"
-        logerror(e, Logging.Debug)
-    finally
-        unlock(Distributed.worker_lock)
-    end
-    pids
-end
+
 
 function addprocs_with_timeout(manager; sockets)
     # Distributed.setup_launched_worker also uses Distributed.worker_timeout, so we add a grace period
@@ -569,6 +675,7 @@ function addprocs_with_timeout(manager; sockets)
     end
     pids
 end
+
 
 function process_pending_connections()
     manager = azmanager()
@@ -658,6 +765,7 @@ function process_pending_connections()
     end
 end
 
+
 function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched_q)
     # Distributed.create_worker also uses Distributed.worker_timeout, so we add a grace period
     # to allow for the Distributed.create_worker to hit its timeout.
@@ -710,9 +818,11 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
     end
 end
 
+
 include("templates.jl")
 
 spin(spincount, elapsed_time) = ['◐','◓','◑','◒','✓'][spincount]*@sprintf(" %.2f",elapsed_time)*" seconds"
+
 function spinner(n_target_workers)
     local ws,spincount,starttime,elapsed_time,tic,_nworkers
     try
@@ -729,11 +839,17 @@ function spinner(n_target_workers)
     while nprocs() == 1 || nworkers() != n_target_workers
         try
             elapsed_time = time() - starttime
-            if time() - tic > 10
+            # Refresh worker count and emit a real newline every 10 s. The
+            # \n acts as a checkpoint so CI log collectors (which split on
+            # \n, not \r) flush the spinner output instead of buffering it
+            # for the lifetime of the addprocs call.
+            checkpoint = time() - tic > 10
+            if checkpoint
                 _nworkers = nprocs() == 1 ? 0 : nworkers()
                 tic = time()
             end
-            write(stdout, spin(spincount, elapsed_time)*", $_nworkers/$n_target_workers up. $ws\r")
+            sep = checkpoint ? "\n" : "\r"
+            write(stdout, spin(spincount, elapsed_time)*", $_nworkers/$n_target_workers up. $ws$sep")
             flush(stdout)
             spincount = spincount == 4 ? 1 : spincount + 1
             yield()
@@ -748,6 +864,7 @@ function spinner(n_target_workers)
     write(stdout,"\n")
     nothing
 end
+
 
 function nthreads_filter(nthreads)
     _nthreads = split(string(nthreads), ',')
@@ -764,6 +881,8 @@ function nthreads_filter(nthreads)
     end
     nthreads_interactive > 0 ? "$nthreads_default,$nthreads_interactive" : string(nthreads_default)
 end
+
+
 
 """
     addprocs(template, ninstances[; kwargs...])
@@ -782,7 +901,7 @@ method or a string corresponding to a template stored in `~/.azmanagers/template
 * `session=AzSession(;lazy=true)` The Azure session used for authentication.
 * `group="cbox"` The name of the Azure scale set.  If the scale set does not yet exist, it will be created.
 * `overprovision=true` Use Azure scle-set overprovisioning?
-* `ppi=1` The number of Julia processes to start per Azure scale set instance.
+* `ppi=1` Procs-per-instance: the number of Julia workers to start per Azure scale set instance.
 * `julia_num_threads="\$(Threads.nthreads(),\$(Threads.nthreads(:interactive))"` set the number of julia threads for the detached process.[2]
 * `omp_num_threads=get(ENV, "OMP_NUM_THREADS", 1)` set the number of OpenMP threads to run on each worker
 * `exename="\$(Sys.BINDIR)/julia"` name of the julia executable.
@@ -817,7 +936,7 @@ used on the Julia workers.  This feature makes use of package extensions, meanin
 that `using MPI` is somewhere in your calling script.
 [5] This may result in a re-boot of the VMs
 """
-function Distributed.addprocs(template::Dict, n::Int;
+function Distributed.addprocs(::AzManager, template::AbstractDict, n::Int;
         subscriptionid = "",
         resourcegroup = "",
         sigimagename = "",
@@ -851,6 +970,7 @@ function Distributed.addprocs(template::Dict, n::Int;
         hyperthreading = nothing,
         use_lvm = false)
     n_current_workers = nprocs() == 1 ? 0 : nworkers()
+    validate_ppi_options(ppi, mpi_ranks_per_worker)
 
     (subscriptionid == "" || resourcegroup == "" || user == "") && load_manifest()
     subscriptionid == "" && (subscriptionid = get(template, "subscriptionid", _manifest["subscriptionid"]))
@@ -858,6 +978,24 @@ function Distributed.addprocs(template::Dict, n::Int;
     user == "" && (user = _manifest["ssh_user"])
 
     manager = azmanager!(session, user, nretry, verbose, save_cloud_init_failures, show_quota)
+
+    # If the caller didn't specify an image, derive it from the scale-set
+    # template's imageReference rather than asking IMDS what the
+    # coordinator booted from. The template's reference is the source
+    # of truth for what the SCALE-SET will run; IMDS is a fallback
+    # (kept below in scaleset_image) for callers that don't pass a
+    # template, e.g. running outside an Azure VM. The IMDS path has
+    # silent failure modes - the @async + fetch + retry stack can land
+    # in a "task returned nothing because @retry exhausted retries on a
+    # transient IMDS hiccup" state and return all-empty strings; the
+    # caller then errors in image_osdisksize with no useful diagnostic.
+    # Extracting from the template here makes the common case
+    # deterministic.
+    if imagename == "" && sigimagename == ""
+        sigimagename, sigimageversion, imagename = _resolve_image_from_template(
+            manager, template["value"], subscriptionid, resourcegroup)
+    end
+
     sigimagename,sigimageversion,imagename = scaleset_image(manager, sigimagename, sigimageversion, imagename)
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
@@ -877,21 +1015,63 @@ function Distributed.addprocs(template::Dict, n::Int;
 
     if waitfor
         @info "Initiating cluster..."
-        spinner_tsk = @async spinner(n_current_workers + n)
+        spinner_tsk = @async spinner(n_current_workers + n * ppi)
         wait(spinner_tsk)
     end
 
     nothing
 end
 
-function Distributed.addprocs(template::AbstractString, n::Int; kwargs...)
+function Distributed.addprocs(mgr::AzManager, template::AbstractString, n::Int; kwargs...)
     isfile(templates_filename_scaleset()) || error("scale-set template file does not exist.  See `AzManagers.save_template_scaleset`")
 
     templates_scaleset = JSON.parse(read(templates_filename_scaleset(), String); dicttype=Dict)
     haskey(templates_scaleset, template) || error("scale-set template file does not contain a template with name: $template. See `AzManagers.save_template_scaleset`")
 
-    addprocs(templates_scaleset[template], n; kwargs...)
+    addprocs(mgr, templates_scaleset[template], n; kwargs...)
 end
+
+"""
+    addprocs(template::AbstractString, n::Int; kwargs...)
+
+Convenience overload for the public docs' `addprocs("myscaleset", 5)`
+form: builds a fresh `AzManager()` and looks the template up by name in
+`~/.azmanagers/templates_scaleset.json`. Equivalent to
+`addprocs(AzManager(), template, n; kwargs...)`.
+"""
+function Distributed.addprocs(template::AbstractString, n::Int; kwargs...)
+    addprocs(AzManager(), template, n; kwargs...)
+end
+
+"""
+    addprocs(template::AbstractDict, n::Int; kwargs...)
+
+Convenience overload for an already-loaded template dict (e.g. the value
+read from `~/.azmanagers/templates_scaleset.json` via `JSON.parse`).
+Builds a fresh `AzManager()` and forwards. Accepts any `AbstractDict`
+(plain `Dict`, `JSON.Object`, etc.) so the same call site works regardless
+of which JSON parser was used.
+"""
+function Distributed.addprocs(template::AbstractDict, n::Int; kwargs...)
+    addprocs(AzManager(), template, n; kwargs...)
+end
+
+function Distributed.addprocs(manager::AzManager; sockets)
+    pids = []
+    try
+        Distributed.init_multi()
+        Distributed.cluster_mgmt_from_master_check()
+        lock(Distributed.worker_lock)
+        pids = Distributed.addprocs_locked(manager; sockets)
+    catch e
+        @debug "AzManagers, error processing pending connection"
+        logerror(e, Logging.Debug)
+    finally
+        unlock(Distributed.worker_lock)
+    end
+    pids
+end
+
 
 function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c::Condition)
     sockets = params[:sockets]
@@ -906,6 +1086,7 @@ function Distributed.launch(manager::AzManager, params::Dict, launched::Array, c
     end
     notify(c)
 end
+
 
 function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
     local _cookie
@@ -950,6 +1131,7 @@ function Distributed.launch_on_machine(manager::AzManager, launched, c, socket)
     notify(c)
 end
 
+
 function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSet, instanceid)
     if haskey(manager.pending_down, scaleset)
         @debug "pushing worker with id=$instanceid onto pending_down"
@@ -960,6 +1142,7 @@ function add_instance_to_pending_down_list(manager::AzManager, scaleset::ScaleSe
     end
     nothing
 end
+
 
 function add_instance_to_pruned_list(manager::AzManager, scaleset::ScaleSet, instanceid)
     if haskey(manager.pruned, scaleset)
@@ -972,6 +1155,7 @@ function add_instance_to_pruned_list(manager::AzManager, scaleset::ScaleSet, ins
     nothing
 end
 
+
 function add_instance_to_preempted_list(manager::AzManager, scaleset::ScaleSet, instanceid)
     if haskey(manager.preempted, scaleset)
         @debug "pushing worker with id=$instanceid onto preempted"
@@ -982,11 +1166,13 @@ function add_instance_to_preempted_list(manager::AzManager, scaleset::ScaleSet, 
     end
 end
 
+
 function ispreempted(manager::AzManager, config::WorkerConfig)
     u = config.userdata
     scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
     string(u["instanceid"])  ∈ get(manager.preempted, scaleset, Set{String}())
 end
+
 
 function add_instance_to_deleted_list(manager::AzManager, scaleset::ScaleSet, instanceid)
     if haskey(manager.deleted, scaleset)
@@ -998,6 +1184,7 @@ function add_instance_to_deleted_list(manager::AzManager, scaleset::ScaleSet, in
     end
     nothing
 end
+
 
 function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     @debug "kill for id=$id"
@@ -1042,15 +1229,17 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     nothing
 end
 
-function remaining_resource(r)
-    _remaining_resource = ""
-    for header in r.headers
+
+function remaining_resource(response)
+    remaining_resource_header = ""
+    for header in response.headers
         if header[1] == "x-ms-ratelimit-remaining-resource"
-            _remaining_resource = header[2]
+            remaining_resource_header = header[2]
         end
     end
-    _remaining_resource
+    remaining_resource_header
 end
+
 
 """
     nworkers_provisioned([service=false])
@@ -1076,6 +1265,8 @@ function nworkers_provisioned(service=false)
     end
     n
 end
+
+
 
 """
     rmgroup(groupname[; kwargs...])
@@ -1125,6 +1316,7 @@ function rmgroup(manager::AzManager, subscriptionid, resourcegroup, groupname, n
     nothing
 end
 
+
 function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfig, op::Symbol)
     if op == :register
         remote_do(AzManagers.logging, id)
@@ -1140,14 +1332,11 @@ function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfi
     end
 end
 
+
 #=
 Use libCURL because HTTP forces the request to run, partially, on a thread in the default thread-pool
 where-as, we would like to run requests to the scaleset metadata server on the interactive thrad-pool.
 =#
-mutable struct CurlDataStruct
-    body::Vector{UInt8}
-    currentsize::Csize_t
-end
 
 function curl_get_write_callback(curlbuf::Ptr{Cchar}, size::Csize_t, nmemb::Csize_t, datavoid::Ptr{Cvoid})
     datastruct = unsafe_pointer_to_objref(datavoid)::CurlDataStruct
@@ -1161,6 +1350,7 @@ function curl_get_write_callback(curlbuf::Ptr{Cchar}, size::Csize_t, nmemb::Csiz
     datastruct.currentsize = newsize
     return n
 end
+
 
 function curl_get_metadata(url)
     datastruct = CurlDataStruct(UInt8[], 0)
@@ -1187,6 +1377,7 @@ function curl_get_metadata(url)
     datastruct
 end
 
+
 function get_instanceid()
     local r
     try
@@ -1198,6 +1389,7 @@ function get_instanceid()
     end
     get(r, "name", "")
 end
+
 
 """
     ispreempted,notbefore = preempted([id=myid()|id="instanceid"])
@@ -1231,6 +1423,7 @@ function preempted(instanceid::AbstractString, clusterid::Int)
     return false, ""
 end
 
+
 macro spawn_interactive(ex::Expr)
     if VERSION > v"1.9"
         esc(:(Threads.@spawn :interactive $ex))
@@ -1239,12 +1432,9 @@ macro spawn_interactive(ex::Expr)
     end
 end
 
-struct SpotPreemptException <: Exception
-    instanceid::String
-    clusterid::Int
-    notbefore::String
-end
+
 Base.showerror(io::IO, e::SpotPreemptException) = print(io, "spot preemption on process '$(e.clusterid)' ($(e.instanceid)), not before '$(e.notbefore)'")
+
 
 function machine_preempt_loop(preempt_channel_future)
     if VERSION >= v"1.9" && Threads.nthreads(:interactive) > 0
@@ -1271,6 +1461,7 @@ function machine_preempt_loop(preempt_channel_future)
         @warn "AzManagers is not running the preempt loop for pid=$(myid()) since it requires at least one interactive thread on worker machines."
     end
 end
+
 
 """
     f = machine_preempt_channel_future(pid)
@@ -1314,6 +1505,7 @@ function machine_preempt_channel_future(pid)
     end
 end
 
+
 function azure_physical_name(keyval="PhysicalHostName")
     local physical_hostname
     try
@@ -1326,6 +1518,7 @@ function azure_physical_name(keyval="PhysicalHostName")
     physical_hostname
 end
 
+
 function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, mpi_size)
     c = connect(IPv4(master_address), master_port)
 
@@ -1335,21 +1528,35 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
 
     _r = HTTP.request("GET", "http://169.254.169.254/metadata/instance?api-version=2021-02-01", ["Metadata"=>"true"]; redirect=false)
     r = JSON.parse(String(_r.body))
+    userdata = Dict(
+        "subscriptionid" => lowercase(r["compute"]["subscriptionId"]),
+        "resourcegroup" => lowercase(r["compute"]["resourceGroupName"]),
+        "scalesetname" => lowercase(r["compute"]["vmScaleSetName"]),
+        "instanceid" => split(r["compute"]["resourceId"], '/')[end],
+        "priority" => get(r["compute"], "priority", ""),
+        "localid" => 1,
+        "name" => r["compute"]["name"],
+        "mpi" => mpi_size > 0,
+        "mpi_size" => mpi_size,
+        "physical_hostname" => azure_physical_name())
+
+    # Note: a previous version of this function ran detect_machine_topology
+    # / plan_worker_placements / pin_julia_threads here to attach placement
+    # metadata to the worker's userdata before the handshake completes. That
+    # turned out to be the source of "0/N up forever" hangs: any of those
+    # calls can block (Hwloc on a busy /sys, lscpu / numactl waiting on
+    # stuck child processes, ThreadPinning.pinthreads against the GC thread
+    # in newer Julia), and a `try`/`catch` cannot rescue a hang. The
+    # handshake must not depend on best-effort metadata collection.
+    # The multi-worker path (ppi > 1) already attaches placement metadata
+    # AFTER the worker is registered, in `launch_n_additional_processes`,
+    # so that path is unaffected.
+
     vm = Dict(
         "exeflags" => exeflags,
         "bind_addr" => string(getipaddr(IPv4)),
         "ppi" => ppi,
-        "userdata" => Dict(
-            "subscriptionid" => lowercase(r["compute"]["subscriptionId"]),
-            "resourcegroup" => lowercase(r["compute"]["resourceGroupName"]),
-            "scalesetname" => lowercase(r["compute"]["vmScaleSetName"]),
-            "instanceid" => split(r["compute"]["resourceId"], '/')[end],
-            "priority" => get(r["compute"], "priority", ""),
-            "localid" => 1,
-            "name" => r["compute"]["name"],
-            "mpi" => mpi_size > 0,
-            "mpi_size" => mpi_size,
-            "physical_hostname" => azure_physical_name()))
+        "userdata" => userdata)
 
     _vm = base64encode(JSON.json(vm))
 
@@ -1359,6 +1566,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
 
     c
 end
+
 
 function logging()
     manager = azmanager()
@@ -1375,6 +1583,7 @@ function logging()
     end
     nothing
 end
+
 
 if VERSION < v"1.7"
     errormonitor = identity
@@ -1458,6 +1667,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     end
 end
 
+
 function azure_worker(cookie, master_address, master_port, ppi, exeflags)
     itry = 0
 
@@ -1489,6 +1699,7 @@ function azure_worker(cookie, master_address, master_port, ppi, exeflags)
     end
 end
 
+
 function azure_worker_mpi end
 
 # We create our own method here so that we can add `localid` and `cnt` to `wconfig`.  This can
@@ -1498,48 +1709,132 @@ function Distributed.launch_n_additional_processes(manager::AzManager, frompid, 
         exename = Distributed.notnothing(fromconfig.exename)
         exeflags = something(fromconfig.exeflags, ``)
 
+        # Fold the active named environment's project path into exeflags so
+        # both the placement launcher (worker_launch_command) and the
+        # no-placement fallback start additional workers with the right
+        # --project. Preserves customenv for ppi>1.
         projectinfo = Pkg.project()
         envname = splitpath(projectinfo.path)[end-1]
-
-        local cmd
-        if isempty(envname)
-            cmd = `$exename $exeflags --worker`
-        else
+        if !isempty(envname)
             envdir = joinpath(Pkg.envdir(), envname)
-            cmd = `$exename $exeflags --project=$envdir --worker`
+            exeflags = `$exeflags --project=$envdir`
         end
 
-        new_addresses = remotecall_fetch(Distributed.launch_additional, frompid, cnt, cmd)
-        for (localid,address) in enumerate(new_addresses)
-            (bind_addr, port) = address
-
-            wconfig = Distributed.WorkerConfig()
-            for x in [:host, :tunnel, :multiplex, :sshflags, :exeflags, :exename, :enable_threaded_blas]
-                Base.setproperty!(wconfig, x, Base.getproperty(fromconfig, x))
+        placement_info = try
+            remotecall_fetch(frompid, cnt + 1) do ppi
+                topology = AzManagers.detect_machine_topology()
+                placements = AzManagers.plan_worker_placements(topology, ppi)
+                use_numactl = Sys.which("numactl") !== nothing
+                topology, placements, use_numactl
             end
-            wconfig.bind_addr = bind_addr
-            wconfig.port = port
-            wconfig.count = fromconfig.count
-            wconfig.userdata = Dict(
-                "localid" => localid+1,
-                "instanceid" => fromconfig.userdata["instanceid"],
-                "physical_hostname" => fromconfig.userdata["physical_hostname"],
-                "name" => fromconfig.userdata["name"],
-                "subscriptionid" => fromconfig.userdata["subscriptionid"],
-                "resourcegroup" => fromconfig.userdata["resourcegroup"],
-                "scalesetname" => fromconfig.userdata["scalesetname"],
-                "priority" => fromconfig.userdata["priority"])
+        catch e
+            @warn "unable to infer local worker placement; using default launcher"
+            logerror(e, Logging.Debug)
+            nothing
+        end
 
-            let wconfig=wconfig
-                @async begin
-                    pid = Distributed.create_worker(manager, wconfig)
-                    remote_do(Distributed.redirect_output_from_additional_worker, frompid, pid, port)
-                    push!(launched_q, pid)
+        if placement_info === nothing
+            cmd = `$exename $exeflags --worker`
+            new_addresses = remotecall_fetch(Distributed.launch_additional, frompid, cnt, cmd)
+            add_launched_workers(manager, frompid, fromconfig, new_addresses, launched_q)
+            return
+        end
+
+        topology, placements, use_numactl = placement_info
+        merge!(
+            fromconfig.userdata,
+            worker_placement_metadata(topology, placements[1], cnt + 1))
+
+        # Fork ALL additional workers in one call on the primary,
+        # mirroring Distributed.launch_additional's structure (parallel
+        # fork phase + serial bind_addr read phase) but with one cmd
+        # per worker. Calling launch_additional(1, cmd) sequentially N
+        # times is the wrong API shape - each call serializes a full
+        # launch+read, and with N>1 (e.g. ppi=4 needing 3 additional
+        # workers) the cluster gets stuck part-way through. The fork
+        # loop must batch and start the children in parallel so they
+        # can read their cookies + bind their ports concurrently.
+        n_extra = length(placements) - 1
+        @info "launch_n_additional_processes: forking $n_extra additional workers on primary frompid=$frompid"
+        for (i, p) in enumerate(placements[2:end])
+            @info "  placement $i: localid=$(p.localid) cpu_set=$(cpu_set_string(p.cpu_set)) numa_node=$(p.numa_node) socket=$(p.socket)"
+        end
+        cmds = [worker_launch_command(exename, exeflags, p; use_numactl) for p in placements[2:end]]
+        t0 = time()
+        new_addresses = remotecall_fetch(frompid, cmds) do cmd_list
+            io_objs = []
+            addresses = []
+            # Phase 1: fork all children in parallel. Each child
+            # (numactl-wrapped julia --worker) starts up and blocks
+            # reading its cookie from stdin.
+            for cmd in cmd_list
+                io = open(Base.detach(cmd), "r+")
+                Distributed.write_cookie(io)
+                push!(io_objs, io.out)
+            end
+            # Phase 2: collect bind_addrs in order. Each read blocks
+            # until that child has bound its port and printed the addr.
+            for io in io_objs
+                (host, port) = Distributed.read_worker_host_port(io)
+                push!(addresses, (host, port))
+                Distributed.additional_io_objs[port] = io
+            end
+            addresses
+        end
+        @info "  all $n_extra forks done" elapsed_s=round(time()-t0; digits=1) addresses=new_addresses
+
+        # Register each new worker with the master. add_launched_workers
+        # queues an @async create_worker per address; @sync at the top
+        # of this function waits for all of them to complete.
+        for (placement, addr) in zip(placements[2:end], new_addresses)
+            add_launched_workers(
+                manager,
+                frompid,
+                fromconfig,
+                [addr],
+                launched_q;
+                topology,
+                placement,
+                ppi = cnt + 1)
+        end
+        @info "launch_n_additional_processes: all $n_extra create_worker @asyncs queued"
+
+        # Pin the PRIMARY worker (placements[1]) to its planned cpu_set
+        # AFTER all additional workers have been forked. The primary is
+        # the julia process started by cloud-init at scale-set boot;
+        # unlike additional workers (launched above via
+        # `numactl --physcpubind=...` wrapper), it never went through
+        # `worker_launch_command(...; use_numactl=true)`, so without this
+        # step its kernel-level affinity remains the whole machine even
+        # though the metadata merged above claims a specific cpu_set.
+        #
+        # Order matters: pinning BEFORE the for-loop above restricts the
+        # primary's process affinity, which child forks INHERIT, and
+        # unprivileged sched_setaffinity can only set affinity to a
+        # subset of the current mask. numactl in the child trying to
+        # set a disjoint cpu_set (e.g. 60-119 when the primary is on
+        # 0-59) fails, the additional worker never starts, and the
+        # cluster sits at 1/N forever.
+        if use_numactl
+            primary_cpu_set = cpu_set_string(placements[1].cpu_set)
+            @info "self-pinning primary frompid=$frompid to cpu_set=$primary_cpu_set"
+            t0 = time()
+            try
+                remotecall_fetch(frompid, primary_cpu_set) do cpus
+                    try
+                        run(`taskset -pc $cpus $(getpid())`)
+                    catch e
+                        @warn "primary worker self-pin via taskset failed" exception=e cpus
+                    end
                 end
+                @info "primary self-pin done" elapsed_s=round(time()-t0; digits=1)
+            catch e
+                @warn "could not reach primary worker for self-pin" exception=e
             end
         end
     end
 end
+
 
 #
 # Azure scale-set methods
@@ -1619,6 +1914,7 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
     sigimagename, sigimageversion, imagename
 end
 
+
 function image_osdisksize(manager::AzManager, template, sigimagename, sigimageversion, imagename)
     @debug "determining os disk size..."
     local imagerefs
@@ -1657,13 +1953,35 @@ function image_osdisksize(manager::AzManager, template, sigimagename, sigimageve
         b = JSON.parse(String(r.body))
         osdisksize = b["properties"]["storageProfile"]["osDiskImage"]["sizeInGB"]
     else
-        error("unable to determine os disk size")
+        # The two branches above require either managed-image-only
+        # (imagename set, sig fields empty) or SIG-with-version
+        # (sig fields set, imagename empty). Any other combination means
+        # `scaleset_image()` returned something partial - usually because
+        # the coordinator's IMDS query for the imageReference URL came
+        # back in an unexpected shape (e.g. SIG without /versions/X and
+        # the versions-listing API also didn't yield a result). Print
+        # what we have so the next CI failure points at the actual gap.
+        image_id = try
+            if haskey(template["properties"], "virtualMachineProfile")
+                template["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"]["id"]
+            else
+                template["properties"]["storageProfile"]["imageReference"]["id"]
+            end
+        catch
+            "<unavailable>"
+        end
+        error("unable to determine os disk size " *
+              "(sigimagename=\"$sigimagename\", " *
+              "sigimageversion=\"$sigimageversion\", " *
+              "imagename=\"$imagename\", " *
+              "template_image_id=\"$image_id\")")
     end
 
     @debug "found os disk size: $osdisksize GB"
 
     osdisksize
 end
+
 
 function scaleset_image!(manager::AzManager, template, sigimagename, sigimageversion, imagename)
     if imagename != ""
@@ -1715,6 +2033,7 @@ function scaleset_image!(manager::AzManager, template, sigimagename, sigimagever
     end
 end
 
+
 function software_sanity_check(manager, imagename, custom_environment)
     projectinfo = Pkg.project()
     envpath = normpath(joinpath(projectinfo.path, ".."))
@@ -1731,6 +2050,7 @@ function software_sanity_check(manager, imagename, custom_environment)
     end
 end
 
+
 function compress_environment(julia_environment_folder)
     project_text = read(joinpath(julia_environment_folder, "Project.toml"), String)
     manifest_text = read(joinpath(julia_environment_folder, "Manifest.toml"), String)
@@ -1745,6 +2065,7 @@ function compress_environment(julia_environment_folder)
     project_compressed, manifest_compressed, localpreferences_compressed
 end
 
+
 function decompress_environment(project_compressed, manifest_compressed, localpreferences_compressed, remote_julia_environment_name)
     mkpath(joinpath(Pkg.envdir(), remote_julia_environment_name))
 
@@ -1758,6 +2079,7 @@ function decompress_environment(project_compressed, manifest_compressed, localpr
     end
 end
 
+
 function nvidia_has_nvidia_smi()
     if Sys.which("nvidia-smi") === nothing
         return false
@@ -1766,6 +2088,7 @@ function nvidia_has_nvidia_smi()
     wait(p)
     success(p)
 end
+
 
 function nvidia_gpumode(feature)
     p = open(`nvidia-smi --query-gpu=$feature.mode.current --format=csv`)
@@ -1783,6 +2106,7 @@ function nvidia_gpumode(feature)
     isenabled
 end
 
+
 function nvidia_gpumode!(feature, switch)
     _switch = switch ? 1 : 0
     p = open(`sudo nvidia-smi $feature $_switch`)
@@ -1790,6 +2114,7 @@ function nvidia_gpumode!(feature, switch)
     success(p) || @error "unable to toggle NVIDIA GPU feature='$feature' to '$_switch'."
     @info "NVIDIA $feature is toggled to $_switch"
 end
+
 
 function nvidia_gpucheck(enable_ecc=true, enable_mig=false)
     if !nvidia_has_nvidia_smi()
@@ -1813,6 +2138,7 @@ function nvidia_gpucheck(enable_ecc=true, enable_mig=false)
     end
 end
 
+
 function build_lvm()
     if isfile("/usr/sbin/azure_nvme.sh")
         @info "Building scratch.."
@@ -1821,6 +2147,7 @@ function build_lvm()
         @warn "No scratch nvme script found!"
     end
 end
+
 
 function buildstartupscript(manager::AzManager, exename::String, user::String, disk::AbstractString, custom_environment::Bool, use_lvm::Bool)
 
@@ -1840,7 +2167,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
     if isfile(joinpath(homedir(), ".gitconfig"))
         gitconfig = read(joinpath(homedir(), ".gitconfig"), String)
         cmd *= """
-        
+
         sudo su - $user << EOF
         echo '$gitconfig' > ~/.gitconfig
         EOF
@@ -1849,7 +2176,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
     if isfile(joinpath(homedir(), ".git-credentials"))
         gitcredentials = rstrip(read(joinpath(homedir(), ".git-credentials"), String), [' ','\n'])
         cmd *= """
-        
+
         sudo su - $user << EOF
         echo "$gitcredentials" > ~/.git-credentials
         chmod 600 ~/.git-credentials
@@ -1872,7 +2199,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
             project_compressed, manifest_compressed, localpreferences_compressed = compress_environment(julia_environment_folder)
 
             cmd *= """
-            
+
             sudo su - $user << 'EOF'
             $exename -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$localpreferences_compressed", "$remote_julia_environment_name")'
             $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.Registry.update(); Pkg.activate(path); (retry(Pkg.instantiate))(); Pkg.precompile()'
@@ -1887,13 +2214,17 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
     cmd, remote_julia_environment_name
 end
 
+
 function build_envstring(env::Dict)
     envstring = ""
     for (key,value) in env
-        envstring *= "export $key=$value\n"
+        valid_environment_name(key) ||
+            throw(ArgumentError("invalid environment variable name: $key"))
+        envstring *= "export $key=$(shell_quote(value))\n"
     end
     envstring
 end
+
 
 function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mpi_ranks_per_worker::Int, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, julia_num_threads::String, omp_num_threads::Int, exename::String, exeflags::String, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool, use_lvm::Bool)
@@ -1932,7 +2263,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
     """
 
     if use_lvm
-        if mpi_ranks_per_worker == 0 
+        if mpi_ranks_per_worker == 0
             shell_cmds *= """
 
             attempt_number=1
@@ -1940,7 +2271,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
             exit_code=0
             while [  \$attempt_number -le \$maximum_attempts ]; do
                 $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-                
+
                 exit_code=\$?
                 echo "attempt \$attempt_number is done with exit code \$exit_code..."
 
@@ -1958,7 +2289,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
             echo "the worker has finished running with exit code \$exit_code."
             EOF
             """
-        else
+        elseif ppi == 1
             shell_cmds *= """
 
             $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm()'
@@ -1970,6 +2301,35 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
                 mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
 
                 exit_code=\$?
+                echo "attempt \$attempt_number is done with exit code \$exit_code...."
+
+                if [ "\$exit_code" == "42" ]; then
+                    echo "...breaking from retry loop due to exit code 42."
+                    break
+                fi
+
+                echo "...trying again after sleeping for 5 seconds..."
+                sleep 5
+                attempt_number=\$(( attempt_number + 1 ))
+
+                echo "the worker startup was tried \$attempt_number times."
+            done
+            echo "the worker has finished running with exit code \$exit_code."
+            EOF
+            """
+        else
+            nested_block = nested_mpi_launch_block(
+                exename, _exeflags, ppi, mpi_ranks_per_worker, mpi_flags,
+                cookie, master_address, master_port, juliaenvstring)
+            shell_cmds *= """
+
+            $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm()'
+
+            attempt_number=1
+            maximum_attempts=5
+            exit_code=0
+            while [  \$attempt_number -le \$maximum_attempts ]; do
+                $nested_block
                 echo "attempt \$attempt_number is done with exit code \$exit_code...."
 
                 if [ "\$exit_code" == "42" ]; then
@@ -2007,7 +2367,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
         --$boundary--
         """
     else
-        if mpi_ranks_per_worker == 0 
+        if mpi_ranks_per_worker == 0
             shell_cmds *= """
 
             attempt_number=1
@@ -2015,7 +2375,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
             exit_code=0
             while [  \$attempt_number -le \$maximum_attempts ]; do
                 $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-                
+
                 exit_code=\$?
                 echo "attempt \$attempt_number is done with exit code \$exit_code..."
 
@@ -2033,7 +2393,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
             echo "the worker has finished running with exit code \$exit_code."
             EOF
             """
-        else
+        elseif ppi == 1
             shell_cmds *= """
 
             $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
@@ -2061,6 +2421,35 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
             echo "the worker has finished running with exit code \$exit_code."
             EOF
             """
+        else
+            nested_block = nested_mpi_launch_block(
+                exename, _exeflags, ppi, mpi_ranks_per_worker, mpi_flags,
+                cookie, master_address, master_port, juliaenvstring)
+            shell_cmds *= """
+
+            $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
+
+            attempt_number=1
+            maximum_attempts=5
+            exit_code=0
+            while [  \$attempt_number -le \$maximum_attempts ]; do
+                $nested_block
+                echo "attempt \$attempt_number is done with exit code \$exit_code...."
+
+                if [ "\$exit_code" == "42" ]; then
+                    echo "...breaking from retry loop due to exit code 42."
+                    break
+                fi
+
+                echo "...trying again after sleeping for 5 seconds..."
+                sleep 5
+                attempt_number=\$(( attempt_number + 1 ))
+
+                echo "the worker startup was tried \$attempt_number times."
+            done
+            echo "the worker has finished running with exit code \$exit_code."
+            EOF
+            """
         end
 
         cmd = shell_cmds
@@ -2068,6 +2457,7 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
 
     cmd
 end
+
 
 function buildstartupscript_detached(manager::AzManager, exename::String, julia_num_threads::String, omp_num_threads::Int, env::Dict, user::String,
         disk::AbstractString, custom_environment::Bool, subscriptionid, resourcegroup, vmname, use_lvm::Bool)
@@ -2087,7 +2477,7 @@ function buildstartupscript_detached(manager::AzManager, exename::String, julia_
     =#
     exename_parts = split(exename, ' ')
     i = findfirst(part->contains(part, "julia"), exename_parts)
-    
+
     if i === nothing
         error("unable to find 'julia' in exename='$exename'")
     end
@@ -2143,6 +2533,7 @@ function buildstartupscript_detached(manager::AzManager, exename::String, julia_
     cmd
 end
 
+
 function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     location = template["location"]
 
@@ -2196,7 +2587,7 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     _r = @retry nretry azrequest(
         "GET",
         verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Compute/locations/$location)/usages?api-version=2019-07-01",
+        azure_compute_usages_url(subscriptionid, location),
         ["Authorization"=>"Bearer $(token(manager.session))"])
     r = JSON.parse(String(_r.body))
 
@@ -2227,6 +2618,8 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
 
     ncores_available - (ncores_per_machine * δn), ncores_spot_available - (ncores_per_machine * δn)
 end
+
+
 
 function nphysical_cores(template::AbstractDict; session=AzSession())
     ssid = template["subscriptionid"]
@@ -2266,43 +2659,32 @@ function nphysical_cores(template::AbstractString; session=AzSession())
     nphysical_cores(template; session)
 end
 
+
 function getnextlinks!(manager::AzManager, _r, value, nextlink, nretry, verbose)
-    while nextlink != ""
-        _r = @retry nretry azrequest(
+    request_page = function (url)
+        @retry nretry azrequest(
             "GET",
             verbose,
-            nextlink,
+            url,
             ["Authorization"=>"Bearer $(token(manager.session))"])
-        r = JSON.parse(String(_r.body))
-        value = [value;get(r,"value",[])]
-        nextlink = get(r, "nextLink", "")
     end
+    value, next_response = collect_nextlink_pages!(request_page, value, nextlink)
+    _r = next_response === nothing ? _r : next_response
     value, _r
 end
 
+
 function resourcegraphrequest(manager, body)
-    skiptoken = ""
-    data = []
-    local _r
-    while true
-        if skiptoken != ""
-            body["\$skipToken"] = skiptoken
-        end
-        _r = @retry manager.nretry azrequest(
+    request_page = function (request_body)
+        @retry manager.nretry azrequest(
             "POST",
             manager.verbose,
             "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2021-03-01",
             ["Authorization"=>"Bearer $(token(manager.session))", "Content-Type"=>"application/json"],
-            JSON.json(body)
+            JSON.json(request_body)
         )
-        r = JSON.parse(String(_r.body))
-        data = [data;get(r, "data", [])]
-        skiptoken = get(r, "\$skipToken", "")
-
-        if skiptoken == ""
-            break
-        end
     end
+    data, _r = collect_resourcegraph_pages(request_page, body)
 
     if manager.show_quota
         @info "Quota after getting instances for scaleset pruning" remaining_resource(_r)
@@ -2310,6 +2692,7 @@ function resourcegraphrequest(manager, body)
 
     data
 end
+
 
 function list_scalesets(manager::AzManager, subscriptionid, resourcegroup, nretry, verbose)
     _r = @retry nretry azrequest(
@@ -2321,6 +2704,7 @@ function list_scalesets(manager::AzManager, subscriptionid, resourcegroup, nretr
     scalesets,_r = getnextlinks!(manager, _r, get(r, "value", []), get(r, "nextLink", ""), nretry, verbose)
     [get(scaleset, "name", "") for scaleset in scalesets]
 end
+
 
 function list_scaleset_vms_uniform(manager, scaleset)
     _r = @retry manager.nretry azrequest(
@@ -2338,6 +2722,7 @@ function list_scaleset_vms_uniform(manager, scaleset)
     vms
 end
 
+
 function list_scaleset_vms_flexible(manager, scaleset)
     body = Dict(
             "subscriptions" => [
@@ -2348,6 +2733,7 @@ function list_scaleset_vms_flexible(manager, scaleset)
     vms = resourcegraphrequest(manager, body)
     vms
 end
+
 
 function list_scaleset_vms(manager, scaleset)
     local vms, _r
@@ -2374,6 +2760,7 @@ function list_scaleset_vms(manager, scaleset)
     vms
 end
 
+
 function scaleset_capacity(manager::AzManager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
     local r
     try
@@ -2397,6 +2784,7 @@ function scaleset_capacity(manager::AzManager, subscriptionid, resourcegroup, sc
     r["sku"]["capacity"]
 end
 
+
 function scaleset_capacity!(manager::AzManager, subscriptionid, resourcegroup, scalesetname, capacity, nretry, verbose)
     @retry nretry azrequest(
         "PATCH",
@@ -2406,6 +2794,7 @@ function scaleset_capacity!(manager::AzManager, subscriptionid, resourcegroup, s
         JSON.json(Dict("sku"=>Dict("capacity"=>capacity))))
 end
 
+
 function scaleset_create_or_update(manager::AzManager, user, subscriptionid, resourcegroup, scalesetname, sigimagename, sigimageversion,
         imagename, osdisksize, nretry, template, δn, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig, hyperthreading, julia_num_threads,
         omp_num_threads, exename, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base, verbose, custom_environment, overprovision, use_lvm)
@@ -2413,6 +2802,16 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     ssh_key = _manifest["ssh_public_key_file"]
 
     @debug "scaleset_create_or_update"
+    _r = @retry nretry azrequest(
+        "GET",
+        verbose,
+        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2023-03-01",
+        ["Authorization"=>"Bearer $(token(manager.session))"])
+    r = JSON.parse(String(_r.body))
+
+    if manager.show_quota
+        @info "Quota after getting a list of existing scale-sets" remaining_resource(_r)
+    end
 
     _template = deepcopy(template["value"])
 
@@ -2475,6 +2874,22 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         _template["tags"]["platformsettings.host_environment.disablehyperthreading"] = hyperthreading ? "False" : "True"
     end
 
+    # If the target scale-set is mid-deletion, every PUT we issue is rejected
+    # by Azure with "OperationNotAllowed ... is marked for deletion" until the
+    # deletion completes (minutes for non-empty sets), burning the full retry
+    # budget. Fail fast - the caller should retry with a fresh `group` name.
+    for _existing in get(r, "value", [])
+        if _existing["name"] == scalesetname
+            state = get(get(_existing, "properties", Dict()), "provisioningState", "")
+            if lowercase(state) == "deleting"
+                error("scale-set $resourcegroup/$scalesetname is in " *
+                      "provisioningState=Deleting; pick a different " *
+                      "`group` name (or wait for the deletion to finish).")
+            end
+            break
+        end
+    end
+
     @debug "about to check quota"
 
     # check usage/quotas
@@ -2498,10 +2913,14 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
 
     @debug "done checking quota, δn=$(δn)"
 
+    # Track the authoritative capacity in `manager.scalesets` under the manager
+    # lock so a concurrent `delete_pending_down_vms` can't clobber the size we
+    # PUT (the scaleset create/delete race fixed upstream in #222).
     lock(manager.lock)
     try
         _scaleset = ScaleSet(subscriptionid, resourcegroup, scalesetname)
-        _template["sku"]["capacity"] = manager.scalesets[_scaleset] = _scaleset ∈ keys(scalesets(manager)) ? manager.scalesets[_scaleset] + δn : δn
+        _template["sku"]["capacity"] = manager.scalesets[_scaleset] =
+            _scaleset ∈ keys(scalesets(manager)) ? manager.scalesets[_scaleset] + δn : δn
 
         @debug "setting capacity of scale-set $scalesetname to $(_template["sku"]["capacity"]), scaleset=$(manager.scalesets[_scaleset])"
 
@@ -2524,6 +2943,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     nothing
 end
 
+
 function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, ids, nretry, verbose)
     body = Dict("instanceIds"=>ids)
     _r = @retry nretry azrequest(
@@ -2537,6 +2957,7 @@ function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetn
         @info "Quota after requesting deletion of $(length(ids)) virtual machines" remaining_resource(_r)
     end
 end
+
 
 # see https://docs.microsoft.com/en-us/azure/virtual-machines/linux/add-disk
 function mount_datadisks()
@@ -2582,6 +3003,7 @@ function mount_datadisks()
     end
 end
 
+
 function simulate_spot_eviction(pid)
     if pid == 1
         return
@@ -2601,6 +3023,7 @@ function simulate_spot_eviction(pid)
     nothing
 end
 
+
 function get_ipaddress_for_scaleset_vm(manager, vm)
     id = vm["properties"]["networkProfile"]["networkInterfaces"][1]["id"]
 
@@ -2615,12 +3038,16 @@ function get_ipaddress_for_scaleset_vm(manager, vm)
     get(properties, "publicIPAddress", get(properties, "privateIPAddress", ""))
 end
 
+
 #
 # detached service and REST API
 #
 const DETACHED_ROUTER = HTTP.Router()
-const DETACHED_JOBS = Dict()
-const DETACHED_VM = Ref(Dict())
+
+const DETACHED_JOBS = DETACHED_STATE.jobs
+
+const DETACHED_VM = DETACHED_STATE.vm
+
 
 let DETACHED_ID::Int = 1
     global detached_nextid
@@ -2643,6 +3070,7 @@ function timestamp_metaformatter(level::Logging.LogLevel, _module, group, id, fi
     color, prefix, suffix
 end
 
+
 function detachedservice(address=ip"0.0.0.0"; server=nothing, subscriptionid="", resourcegroup="", vmname="", exename="julia")
     HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/run", detachedrun)
     HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/kill", detachedkill)
@@ -2664,6 +3092,7 @@ function detachedservice(address=ip"0.0.0.0"; server=nothing, subscriptionid="",
 
     HTTP.serve(DETACHED_ROUTER, address, port; server=server)
 end
+
 
 function detachedrun(request::HTTP.Request)
     @info "inside detachedrun"
@@ -2769,11 +3198,12 @@ function detachedrun(request::HTTP.Request)
         end
         if !r["persist"]
             vm = AzManagers.DETACHED_VM[]
-            rmproc(vm; session=sessionbundle(:management))
+            rmproc(vm)
         end
     end
     HTTP.Response(200, ["Content-Type"=>"application/json"], JSON.json(Dict("id"=>id, "pid"=>pid)); request)
 end
+
 
 function detachedkill(request::HTTP.Request)
     local id
@@ -2799,6 +3229,7 @@ function detachedkill(request::HTTP.Request)
     end
     response
 end
+
 
 function detachedstatus(request::HTTP.Request)
     @info "inside detachedstatus"
@@ -2830,6 +3261,7 @@ function detachedstatus(request::HTTP.Request)
     HTTP.Response(200, ["Content-Type"=>"application/json"], JSON.json(Dict("id"=>id, "status"=>status)); request)
 end
 
+
 function detachedstdout(request::HTTP.Request)
     local id
     try
@@ -2850,6 +3282,7 @@ function detachedstdout(request::HTTP.Request)
     end
     HTTP.Response(200, ["Content-Type"=>"application/text"], stdout; request)
 end
+
 
 function detachedstderr(request::HTTP.Request)
     local id
@@ -2873,6 +3306,7 @@ function detachedstderr(request::HTTP.Request)
     HTTP.Response(200, ["Content-Type"=>"application/text"], stderr; request)
 end
 
+
 function detachedwait(request::HTTP.Request)
     local id
     try
@@ -2889,6 +3323,7 @@ function detachedwait(request::HTTP.Request)
         process = DETACHED_JOBS[id]["process"]
         wait(process)
     catch e
+        io = IOBuffer()
         @error "caught error waiting for process for job $id to finish"
         logerror(e, Logging.Debug)
 
@@ -2910,17 +3345,21 @@ function detachedwait(request::HTTP.Request)
     HTTP.Response(200, ["Content-Type"=>"application/text"], "OK, job $id is finished"; request)
 end
 
+
 function detachedping(request::HTTP.Request)
     HTTP.Response(200, ["Content-Type"=>"applicaton/text"], "OK"; request)
 end
+
 
 function detachedvminfo(request::HTTP.Request)
     HTTP.Response(200, ["Content-Type"=>"application/json"], JSON.json(AzManagers.DETACHED_VM[]); request)
 end
 
+
 #
 # detached service client API
 #
+
 """
     addproc(template[; name="", basename="cbox", subscriptionid="myid", resourcegroup="mygroup", nretry=10, verbose=0, session=AzSession(;lazy=true), sigimagename="", sigimageversion="", imagename="", detachedservice=true])
 
@@ -2950,7 +3389,7 @@ Create a VM, and returns a named tuple `(name,ip,resourcegrup,subscriptionid)` w
 # Notes
 [1] Interactive threads are supported beginning in version 1.9 of Julia.  For earlier versions, the default for `julia_num_threads` is `Threads.nthreads()`.
 """
-function addproc(vm_template::Dict, nic_template=nothing;
+function addproc(vm_template::AbstractDict, nic_template=nothing;
         name = "",
         basename = "cbox",
         user = "",
@@ -3046,7 +3485,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
             nic_dic = JSON.parse(String(nic_r.body))
             nic_state = nic_dic["properties"]["provisioningState"]
         end
-    catch e 
+    catch e
         @error "failed to get $nicname status"
     end
 
@@ -3082,7 +3521,7 @@ function addproc(vm_template::Dict, nic_template=nothing;
     else
         cmd,_ = buildstartupscript(manager, exename, user, disk, customenv, use_lvm)
     end
-    
+
     _cmd = base64encode(cmd)
 
     if length(_cmd) > 64_000
@@ -3191,6 +3630,7 @@ function addproc(vm_template::AbstractString, nic_template=nothing; kwargs...)
     addproc(vm_template, nic_template; kwargs...)
 end
 
+
 """
     rmproc(vm[; session=AzSession(;lazy=true), verbose=0, nretry=10])
 
@@ -3267,7 +3707,10 @@ function rmproc(vm;
     nothing
 end
 
+
 vm(;kwargs...) = nothing
+
+
 
 macro detach(expr::Expr)
     Expr(:call, :detached_run, string(expr))
@@ -3276,6 +3719,8 @@ end
 macro detach(parms::Expr, expr::Expr)
     Expr(:call, :detached_run, esc(parms.args[2]), string(expr))
 end
+
+
 
 """
     @detachat myvm begin ... end
@@ -3302,22 +3747,17 @@ macro detachat(ip, expr::Expr)
     Expr(:call, :detached_run, string(expr), esc(ip))
 end
 
-struct DetachedJob
-    vm::Dict{String,String}
-    id::String
-    pid::String
-    logurl::String
-end
+
 DetachedJob(ip, id; port=detached_port()) = DetachedJob(Dict("ip"=>string(ip), "port"=>string(port)), string(id), "-1", "")
+
 DetachedJob(ip, id, pid; port=detached_port()) = DetachedJob(Dict("ip"=>string(ip), "port"=>string(port)), string(id), string(pid), "")
+
 
 function loguri(job::DetachedJob)
     job.logurl
 end
 
-struct DetachedServiceTimeoutException <: Exception
-    vm
-end
+
 
 function detached_service_wait(vm, custom_environment)
     timeout = Distributed.worker_timeout()
@@ -3342,23 +3782,26 @@ function detached_service_wait(vm, custom_environment)
             @error "reached timeout ($timeout seconds) while waiting for $waitfor to start."
             throw(DetachedServiceTimeoutException(vm))
         end
-        
+
         write(stdout, spin(spincount, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
         flush(stdout)
         spincount = spincount == 4 ? 1 : spincount + 1
-        
+
         sleep(0.5)
     end
     write(stdout, spin(5, elapsed_time)*", waiting for $waitfor on VM, $(vm["name"]):$(vm["port"]), to start.\r")
     write(stdout, "\n")
 end
 
-const VARIABLE_BUNDLE = Dict()
+
+const VARIABLE_BUNDLE = VARIABLE_BUNDLE_STATE.bundle
+
+
 function variablebundle!(bundle::Dict)
     for (key,value) in bundle
-        AzManagers.VARIABLE_BUNDLE[Symbol(key)] = value
+        VARIABLE_BUNDLE_STATE.bundle[Symbol(key)] = value
     end
-    AzManagers.VARIABLE_BUNDLE
+    VARIABLE_BUNDLE_STATE.bundle
 end
 
 """
@@ -3380,11 +3823,13 @@ read(myjob)
 """
 function variablebundle!(;kwargs...)
     for kwarg in kwargs
-        AzManagers.VARIABLE_BUNDLE[kwarg[1]] = kwarg[2]
+        VARIABLE_BUNDLE_STATE.bundle[kwarg[1]] = kwarg[2]
     end
-    AzManagers.VARIABLE_BUNDLE
+    VARIABLE_BUNDLE_STATE.bundle
 end
-variablebundle() = AzManagers.VARIABLE_BUNDLE
+
+
+variablebundle() = VARIABLE_BUNDLE_STATE.bundle
 
 """
     variablebundle(:key)
@@ -3392,7 +3837,9 @@ variablebundle() = AzManagers.VARIABLE_BUNDLE
 Retrieve a variable from a variable bundle.  See `variablebundle!`
 for more information.
 """
-variablebundle(key) = AzManagers.VARIABLE_BUNDLE[Symbol(key)]
+variablebundle(key) = VARIABLE_BUNDLE_STATE.bundle[Symbol(key)]
+
+
 
 function detached_run(code, ip::String="", port=detached_port();
         persist=true,
@@ -3455,6 +3902,7 @@ end
 
 detached_run(code, vm::Dict; kwargs...) = detached_run(code, vm["ip"], vm["port"]; kwargs...)
 
+
 """
     read(job[;stdio=stdout])
 
@@ -3466,6 +3914,11 @@ function Base.read(job::DetachedJob; stdio=stdout)
         "http://$(job.vm["ip"]):$(job.vm["port"])/cofii/detached/job/$(job.id)/$(stdio==stdout ? "stdout" : "stderr")", readtimeout=60)
     String(r.body)
 end
+
+
+status(e::HTTP.StatusError) = e.status
+
+status(e) = 999
 
 """
     status(job)
@@ -3488,6 +3941,7 @@ function status(job::DetachedJob)
     _r
 end
 
+
 """
     wait(job[;stdio=stdout])
 
@@ -3498,6 +3952,7 @@ function Base.wait(job::DetachedJob)
         "POST",
         "http://$(job.vm["ip"]):$(job.vm["port"])/cofii/detached/job/$(job.id)/wait")
 end
+
 
 """
     kill(job)
@@ -3510,10 +3965,254 @@ function Base.kill(job::DetachedJob)
         "http://$(job.vm["ip"]):$(job.vm["port"])/cofii/detached/job/$(job.id)/kill")
 end
 
-export AzManager, DetachedJob, addproc, machine_preempt_channel_future, nphysical_cores, nworkers_provisioned, preempted, rmproc, scalesets, status, variablebundle, variablebundle!, vm, @detach, @detachat
+
+export AzManager, DetachedJob, MachineTopology, NumaTopology, SocketTopology,
+    WorkerPlacement, addproc, machine_preempt_channel_future, nphysical_cores,
+    nworkers_provisioned, plan_worker_placements, preempted, rmproc, scalesets,
+    status, variablebundle, variablebundle!, vm, worker_placement,
+    worker_placements, @detach, @detachat
 
 if !isdefined(Base, :get_extension)
     include("../ext/MPIExt.jl")
+end
+
+
+"""
+    worker_placement(pid)
+
+Return the CPU/NUMA placement metadata recorded for worker `pid`. Keys are the
+ones produced by `ppi`-based placement: `localid`, `ppi`, `physical_cores`,
+`julia_threads`, `julia_interactive_threads`, `omp_threads`, `cpu_set`
+(e.g. `"0-43"`), `numa_node`, `socket`, and `pinning_backend`. Returns an
+empty `Dict` when no placement was recorded (e.g. the worker was launched
+outside `addprocs(...; ppi=...)`).
+"""
+function worker_placement(pid::Int)
+    wrkr = Distributed.map_pid_wrkr[pid]
+    if isdefined(wrkr, :config) && isdefined(wrkr.config, :userdata)
+        return placement_userdata(wrkr.config.userdata)
+    end
+    Dict()
+end
+
+"""
+    worker_placements()
+
+Return a `Dict{Int,Dict}` of placement metadata for every active worker. See
+[`worker_placement`](@ref) for the per-worker keys.
+"""
+function worker_placements()
+    Dict(pid => worker_placement(pid) for pid in workers())
+end
+
+function add_launched_workers(
+        manager::AzManager,
+        frompid,
+        fromconfig,
+        new_addresses,
+        launched_q;
+        topology = nothing,
+        placement = nothing,
+        ppi = nothing)
+    for (localid,address) in enumerate(new_addresses)
+            (bind_addr, port) = address
+
+            wconfig = Distributed.WorkerConfig()
+            for x in [:host, :tunnel, :multiplex, :sshflags, :exeflags, :exename, :enable_threaded_blas]
+                Base.setproperty!(wconfig, x, Base.getproperty(fromconfig, x))
+            end
+            wconfig.bind_addr = bind_addr
+            wconfig.port = port
+            wconfig.count = fromconfig.count
+            # Additional workers (ppi > 1) share the underlying scale-set
+            # instance with the primary worker, so inherit `instanceid`
+            # and `priority` from `fromconfig`. Without them, `ispreempted`
+            # KeyErrors on `u["instanceid"]` during `rmprocs` cleanup
+            # (upstream had the same gap; ci.yml's ppi=1 path never
+            # exercised it).
+            wconfig.userdata = Dict(
+                "localid" => placement === nothing ? localid + 1 : placement.localid,
+                "physical_hostname" => get(fromconfig.userdata, "physical_hostname", ""),
+                "name" => fromconfig.userdata["name"],
+                "subscriptionid" => fromconfig.userdata["subscriptionid"],
+                "resourcegroup" => fromconfig.userdata["resourcegroup"],
+                "scalesetname" => fromconfig.userdata["scalesetname"],
+                "instanceid" => get(fromconfig.userdata, "instanceid", ""),
+                "priority" => get(fromconfig.userdata, "priority", ""))
+
+            if placement !== nothing && topology !== nothing && ppi !== nothing
+                merge!(
+                    wconfig.userdata,
+                    worker_placement_metadata(topology, placement, ppi))
+            end
+
+            let wconfig=wconfig, port=port, addr=bind_addr,
+                lid=wconfig.userdata["localid"]
+                @async begin
+                    @info "    create_worker: connecting" localid=lid bind_addr=addr port=port
+                    t_cw = time()
+                    pid = Distributed.create_worker(manager, wconfig)
+                    @info "    create_worker: connected" localid=lid pid=pid elapsed_s=round(time()-t_cw; digits=1)
+                    remote_do(Distributed.redirect_output_from_additional_worker, frompid, pid, port)
+                    push!(launched_q, pid)
+                end
+            end
+        end
+end
+
+"""
+Pull the image identity out of the scale-set template's imageReference.
+The template encodes one of two shapes:
+
+  /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Compute/galleries/<G>/images/<I>[/versions/<V>]
+  /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Compute/images/<I>
+
+Returns `(sigimagename, sigimageversion, imagename)`. Empties if the
+template has neither shape, in which case the caller falls through to
+`scaleset_image`'s IMDS-based resolution. When the template has a SIG
+reference without an explicit version, we resolve the latest published
+version via the Azure SIG API so the eventual `image_osdisksize` SIG
+branch has both pieces.
+"""
+function _resolve_image_from_template(manager::AzManager, template_value, subscriptionid::AbstractString, resourcegroup::AbstractString)
+    id = ""
+    try
+        if haskey(template_value["properties"], "virtualMachineProfile")
+            id = template_value["properties"]["virtualMachineProfile"]["storageProfile"]["imageReference"]["id"]
+        else
+            id = template_value["properties"]["storageProfile"]["imageReference"]["id"]
+        end
+    catch
+        return "", "", ""
+    end
+
+    parts = split(id, "/")
+    k_galleries = findfirst(==("galleries"), parts)
+    k_images    = findfirst(==("images"),    parts)
+    k_versions  = findfirst(==("versions"),  parts)
+
+    if k_galleries !== nothing && k_images !== nothing && k_images + 1 <= length(parts)
+        gallery_name = String(parts[k_galleries + 1])
+        sigimagename = String(parts[k_images + 1])
+        if k_versions !== nothing && k_versions + 1 <= length(parts)
+            return sigimagename, String(parts[k_versions + 1]), ""
+        end
+        # SIG image-def without an explicit version. Resolve latest.
+        latest = _latest_sig_version(manager, subscriptionid, resourcegroup, gallery_name, sigimagename)
+        return sigimagename, latest, ""
+    elseif k_images !== nothing && k_images + 1 <= length(parts)
+        # Managed image (no galleries segment).
+        return "", "", String(parts[k_images + 1])
+    end
+    return "", "", ""
+end
+
+"""
+Return the highest published image-version name (as a string) for the
+given SIG image-definition, or "" if no versions are published / the
+API call fails. Used by `_resolve_image_from_template` when the
+template references a SIG image-def without a specific version.
+"""
+function _latest_sig_version(manager::AzManager, subscription::AbstractString, resourcegroup::AbstractString, gallery::AbstractString, image::AbstractString)
+    try
+        url = "https://management.azure.com/subscriptions/$subscription/resourceGroups/$resourcegroup/providers/Microsoft.Compute/galleries/$gallery/images/$image/versions?api-version=2022-03-03"
+        _r = @retry manager.nretry azrequest(
+            "GET",
+            manager.verbose,
+            url,
+            ["Authorization" => "Bearer $(token(manager.session))"])
+        r = JSON.parse(String(_r.body))
+        names = String[get(v, "name", "") for v in get(r, "value", [])]
+        filter!(!isempty, names)
+        isempty(names) && return ""
+        return string(maximum(VersionNumber.(names)))
+    catch e
+        @warn "could not resolve latest SIG version" gallery image exception=e
+        return ""
+    end
+end
+
+function azure_compute_usages_url(subscriptionid, location)
+    base_url = "https://management.azure.com/subscriptions/$subscriptionid"
+    compute_path = "providers/Microsoft.Compute/locations/$location/usages"
+    "$base_url/$compute_path?api-version=2019-07-01"
+end
+
+function collect_nextlink_pages!(request_page, value, nextlink)
+    last_response = nothing
+    while nextlink != ""
+        last_response = request_page(nextlink)
+        page = JSON.parse(String(last_response.body))
+        value = [value; get(page, "value", [])]
+        nextlink = get(page, "nextLink", "")
+    end
+    value, last_response
+end
+
+function collect_resourcegraph_pages(request_page, body)
+    skiptoken = ""
+    data = []
+    last_response = nothing
+    while true
+        if skiptoken != ""
+            body["\$skipToken"] = skiptoken
+        end
+        last_response = request_page(body)
+        r = JSON.parse(String(last_response.body))
+        data = [data; get(r, "data", [])]
+        skiptoken = get(r, "\$skipToken", "")
+
+        if skiptoken == ""
+            break
+        end
+    end
+
+    data, last_response
+end
+
+function shell_quote(value)
+    "'" * replace(string(value), "'" => "'\"'\"'") * "'"
+end
+
+function valid_environment_name(name)
+    occursin(r"^[A-Za-z_][A-Za-z0-9_]*$", string(name))
+end
+
+function nested_mpi_launch_block(
+        exename::AbstractString,
+        exeflags::AbstractString,
+        ppi::Int,
+        mpi_ranks_per_worker::Int,
+        mpi_flags,
+        cookie::AbstractString,
+        master_address::AbstractString,
+        master_port::Int,
+        juliaenvstring::AbstractString)
+
+    rank_payload = "$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi(\"$cookie\", \"$master_address\", $master_port, $ppi, \"$exeflags\")"
+
+    """
+    AZM_WORKER_CPU_SETS=( \$($exename -e 'using AzManagers; topology = AzManagers.detect_machine_topology(); for placement in AzManagers.plan_worker_placements(topology, $ppi); print(AzManagers.cpu_set_string(placement.cpu_set), " "); end') )
+
+    if [ \${#AZM_WORKER_CPU_SETS[@]} -ne $ppi ]; then
+        echo "expected $ppi worker cpu-sets but got \${#AZM_WORKER_CPU_SETS[@]}" >&2
+        exit 1
+    fi
+
+    AZM_PIDS=()
+    for cpu_set in "\${AZM_WORKER_CPU_SETS[@]}"; do
+        mpirun -n $mpi_ranks_per_worker --cpu-set "\$cpu_set" --bind-to cpu-list:ordered $mpi_flags $exename $exeflags -e '$rank_payload' &
+        AZM_PIDS+=(\$!)
+    done
+
+    exit_code=0
+    for pid in "\${AZM_PIDS[@]}"; do
+        if ! wait \$pid; then
+            child_status=\$?
+            exit_code=\$child_status
+        fi
+    done
+    """
 end
 
 end

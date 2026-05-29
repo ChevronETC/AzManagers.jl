@@ -362,7 +362,9 @@ function build_vmtemplate(name;
                 "networkProfile" => Dict(
                     "networkInterfaces" => [
                         Dict(
-                            "id" => "/subscription/$subscriptionid/resourceGroups/$resourcegroup_vnet/providers/Microsoft.Network/networkInterfaces/$nicname",
+                            "id" => "/subscriptions/$subscriptionid/resourceGroups/" *
+                                "$resourcegroup_vnet/providers/Microsoft.Network/" *
+                                "networkInterfaces/$nicname",
                             "properties" => Dict{Any,Any}(
                                 "primary" => true
                             )

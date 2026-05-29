@@ -1,0 +1,345 @@
+name: Multi-Worker Test (SKU matrix)
+
+# End-to-end addprocs multi-worker test against real Azure SKUs covering
+# different CPU topologies. Manual dispatch only - each run provisions HPC
+# VMs and spends real money, so it is never triggered by push/PR.
+#
+# Flow:
+#   setup   - one-time per run: RG, build VNet/NSG, gallery, Packer image.
+#   test    - matrix over SKUs. Each shard creates its own per-region
+#             VNet/NSG and small coordinator VM in the shared RG, sshes in,
+#             runs test/multi_worker_test.jl with the matrix SKU + expected
+#             topology, tears down its scale set + coordinator VM.
+#   cleanup - if: always(), deletes the RG (catches anything the per-shard
+#             teardown missed).
+
+on:
+  workflow_dispatch:
+
+# Home region for setup: where the RG, gallery, image build VNet, and the
+# Packer build itself live. The image is replicated to every region listed
+# in test/image.pkr.hcl's `replication_regions`. Each test shard then
+# provisions its own VNet/NSG in its target region (see matrix.location).
+env:
+  HOME_LOCATION: "eastus"
+
+jobs:
+  setup:
+    name: Setup shared infra + Packer image
+    runs-on: ubuntu-latest
+    outputs:
+      resource_group: ${{ env.RESOURCE_GROUP }}
+      gallery_name:   ${{ env.GALLERY_NAME }}
+      image_name:     ${{ env.IMAGE_NAME }}
+    env:
+      TENANT_ID:       "${{ secrets.TENANT_ID }}"
+      SUBSCRIPTION_ID: "${{ secrets.SUBSCRIPTION_ID }}"
+      CLIENT_ID:       "${{ secrets.CLIENT_ID }}"
+      CLIENT_SECRET:   "${{ secrets.CLIENT_SECRET }}"
+      RESOURCE_GROUP:  "azman-mwt-${{ github.run_id }}"
+      GALLERY_NAME:    "azmanmwt${{ github.run_id }}gallery"
+      IMAGE_NAME:      "azman-mwt-${{ github.run_id }}-image"
+      # Build-only VNet/NSG: used by Packer to bake the image. Shards never
+      # touch these; each shard provisions its own per-region networking.
+      VNET_NAME:       "azman-mwt-${{ github.run_id }}-build-vnet"
+      SUBNET_NAME:     "default"
+      NSG_NAME:        "azman-mwt-${{ github.run_id }}-build-nsg"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1"
+
+      - name: Ensure base image exists
+        # First-run bootstrap for the long-lived base SIG image (see
+        # scripts/ensure_base_image.sh). Idempotent: a no-op on every
+        # subsequent dispatch.
+        run: |
+          az login --service-principal -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
+          bash "${GITHUB_WORKSPACE}/scripts/ensure_base_image.sh"
+
+      - name: Provision RG, build VNet/NSG, gallery
+        run: |
+          az login --service-principal -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
+          az group create                -g "$RESOURCE_GROUP" -l "$HOME_LOCATION" \
+              --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com"
+          az group wait                  -g "$RESOURCE_GROUP" --created
+          az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -l "$HOME_LOCATION"
+          az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" \
+              -p "canonical" -f "0001-com-ubuntu-server-jammy" -s "22_04-lts-gen2" \
+              --os-type linux --hyper-v-generation V2 -l "$HOME_LOCATION"
+          az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME" -l "$HOME_LOCATION"
+          az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" \
+              --nsg-name "$NSG_NAME" --priority 101 \
+              --source-address-prefixes "AzureCloud" --destination-port-ranges 22
+          az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" \
+              -l "$HOME_LOCATION" --subnet-name "$SUBNET_NAME"
+          az network vnet subnet update  -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" \
+              --vnet-name "$VNET_NAME" --network-security-group "$NSG_NAME"
+
+      - name: Install Packer
+        run: |
+          curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+          sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+          sudo apt-get update && sudo apt-get install packer
+
+      - name: Build Packer image
+        # Per-run image derives from the long-lived base image (refresh
+        # via refresh-base-image.yml). The base bakes Julia + apt deps +
+        # AzManagers' Julia deps precompiled, so this step only swaps
+        # AzManagers to the dispatched SHA and writes templates.jl.
+        run: |
+          packer init ${GITHUB_WORKSPACE}/test/image.pkr.hcl
+          packer build -color=false -timestamp-ui \
+            -var "subscription_id=${SUBSCRIPTION_ID}" \
+            -var "tenant_id=${TENANT_ID}" \
+            -var "client_id=${CLIENT_ID}" \
+            -var "client_secret=${CLIENT_SECRET}" \
+            -var "resource_group=${RESOURCE_GROUP}" \
+            -var "image_name=${IMAGE_NAME}" \
+            -var "virtual_network=${VNET_NAME}" \
+            -var "virtual_subnet=${SUBNET_NAME}" \
+            -var "gallery=${GALLERY_NAME}" \
+            -var "azmanagers_version=${{ github.event.pull_request.head.sha || github.sha }}" \
+            -var "azmanagers_repo=https://github.com/${{ github.repository }}.git" \
+            ${GITHUB_WORKSPACE}/test/image.pkr.hcl
+
+  test:
+    name: SKU ${{ matrix.sku }} (${{ matrix.location }})
+    needs: setup
+    runs-on: ubuntu-latest
+    # Per-shard ceiling. Spot allocation for HPC SKUs (HC, HBv*) in
+    # popular regions can sit in Azure's queue indefinitely waiting for
+    # capacity; GHA's default job timeout is 6h, so without this a single
+    # shard can burn the whole workflow budget. 60 min is ample for a
+    # healthy run (~20-30 min: coordinator boot + ppi=1/sockets/numa/2*
+    # numa sweep + teardown), so this only fires when the SKU genuinely
+    # has no capacity.
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      # Shards run sequentially so peak spot vCPU consumption is the size of
+      # the largest shard, not the sum. Bumping to >1 multiplies the spot
+      # quota you need by the parallelism. Keep at 1 unless you have
+      # plenty of regional spot headroom.
+      max-parallel: 1
+      matrix:
+        include:
+          # SKU matrix - just (sku, slug, location). The test derives all
+          # placement expectations from the SKU's own runtime topology;
+          # see run_pinning_matrix_scenario in test/multi_worker_test.jl.
+          # Nothing here hardcodes NUMA / socket counts.
+          #
+          # Per-shard (sku, slug, location, spot). The `spot` knob lets
+          # individual shards opt out of spot pricing when only regular
+          # quota is available (e.g. HBv5 in southcentralus). HC44rs and
+          # HB120v3 stay on spot (cheaper, no regular quota assumed);
+          # HBv5 uses regular priority. The HBv5 shard requires the base
+          # image to be replicated to South Central US - see
+          # `replication_regions` in test/base_image.pkr.hcl. Run
+          # refresh-base-image.yml after changing replication regions.
+          - sku:      "Standard_HC44rs"        # 44c Intel Skylake-SP HPC
+            slug:     "hc44rs"
+            location: "eastus"
+            spot:     "true"
+          - sku:      "Standard_E64s_v3"       # 64c Intel Broadwell
+            slug:     "e64sv3"
+            location: "eastus"
+            spot:     "true"
+          - sku:      "Standard_HB120rs_v3"    # 120c AMD Milan-X
+            slug:     "hb120v3"
+            location: "eastus"
+            spot:     "true"
+          - sku:      "Standard_HB368rs_v5"    # 368c AMD Turin-HBM
+            slug:     "hb368v5"
+            location: "southcentralus"
+            spot:     "false"
+          # ---------- larger SKUs disabled to fit a 174-vCPU spot budget ----------
+          # - sku:      "Standard_HB176rs_v4"    # 176c AMD Genoa-X
+          #   slug:     "hb176v4"
+          #   location: "eastus"
+          # - sku:      "Standard_HB368rs_v5"    # 368c AMD Turin-HBM
+          #   slug:     "hb368v5"
+          #   location: "southcentralus"        # also re-add to replication_regions
+    env:
+      TENANT_ID:       "${{ secrets.TENANT_ID }}"
+      SUBSCRIPTION_ID: "${{ secrets.SUBSCRIPTION_ID }}"
+      CLIENT_ID:       "${{ secrets.CLIENT_ID }}"
+      CLIENT_SECRET:   "${{ secrets.CLIENT_SECRET }}"
+      RESOURCE_GROUP:  "${{ needs.setup.outputs.resource_group }}"
+      GALLERY_NAME:    "${{ needs.setup.outputs.gallery_name }}"
+      IMAGE_NAME:      "${{ needs.setup.outputs.image_name }}"
+      LOCATION:        "${{ matrix.location }}"
+      # Per-shard networking: VNet/NSG live in the shard's region, named so
+      # multiple shards in different regions don't collide inside one RG.
+      VNET_NAME:       "azman-mwt-${{ github.run_id }}-${{ matrix.slug }}-vnet"
+      SUBNET_NAME:     "default"
+      NSG_NAME:        "azman-mwt-${{ github.run_id }}-${{ matrix.slug }}-nsg"
+      COORD_VM:        "coord-${{ matrix.slug }}-${{ github.run_id }}"
+      COORD_PIP:       "coord-${{ matrix.slug }}-${{ github.run_id }}-pip"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create SSH key pair
+        run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
+
+      - name: Provision per-region VNet/NSG in ${{ matrix.location }}
+        run: |
+          az login --service-principal -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
+          az network nsg create     -g "$RESOURCE_GROUP" -n "$NSG_NAME" -l "$LOCATION"
+          az network nsg rule create -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" \
+              --nsg-name "$NSG_NAME" --priority 101 \
+              --source-address-prefixes "AzureCloud" --destination-port-ranges 22
+          az network vnet create    -g "$RESOURCE_GROUP" -n "$VNET_NAME" \
+              -l "$LOCATION" --subnet-name "$SUBNET_NAME"
+          az network vnet subnet update -g "$RESOURCE_GROUP" -n "$SUBNET_NAME" \
+              --vnet-name "$VNET_NAME" --network-security-group "$NSG_NAME"
+
+      - name: Create coordinator VM
+        # On-demand (NOT spot). The coordinator drives the per-shard test
+        # over SSH; a mid-test eviction would delete the VM and kill the
+        # ssh session (broken pipe), failing the shard for a reason
+        # unrelated to what we are testing. Worker scale-sets in the shard
+        # still use spot (that is the actual code-under-test path).
+        # --size is explicit because the az CLI default (Standard_DS1_v2)
+        # is frequently capacity-constrained in eastus; DSv3 has plenty of
+        # both quota and capacity in this region.
+        # Short step timeout: coordinator boot is on-demand DSv3, which
+        # allocates in seconds. Anything beyond ~10 min means the
+        # subscription has a capacity / quota / image-replication issue
+        # that's worth surfacing as a clear failure now rather than after
+        # 30+ min of silent hang.
+        timeout-minutes: 10
+        run: |
+          # Reference the SIG image-def explicitly (not the bare name).
+          # `az vm create --image $NAME` resolves bare names to managed
+          # images first; packer publishes both a managed image (single-
+          # region, in the setup job's HOME_LOCATION) AND a SIG image-
+          # version (replicated per test/image.pkr.hcl). The HBv5 shard
+          # runs in southcentralus where the managed image doesn't exist,
+          # so the create errors with "Image cannot be found in
+          # 'southcentralus' region". The full SIG resource ID forces
+          # az to use the SIG image-version, which IS replicated to the
+          # shard's region. Omitting `/versions/X` picks the latest.
+          az vm create \
+              -g "$RESOURCE_GROUP" -n "$COORD_VM" -l "$LOCATION" \
+              --image "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Compute/galleries/$GALLERY_NAME/images/$IMAGE_NAME" \
+              --size Standard_D2s_v3 \
+              --public-ip-sku Standard \
+              --public-ip-address "$COORD_PIP" \
+              --subnet "$SUBNET_NAME" --vnet-name "$VNET_NAME" --nsg "$NSG_NAME" \
+              --ssh-key-values @/home/runner/.ssh/azmanagers_rsa.pub \
+              --admin-username cvx
+
+      - name: Run test (basic + placement) for ${{ matrix.sku }}
+        # The ppi sweep provisions scale-sets at ppi=1/sockets/numa/2*numa.
+        # If the SKU is on spot and spot capacity isn't available in the
+        # shard's region (HPC SKUs are frequently capacity-constrained),
+        # addprocs waits inside the spinner indefinitely - Azure VMSS
+        # has no built-in allocation deadline. Cap the step so a single
+        # SKU with no capacity right now doesn't burn the whole shard
+        # budget on a wait that will never complete.
+        timeout-minutes: 45
+        env:
+          SKU:  "${{ matrix.sku }}"
+          SPOT: "${{ matrix.spot }}"
+        run: |
+          # Explicit pipefail so `ssh ... | tee log` exits non-zero when
+          # ssh (and therefore the remote julia) does. Without this the
+          # pipeline returns tee's exit code (always 0) and the shard
+          # passes even when the test errors - the "green on red" the user
+          # was seeing.
+          set -o pipefail
+
+          ipaddress=$(az network public-ip show -g "$RESOURCE_GROUP" -n "$COORD_PIP" \
+              | jq -r '.ipAddress')
+
+          # Seed the test config from the annotated template; the
+          # SECTION_FIELD env-var overrides fill in the REPLACE-ME values.
+          scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa \
+              test/multi_worker_test.toml test/multi_worker_test.jl \
+              cvx@$ipaddress:/home/cvx/
+
+          # Unquoted heredoc: $VARS expand on the runner; the resulting
+          # literal text is what executes on the coordinator.
+          ssh -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa \
+              cvx@$ipaddress bash -s <<EOF 2>&1 | tee mwt-${{ matrix.slug }}.log
+          set -euo pipefail
+          mkdir -p ~/.azmanagers
+          mv ~/multi_worker_test.toml ~/.azmanagers/multi_worker_test.toml
+          chmod 600 ~/.azmanagers/multi_worker_test.toml
+
+          export AZURE_SUBSCRIPTION_ID="$SUBSCRIPTION_ID"
+          export AZURE_RESOURCE_GROUP="$RESOURCE_GROUP"
+          export AZURE_TENANT_ID="$TENANT_ID"
+          export AZURE_CLIENT_ID="$CLIENT_ID"
+          export AZURE_CLIENT_SECRET="$CLIENT_SECRET"
+          export AZURE_VNET="$VNET_NAME"
+          export AZURE_SUBNET="$SUBNET_NAME"
+          export AZURE_GALLERY="$GALLERY_NAME"
+          export AZURE_IMAGE_NAME="$IMAGE_NAME"
+          export AZURE_LOCATION="$LOCATION"
+          export AZURE_SKU_NAME="$SKU"
+          export AZURE_SSH_USER="cvx"
+          export AZURE_SPOT="$SPOT"
+
+          # SCENARIOS_PLACEMENT triggers the pinning matrix in
+          # test/multi_worker_test.jl - probes the SKU's topology and
+          # sweeps ppi = 1 / sockets / numa / 2*numa, asserting per
+          # worker that the recorded cpu_set matches the planner and
+          # that the kernel taskset affinity matches the recorded
+          # cpu_set. No hardcoded counts.
+          export SCENARIOS_BASIC="false"
+          export SCENARIOS_PLACEMENT="true"
+          export SCENARIOS_MPI_NESTED="false"
+          export SCENARIOS_KEEP="false"
+
+          julia ~/multi_worker_test.jl ~/.azmanagers/multi_worker_test.toml
+          EOF
+
+          # Belt-and-braces: PIPESTATUS captures the exit code of the
+          # ssh process specifically. If pipefail is off (older bash, or
+          # a runner config tweak), this still propagates failure.
+          ssh_status=${PIPESTATUS[0]}
+          if [ "$ssh_status" -ne 0 ]; then
+              echo "::error::multi-worker test failed (ssh exit=$ssh_status)"
+              exit "$ssh_status"
+          fi
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mwt-${{ matrix.slug }}
+          path: mwt-${{ matrix.slug }}.log
+
+      - name: Delete coordinator VM
+        if: always()
+        run: |
+          az vm delete -g "$RESOURCE_GROUP" -n "$COORD_VM" --yes || true
+          az network public-ip delete -g "$RESOURCE_GROUP" -n "$COORD_PIP" || true
+
+  cleanup:
+    name: Cleanup RG
+    needs: [setup, test]
+    # Run whenever setup actually started (success or failure leaves resources
+    # behind). Skip only if setup was itself skipped/cancelled.
+    if: always() && needs.setup.result != 'skipped' && needs.setup.result != 'cancelled'
+    runs-on: ubuntu-latest
+    env:
+      TENANT_ID:       "${{ secrets.TENANT_ID }}"
+      CLIENT_ID:       "${{ secrets.CLIENT_ID }}"
+      CLIENT_SECRET:   "${{ secrets.CLIENT_SECRET }}"
+      # Compute the RG name directly rather than depending on a setup output,
+      # so cleanup works even when setup failed before emitting outputs.
+      RESOURCE_GROUP:  "azman-mwt-${{ github.run_id }}"
+    steps:
+      - name: Delete RG if it exists
+        run: |
+          az login --service-principal -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
+          if [ "$(az group exists -n "$RESOURCE_GROUP")" = "true" ]; then
+              az group delete -n "$RESOURCE_GROUP" --yes --no-wait
+          else
+              echo "RG $RESOURCE_GROUP does not exist; nothing to clean."
+          fi

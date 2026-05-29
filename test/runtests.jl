@@ -1,6 +1,9 @@
 using Distributed, AzManagers, Random, TOML, Test, HTTP, AzSessions, JSON, Pkg
 using MPI
 
+include("unit.jl")
+
+
 session = AzSession(;protocal=AzClientCredentials)
 
 azmanagers_pinfo = Pkg.project()
@@ -52,7 +55,7 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
         # this into a 4-hour 0/N hang when allocation stalls. Spot behavior
         # is exercised explicitly by the dedicated "addprocs, spot" and
         # "spot eviction" testsets below.
-        addprocs(templatename, ninstances;
+        addprocs(AzManager(), templatename, ninstances;
             waitfor = true,
             ppi,
             group,
