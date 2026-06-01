@@ -4,6 +4,8 @@
 ```@docs
 addprocs
 preempted
+worker_placement
+worker_placements
 ```
 
 ## Detached service

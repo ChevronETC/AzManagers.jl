@@ -153,11 +153,86 @@ wait(detached_job)
 rmproc(vm)
 ```
 
-# A note about MPI (experimental)
-We have experimental support for inter-node MPI communication.  In other words, we allow for each
-Julia worker to have its own MPI communicator.  For example, this is useful for interacting with
-Devito.jl, and where there are performance benefits to parallel work within a many-core
-VM via a mix of MPI and OpenMP.
+# Multiple workers per VM and automatic placement
+For many-core SKUs it is often useful to run several Julia workers on the
+same VM so each worker owns a distinct NUMA domain. Pass `ppi`
+(procs-per-instance) to `addprocs` and AzManagers handles topology
+detection and CPU pinning automatically:
+```julia
+addprocs("cbox176", 2; ppi = 4)
+```
+This provisions 2 VMs and starts 4 Julia workers on each. On every VM,
+AzManagers detects the topology using [Hwloc.jl](https://github.com/JuliaParallel/Hwloc.jl)
+(which is a direct dependency), falling back to `lscpu --json`, then
+`numactl --hardware`, then legacy `lscpu -p` if the Hwloc probe fails. It
+then plans one `WorkerPlacement` per local worker. Each worker gets:
+
+  * A disjoint physical-core `cpu_set`
+  * `JULIA_NUM_THREADS` and `OMP_NUM_THREADS` matching the assigned core count
+  * `OMP_PROC_BIND=close`, `OMP_PLACES=cores`
+  * A `numactl --physcpubind=... --membind=...` prefix on its launch command
+    when `numactl` is available
+  * In-process Julia thread pinning via [ThreadPinning.jl](https://github.com/carstenbauer/ThreadPinning.jl)
+    (also a direct dependency), layered on top of the OS-level `numactl`
+    pinning
+
+You can inspect the resulting placement from the master:
+```julia
+worker_placement(pid)   # Dict for one worker
+worker_placements()     # Dict{pid, Dict} for all workers
+```
+Returned metadata includes `cpu_set`, `numa_node`, `socket`, `julia_threads`,
+`omp_threads`, and `pinning_backend` (`"numactl"`, `"ThreadPinning"`, or
+`"none"`).
+
+The placement policy is:
+
+  * `ppi == 1`: one worker owns the whole VM.
+  * `ppi == number_of_sockets`: one worker per socket.
+  * `ppi <= number_of_numa_nodes`: workers spread across NUMA domains to
+    maximize memory bandwidth.
+  * `ppi > number_of_numa_nodes`: NUMA domains subdivide into contiguous
+    physical-core ranges.
+  * `ppi > physical_cores`: error.
+
+If `ppi` does not divide cleanly into the physical cores AzManagers
+distributes cores as evenly as possible and emits a warning.
+
+# MPI workers
+AzManagers supports running each Julia worker as the head of its own MPI
+communicator via the `mpi_ranks_per_worker` keyword argument. This is useful
+when combining Julia distributed orchestration with libraries that internally
+parallelize with MPI (Devito.jl, PETSc, etc.).
+
+For a single Julia worker per VM, AzManagers launches one `mpirun`:
+```julia
+addprocs("cbox44", 4; mpi_ranks_per_worker = 4)   # 4 VMs * 4 ranks
+```
+
+When combined with `ppi > 1`, AzManagers launches one `mpirun` per Julia
+worker, each constrained to that worker's `cpu_set`:
+```julia
+addprocs("cbox176", 1; ppi = 4, mpi_ranks_per_worker = 4)
+```
+The above provisions 1 VM, plans 4 disjoint Julia-worker placements, and runs
+4 parallel `mpirun` invocations on the VM, each spawning 4 MPI ranks pinned
+inside that worker's CPU set. Each Julia worker therefore sees a 4-rank
+`MPI.COMM_WORLD`. The MPI extension (`MPIExt`) activates automatically when
+`MPI.jl` is loaded on the worker; the parallel-launch path requires Open MPI
+because it emits `--cpu-set <list> --bind-to cpu-list:ordered`.
+
+# Optional package extension
+AzManagers ships a single weak-dependency package extension that activates
+when its package is loaded:
+
+  * **MPIExt** ([MPI.jl](https://github.com/JuliaParallel/MPI.jl)) – provides
+    the `azure_worker_mpi` entry point used when `mpi_ranks_per_worker > 0`.
+
+MPI is not a hard requirement; AzManagers degrades gracefully when MPI.jl
+is not loaded. [Hwloc.jl](https://github.com/JuliaParallel/Hwloc.jl) and
+[ThreadPinning.jl](https://github.com/carstenbauer/ThreadPinning.jl) used
+to be optional extensions but are now direct dependencies, so topology
+detection and in-process thread pinning are always available.
 
 # Custom environments
 AzManagers can create an on-the-fly custom Julia software environment for the workers.
@@ -174,3 +249,14 @@ addprocs("cbox16",2;customenv=true)
 Now, when worker VMs are initialized, they will have the software stack
 defined by the current project.  Please note that this can add significant
 overhead to the boot-time of the VMs.
+
+# Validating your setup
+A self-contained multi-worker test is provided at `test/multi_worker_test.jl`.
+It exercises `addprocs` end-to-end against a real Azure subscription, verifies
+that worker placement metadata matches `taskset -pc` on the workers, and
+optionally exercises the nested-MPI launch path. Configuration is driven by a
+TOML file; an annotated template is checked in at `test/multi_worker_test.toml`.
+See the header of `test/multi_worker_test.jl` for the full prerequisite list
+and guidance on running it from inside an Azure VNet (the launcher must be
+routable from the worker subnet — typically a small Standard_B2s controller
+VM in the same VNet).
