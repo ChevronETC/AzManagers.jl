@@ -33,17 +33,19 @@ jobs:
       SUBNET_NAME: "default"
       COMMIT_SHA: "${{ github.sha }}"
     steps:
-      - uses: actions/checkout@v3
-      - uses: julia-actions/setup-julia@v1
+      - uses: actions/checkout@v6
+      - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
 
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
 
+      - uses: azure/login@v3
+        with:
+          creds: '{"clientId":"${{ secrets.CLIENT_ID }}","clientSecret":"${{ secrets.CLIENT_SECRET }}","subscriptionId":"${{ secrets.SUBSCRIPTION_ID }}","tenantId":"${{ secrets.TENANT_ID }}"}'
       - name: Create Prereq. Azure Resources
         run: |
-          az login --service-principal   -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
           az group create                -g "$RESOURCE_GROUP" -l southcentralus --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com"
           az group wait                  -g "$RESOURCE_GROUP" --created 
           az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
@@ -98,9 +100,10 @@ jobs:
           echo "scp-ing the Coverage Report..."
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/lcov.info lcov.info
 
-      - uses: codecov/codecov-action@v1
+      - uses: codecov/codecov-action@v6
         with:
           file: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Delete CI Resource Group
         run: |
@@ -110,8 +113,8 @@ jobs:
     name: Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: julia-actions/setup-julia@v1
+      - uses: actions/checkout@v6
+      - uses: julia-actions/setup-julia@v3
         with:
           version: '1'
       - run: |
