@@ -51,14 +51,6 @@ jobs:
         with:
           version: "1"
 
-      - name: Ensure base image exists
-        # First-run bootstrap for the long-lived base SIG image (see
-        # scripts/ensure_base_image.sh). Idempotent: a no-op on every
-        # subsequent dispatch.
-        run: |
-          az login --service-principal -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
-          bash "${GITHUB_WORKSPACE}/scripts/ensure_base_image.sh"
-
       - name: Provision RG, build VNet/NSG, gallery
         run: |
           az login --service-principal -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
@@ -85,10 +77,10 @@ jobs:
           sudo apt-get update && sudo apt-get install packer
 
       - name: Build Packer image
-        # Per-run image derives from the long-lived base image (refresh
-        # via refresh-base-image.yml). The base bakes Julia + apt deps +
-        # AzManagers' Julia deps precompiled, so this step only swaps
-        # AzManagers to the dispatched SHA and writes templates.jl.
+        # Single-stage build in HOME_LOCATION (apt + Julia + AzManagers at
+        # the dispatched SHA + templates.jl), replicated to every region
+        # the matrix needs so each shard can boot its coordinator VM from
+        # this image without rebuilding.
         run: |
           packer init ${GITHUB_WORKSPACE}/test/image.pkr.hcl
           packer build -color=false -timestamp-ui \
@@ -103,6 +95,8 @@ jobs:
             -var "gallery=${GALLERY_NAME}" \
             -var "azmanagers_version=${{ github.event.pull_request.head.sha || github.sha }}" \
             -var "azmanagers_repo=https://github.com/${{ github.repository }}.git" \
+            -var "location=${HOME_LOCATION}" \
+            -var "replication_regions=eastus,southcentralus" \
             ${GITHUB_WORKSPACE}/test/image.pkr.hcl
 
   test:
@@ -135,10 +129,10 @@ jobs:
           # individual shards opt out of spot pricing when only regular
           # quota is available (e.g. HBv5 in southcentralus). HC44rs and
           # HB120v3 stay on spot (cheaper, no regular quota assumed);
-          # HBv5 uses regular priority. The HBv5 shard requires the base
-          # image to be replicated to South Central US - see
-          # `replication_regions` in test/base_image.pkr.hcl. Run
-          # refresh-base-image.yml after changing replication regions.
+          # HBv5 uses regular priority. The HBv5 shard requires the SIG
+          # image to be replicated to South Central US - the `Build Packer
+          # image` step above passes `replication_regions=eastus,
+          # southcentralus`; add a region there before adding a shard in it.
           - sku:      "Standard_HC44rs"        # 44c Intel Skylake-SP HPC
             slug:     "hc44rs"
             location: "eastus"
