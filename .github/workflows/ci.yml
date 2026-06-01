@@ -50,16 +50,6 @@ jobs:
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
 
-      - name: Ensure base image exists
-        # First-run bootstrap: if the long-lived base SIG image is missing,
-        # build it now (~10min). Idempotent - skips on every subsequent
-        # CI run. Avoids the chicken-and-egg where workflow_dispatch on
-        # refresh-base-image.yml can't be used until the workflow file
-        # itself reaches the default branch.
-        run: |
-          az login --service-principal -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
-          bash "${GITHUB_WORKSPACE}/scripts/ensure_base_image.sh"
-
       - name: Create Prereq. Azure Resources
         run: |
           az login --service-principal   -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
@@ -79,11 +69,11 @@ jobs:
           sudo apt-get update && sudo apt-get install packer
 
       - name: Build Packer Image
-        # Per-run image is derived from the long-lived base image
-        # (see .github/workflows/refresh-base-image.yml). All apt deps,
-        # Julia, and the AzManagers dep tree are already precompiled in
-        # the base; this step just swaps AzManagers to the test SHA and
-        # writes the per-run templates_scaleset.json.
+        # Single-stage build from the Ubuntu marketplace image: apt deps +
+        # Julia + AzManagers (at the PR SHA) + templates_scaleset.json, all
+        # baked in and pushed to a per-run SIG image. SIG replication is
+        # the dominant wall-clock cost; splitting into base+per-run saves
+        # nothing meaningful.
         run: |
           packer init ${GITHUB_WORKSPACE}/test/image.pkr.hcl
           packer build -color=false -timestamp-ui \
@@ -100,6 +90,7 @@ jobs:
             -var "azmanagers_repo=https://github.com/${{ github.repository }}.git" \
             -var "location=${LOCATION}" \
             -var "vm_size=Standard_D4s_v3" \
+            -var "replication_regions=${LOCATION}" \
             ${GITHUB_WORKSPACE}/test/image.pkr.hcl
 
       - name: Create coordinator VM
