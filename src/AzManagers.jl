@@ -754,7 +754,15 @@ function nthreads_filter(nthreads)
     nthreads_default = length(_nthreads) > 0 ? parse(Int, _nthreads[1]) : 1
     nthreads_interactive = length(_nthreads) > 1 ? parse(Int, _nthreads[2]) : 0
 
-    nthreads_interactive > 0 ? string("$nthreads_default,$nthreads_interactive") : string(nthreads_default)
+    # On Julia 1.9+ keep the explicit "N,I" form even when I==0. Collapsing
+    # to bare "N" is only safe for pre-1.9 (which has no interactive pool):
+    # Julia 1.11+ silently auto-adds an interactive thread when -t is a
+    # bare N, which would override an explicit request for zero interactive
+    # threads.
+    if VERSION >= v"1.9"
+        return "$nthreads_default,$nthreads_interactive"
+    end
+    nthreads_interactive > 0 ? "$nthreads_default,$nthreads_interactive" : string(nthreads_default)
 end
 
 """
@@ -1000,7 +1008,17 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     end
 
     try
-        remote_do(exit, id, 42)
+        # Bypass atexit hooks. `exit(42)` first runs `jl_atexit_hook`, which
+        # in turn waits on every registered atexit callback. On customenv
+        # workers an in-flight `Pkg.precompile()` task leaves a hook that
+        # never returns, so `exit(42)` deadlocks and the master's `rmprocs`
+        # blocks forever on the worker's TCP connection. Calling jl_exit
+        # directly terminates the process immediately. Safe here because
+        # the worker VM gets deleted by scaleset_pruning anyway; there's
+        # nothing to gracefully clean up on the worker side.
+        remote_do(id) do
+            ccall(:jl_exit, Cvoid, (Int32,), Int32(42))
+        end
     catch
     end
     @debug "kill, done remote_do"
@@ -2210,25 +2228,32 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     ncores_available - (ncores_per_machine * δn), ncores_spot_available - (ncores_per_machine * δn)
 end
 
-function nphysical_cores(template::Dict; session=AzSession())
+function nphysical_cores(template::AbstractDict; session=AzSession())
     ssid = template["subscriptionid"]
     region = template["value"]["location"]
     sku_name = template["value"]["properties"]["hardwareProfile"]["vmSize"]
 
-    _r = HTTP.request("GET", 
-        "https://management.azure.com/subscriptions/$ssid/providers/Microsoft.Compute/skus?api-version=2022-11-01", 
+    _r = HTTP.request("GET",
+        "https://management.azure.com/subscriptions/$ssid/providers/Microsoft.Compute/skus?api-version=2022-11-01",
         ["Authorization" => "Bearer $(token(session))"])
     r = JSON.parse(String(_r.body))
 
-
     filtered_skus = filter(sku -> sku["name"] == sku_name && haskey(sku, "capabilities") && any(location -> location == region, sku["locations"]), r["value"])
+    isempty(filtered_skus) && error("SKU $sku_name not found in region $region")
+    capabilities = filtered_skus[1]["capabilities"]
 
-    vCPU_details = [(cap["value"], any(cap -> cap["name"] == "HyperThreadingEnabled" && cap["value"] == "true", sku["capabilities"])) for sku in filtered_skus for cap in sku["capabilities"] if cap["name"] == "vCPUs"]
-    hyperthreading = vCPU_details[1][2]
-    vCPU = vCPU_details[1][1]
+    # Azure's compute SKUs API exposes hyperthreading via the documented
+    # `vCPUsPerCore` capability (1 = HT off, 2 = HT on); the `HyperThreadingEnabled`
+    # capability is not reliably emitted for every SKU family (notably the v3
+    # family, where it is absent), which would silently return vCPU as if HT
+    # were disabled.
+    cap_value(name, default) = let k = findfirst(c -> c["name"] == name, capabilities)
+        k === nothing ? default : capabilities[k]["value"]
+    end
 
-    # Number of physical cores
-    pCPU = hyperthreading ? div(parse(Int,vCPU),2) : parse(Int,vCPU)
+    vCPU = parse(Int, cap_value("vCPUs", "1"))
+    vcpus_per_core = parse(Int, cap_value("vCPUsPerCore", "1"))
+    div(vCPU, vcpus_per_core)
 end
 
 function nphysical_cores(template::AbstractString; session=AzSession())
