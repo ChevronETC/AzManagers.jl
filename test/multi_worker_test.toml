@@ -1,0 +1,122 @@
+# AzManagers multi-worker test configuration.
+#
+# Copy this file to ~/.azmanagers/multi_worker_test.toml (or anywhere; pass
+# the path as the first CLI arg to test/multi_worker_test.jl). Fill in the
+# REPLACE-ME placeholders with values from your Azure subscription. The
+# script reads it at startup; any field may be overridden at runtime with
+# an env var named SECTION_FIELD in upper-snake-case,
+# e.g. AZURE_SUBSCRIPTION_ID=...
+#
+# Permissions: this file holds client_secret. Set it to 0600
+# (--init does this automatically when the script writes the template).
+
+[azure]
+# Subscription that owns the scale set, VNet, and image gallery.
+# Find it with: az account show --query id -o tsv
+subscription_id = "REPLACE-ME"
+
+# Resource group that will hold the temporary scale sets. The VNet, subnet,
+# and gallery may live elsewhere if you also set the resourcegroup_vnet /
+# resourcegroup_image template parameters, but for this test it is
+# simplest to put everything in one RG.
+resource_group = "REPLACE-ME"
+
+# Azure AD tenant ID for the service principal.
+# az account show --query tenantId -o tsv
+tenant_id = "REPLACE-ME"
+
+# Service principal credentials. The SP must have Contributor (or equivalent)
+# on `resource_group`. Create one with:
+#   az ad sp create-for-rbac --name azmanagers-multi-worker-test \
+#       --role Contributor \
+#       --scopes /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RESOURCE_GROUP>
+# The output gives you appId (= client_id) and password (= client_secret).
+client_id     = "REPLACE-ME"
+client_secret = "REPLACE-ME"
+
+# VNet + subnet that the worker NICs attach to. The host running this script
+# must be able to reach worker VMs on the subnet for the Distributed.jl
+# back-channel to work. If you run from a workstation outside the VNet,
+# peer the VNet or use a jumpbox / public IP.
+vnet   = "REPLACE-ME"
+subnet = "REPLACE-ME"
+
+# Shared image gallery containing the worker image. The image must have:
+#   * Julia installed at the version your `exename` resolves to
+#   * AzManagers precompiled (or set customenv=true to ship it each time)
+#   * numactl + lscpu (for topology detection)
+#   * Open MPI's mpirun if you intend to run the mpi_nested scenario.
+#     The script emits `--cpu-set <list> --bind-to cpu-list:ordered`,
+#     which is Open-MPI-specific.
+gallery    = "REPLACE-ME"
+image_name = "REPLACE-ME"
+
+# Azure region. Must match the region of resource_group / VNet / gallery.
+location = "southcentralus"
+
+# VM SKU for the scale set.
+#   * For the `basic` scenario, a tiny SKU like Standard_D4s_v5 is fine.
+#   * For `placement` and `mpi_nested`, pick something with multiple NUMA
+#     nodes so you actually exercise the planner: e.g. Standard_HB176rs_v4
+#     (176 cores, 4 NUMA nodes), Standard_E96-48ds_v5, Standard_HC44rs.
+sku_name = "Standard_D4s_v5"
+
+# Admin user name baked into the image (used as the SSH user and as the
+# account that runs the cloud-init shell hop).
+ssh_user = "cvx"
+
+# Use Azure Spot VMs for the worker scale set. Spot is dramatically cheaper
+# (often <20% of on-demand) but VMs can be evicted at any time, and HPC SKU
+# spot capacity is patchy in many regions. Set to false to fall back to
+# regular priority.
+spot = true
+
+[scenarios]
+# Each true scenario provisions its own scale set, runs assertions, and
+# tears it down. The three scenarios are independent; you can run any
+# subset in a single invocation.
+
+# Connectivity check: n=1 VM, ppi=1. Verifies the scale set comes up and
+# a Julia worker registers. Cheapest scenario; safe to leave on.
+basic = true
+
+# Placement verification: n=1 VM, ppi Julia workers per VM.
+# Asserts cpu_sets are disjoint, dumps cpu_set / numa_node / socket /
+# pinning_backend per worker, and runs `taskset -pc` on each worker to
+# confirm the kernel affinity matches the planner's expectation.
+# Pick a multi-NUMA SKU above for this to be meaningful.
+placement = false
+
+# Nested MPI: ppi Julia workers, each backed by mpi_ranks_per_worker
+# MPI ranks pinned inside the worker's CPU set. Requires Open MPI on the
+# image (see notes above).
+mpi_nested = false
+
+# Procs-per-instance: Julia workers per VM. Used by placement and mpi_nested.
+ppi = 2
+
+# Used by mpi_nested only.
+mpi_ranks_per_worker = 2
+
+# Extra flags appended after `--cpu-set <list> --bind-to cpu-list:ordered`.
+# Leave empty unless you know your mpirun needs more. Avoid adding another
+# --bind-to here, since Open MPI rejects duplicate binding directives.
+mpi_flags = ""
+
+# Optional per-SKU topology assertions for the `placement` scenario.
+# Each is the number of *distinct* values the planner is expected to assign
+# across ppi Julia workers. 0 disables the check. Useful in CI:
+# set these per matrix shard so each SKU validates its own topology.
+#
+# Examples (ppi=2):
+#   Standard_HC44rs       (1 socket, 2 NUMA):   expected_numa_nodes=2, expected_sockets=1
+#   Standard_HB120rs_v3   (1 socket, 4 NUMA):   expected_numa_nodes=2, expected_sockets=1
+#   Standard_E64s_v3      (2 socket, 2 NUMA):   expected_numa_nodes=2, expected_sockets=2
+expected_numa_nodes = 0
+expected_sockets    = 0
+
+# Skip rmprocs / rmgroup teardown so you can SSH into the workers and
+# inspect them. You are responsible for `az vmss delete`-ing the leftover
+# scale set; see the header comment in multi_worker_test.jl for the
+# one-liner.
+keep = false

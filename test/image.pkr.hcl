@@ -1,3 +1,9 @@
+# Single-stage Packer build. Sources from the Ubuntu 22.04 marketplace
+# image, installs apt deps + Julia + AzManagers + templates_scaleset.json,
+# and pushes one per-run SIG image. SIG replication is the dominant cost
+# of any CI run, so splitting this into a base image + per-run swap layer
+# saves no real wall-clock and is not worth the chicken-and-egg.
+
 variable "subscription_id" {
     default = "subscriptionid"
 }
@@ -43,7 +49,7 @@ variable "julia_version_major" {
 }
 
 variable "julia_version_minor" {
-    default = "8"
+    default = "12"
 }
 
 variable "julia_version_patch" {
@@ -52,6 +58,29 @@ variable "julia_version_patch" {
 
 variable "azmanagers_version" {
     default = "master"
+}
+
+# Git URL the build VM clones AzManagers from. CI workflows override this
+# via `-var` so the URL matches `${{ github.repository }}` of the run.
+variable "azmanagers_repo" {
+    default = "https://github.com/ChevronETC/AzManagers.jl.git"
+}
+
+# Region and VM SKU the baked-in test/templates.jl request. Override via
+# `-var` so the same Packer file builds images for any region/SKU pair.
+variable "location" {
+    default = "southcentralus"
+}
+
+variable "vm_size" {
+    default = "Standard_D4s_v3"
+}
+
+# SIG regions to replicate the produced image to. Comma-separated string
+# (HCL splits internally). ci.yml passes a single region matching
+# $LOCATION; multi-worker-test.yml passes its matrix regions.
+variable "replication_regions" {
+    default = "South Central US"
 }
 
 packer {
@@ -69,7 +98,7 @@ source "azure-arm" "cofii" {
     client_id = var.client_id
     client_secret = var.client_secret
     os_type = "Linux"
-    vm_size = "Standard_D8s_v3"
+    vm_size = var.vm_size
     image_publisher = "canonical"
     image_offer = "0001-com-ubuntu-server-jammy"
     image_sku = "22_04-lts-gen2"
@@ -78,7 +107,7 @@ source "azure-arm" "cofii" {
         gallery_name = var.gallery
         image_name = var.image_name
         image_version = var.image_version
-        replication_regions = ["South Central US"]
+        replication_regions = split(",", var.replication_regions)
     }
     shared_image_gallery_timeout = "120m"
     build_resource_group_name = var.resource_group
@@ -139,7 +168,7 @@ build {
             "echo \"**** installing julia packages ****\"",
             "julia -e 'using Pkg; Pkg.add([\"AzSessions\", \"Coverage\", \"Distributed\", \"HTTP\", \"JSON\", \"MPI\", \"MPIPreferences\", \"Random\", \"Test\"])'",
             "julia -e 'using MPIPreferences; MPIPreferences.use_jll_binary(\"MPICH_jll\")'",
-            "julia -e 'using Pkg; Pkg.add(PackageSpec(name=\"AzManagers\", rev=\"${var.azmanagers_version}\"))'"
+            "julia -e 'using Pkg; Pkg.add(PackageSpec(url=\"${var.azmanagers_repo}\", rev=\"${var.azmanagers_version}\"))'"
         ]
     }
 
@@ -160,6 +189,8 @@ build {
             "export VNET_NAME=\"${var.virtual_network}\"",
             "export SUBNET_NAME=\"${var.virtual_subnet}\"",
             "export GALLERY_NAME=\"${var.gallery}\"",
+            "export LOCATION=\"${var.location}\"",
+            "export VM_SIZE=\"${var.vm_size}\"",
             "julia /tmp/templates.jl"
         ]
     }
