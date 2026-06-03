@@ -16,7 +16,7 @@ end
 length(workers()) # 10
 
 # add 10 more instances, waiting for the cluster to be stable before returning control to the caller.
-addprocs("cbox08", 10; waitfor=true)
+addprocs(AzManager(), "cbox08", 10; waitfor=true)
 length(workers()) # 20
 
 # remove the first 5 instances
@@ -29,7 +29,7 @@ rmprocs(workers())
 ?addprocs
 
 # make a scale-set from SPOT VMs
-addprocs("cbox08", 10; group="myspotgroup", spot=true)
+addprocs(AzManager(), "cbox08", 10; group="myspotgroup", spot=true)
 
 # wait for at-least one worker to be available
 while nprocs() - nworkers() == 0; yield(); end
