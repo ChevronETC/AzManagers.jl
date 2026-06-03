@@ -289,6 +289,7 @@ end
 scalesets(manager::AzManager) = isdefined(manager, :scalesets) ? manager.scalesets : Dict{ScaleSet,Int}()
 scalesets() = scalesets(azmanager())
 pending_down(manager::AzManager) = isdefined(manager, :pending_down) ? manager.pending_down : Dict{ScaleSet,Set{String}}()
+pending_down(manager::AzManager, scaleset::ScaleSet) = get(pending_down(manager), scaleset, Set{String}())
 
 function delete_scaleset(manager, scaleset)
     @debug "deleting scaleset, $scaleset"
@@ -303,17 +304,22 @@ end
 function delete_empty_scalesets()
     manager = azmanager()
     lock(manager.lock)
-    _scalesets = scalesets(manager)
-    for (scaleset, capacity) in _scalesets
-        if capacity == 0
-            # double-check capacity in case there is client/server mis-match
-            _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+    try
+        _scalesets = scalesets(manager)
+        for (scaleset, capacity) in _scalesets
+            if capacity == 0
+                # double-check capacity in case there is client/server mis-match
+                _scalesets[scaleset] = scaleset_capacity(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, manager.nretry, manager.verbose)
+            end
+            if _scalesets[scaleset] == 0
+                delete_scaleset(manager, scaleset)
+            end
         end
-        if _scalesets[scaleset] == 0
-            delete_scaleset(manager, scaleset)
-        end
+    catch e
+        throw(e)
+    finally
+        unlock(manager.lock)
     end
-    unlock(manager.lock)
 end
 
 function delete_pending_down_vms()
@@ -326,6 +332,7 @@ function delete_pending_down_vms()
             delete_vms(manager, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, ids, manager.nretry, manager.verbose)
             new_capacity = max(0, scalesets(manager)[scaleset] - length(ids))
             scalesets(manager)[scaleset] = new_capacity
+            @debug "new scaleset capacity for $scaleset is $new_capacity"
             delete!(pending_down(manager), scaleset)
         catch e
             if status(e) == 404
@@ -361,8 +368,9 @@ function scaleset_sync()
     catch e
         @error "scaleset syncing error"
         logerror(e, Logging.Debug)
+    finally
+        unlock(manager.lock)
     end
-    unlock(manager.lock)
 end
 
 function prune_cluster()
@@ -399,19 +407,17 @@ function prune_cluster()
         end
     end
 
-    # remove from list workers that are already scheduled for removal from the cluster
-    for id in pending_down(manager)
-        delete!(wrkrs, id)
-    end
-
-    # remove from list workers that are in TERMINATED or TERMINATING cluster state
-    for (id,wrkr) in Distributed.map_pid_wrkr
-        if isdefined(wrkr, :state) && wrkr.state ∈ (Distributed.W_TERMINATED, Distributed.W_TERMINATING)
-            delete!(wrkrs, id)
+    # remove from list workers that are already scheduled for removal from the cluster via the pending_down set
+    for (scaleset, instanceids) in pending_down(manager)
+        for (pid, wrkr) in wrkrs
+            _scaleset = ScaleSet(get(wrkr, "subscriptionid", ""), get(wrkr, "resourcegroup", ""), get(wrkr, "scalesetname", ""))
+            if _scaleset == scaleset && get(wrkr, "instanceid", "") ∈ instanceids
+                delete!(wrkrs, pid)
+            end
         end
     end
 
-    # remove from list workers that are in Distributed's deletion pool
+    # remove from list workers that are in TERMINATED or TERMINATING cluster state
     for (id,wrkr) in Distributed.map_pid_wrkr
         if isdefined(wrkr, :state) && wrkr.state ∈ (Distributed.W_TERMINATED, Distributed.W_TERMINATING)
             delete!(wrkrs, id)
@@ -472,7 +478,7 @@ function prune_scalesets()
             is_vm_deleting = lowercase(vm_state) == "deleting"
             ispruned_already = scaleset ∈ keys(manager.pruned) && instanceid ∈ manager.pruned[scaleset]
 
-            doprune = (time_elapsed > worker_timeout || vm_state == "failed") && !is_worker_deleting && !is_vm_deleting && !ispruned_already
+            doprune = time_elapsed > worker_timeout && !is_worker_deleting && !is_vm_deleting && !ispruned_already
             if doprune
                 @info "Putting machine with instance id $instanceid in $(scaleset.scalesetname) onto the deletion queue because it failed to join the Julia cluster after $(round(time_elapsed, Second)), vm_state=$vm_state."
                 if manager.save_cloud_init_failures
@@ -849,8 +855,6 @@ function Distributed.addprocs(_::AzManager, template::Dict, n::Int;
     scaleset_image!(manager, template["value"], sigimagename, sigimageversion, imagename)
     software_sanity_check(manager, imagename == "" ? sigimagename : imagename, customenv)
 
-    @async delete_pending_down_vms()
-
     _scalesets = scalesets(manager)
     scaleset = ScaleSet(subscriptionid, resourcegroup, group)
 
@@ -859,7 +863,7 @@ function Distributed.addprocs(_::AzManager, template::Dict, n::Int;
     julia_num_threads = nthreads_filter(julia_num_threads)
 
     @info "Provisioning $n virtual machines in scale-set $group..."
-    _scalesets[scaleset] = scaleset_create_or_update(manager, user, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, sigimagename,
+    scaleset_create_or_update(manager, user, scaleset.subscriptionid, scaleset.resourcegroup, scaleset.scalesetname, sigimagename,
         sigimageversion, imagename, osdisksize, nretry, template, n, ppi, mpi_ranks_per_worker, mpi_flags, nvidia_enable_ecc, nvidia_enable_mig,
         hyperthreading, julia_num_threads, omp_num_threads, exename, exeflags, env, spot, maxprice, spot_base_regular_priority_count, spot_regular_percentage_above_base,
         verbose, customenv, overprovision, use_lvm)
@@ -1007,8 +1011,15 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
 
     scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
 
-    add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
-    add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
+    lock(manager.lock)
+    try
+        add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
+        add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
+    catch e
+        throw(e)
+    finally
+        unlock(manager.lock)
+    end
 
     @debug "...kill, pushed."
     nothing
@@ -1046,10 +1057,7 @@ function nworkers_provisioned(service=false)
             n += N
         end
     end
-
-    _pending_down = pending_down(manager)
-    pending_down_count = isempty(_pending_down) ? 0 : mapreduce(length, +, values(_pending_down))
-    max(0, n - pending_down_count)
+    n
 end
 
 """
@@ -1472,7 +1480,17 @@ function Distributed.launch_n_additional_processes(manager::AzManager, frompid, 
     @sync begin
         exename = Distributed.notnothing(fromconfig.exename)
         exeflags = something(fromconfig.exeflags, ``)
-        cmd = `$exename $exeflags --worker`
+
+        projectinfo = Pkg.project()
+        envname = splitpath(projectinfo.path)[end-1]
+
+        local cmd
+        if isempty(envname)
+            cmd = `$exename $exeflags --worker`
+        else
+            envdir = joinpath(Pkg.envdir(), envname)
+            cmd = `$exename $exeflags --project=$envdir --worker`
+        end
 
         new_addresses = remotecall_fetch(Distributed.launch_additional, frompid, cnt, cmd)
         for (localid,address) in enumerate(new_addresses)
@@ -1487,10 +1505,13 @@ function Distributed.launch_n_additional_processes(manager::AzManager, frompid, 
             wconfig.count = fromconfig.count
             wconfig.userdata = Dict(
                 "localid" => localid+1,
+                "instanceid" => fromconfig.userdata["instanceid"],
+                "physical_hostname" => fromconfig.userdata["physical_hostname"],
                 "name" => fromconfig.userdata["name"],
                 "subscriptionid" => fromconfig.userdata["subscriptionid"],
                 "resourcegroup" => fromconfig.userdata["resourcegroup"],
-                "scalesetname" => fromconfig.userdata["scalesetname"])
+                "scalesetname" => fromconfig.userdata["scalesetname"],
+                "priority" => fromconfig.userdata["priority"])
 
             let wconfig=wconfig
                 @async begin
@@ -2368,16 +2389,6 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     ssh_key = _manifest["ssh_public_key_file"]
 
     @debug "scaleset_create_or_update"
-    _r = @retry nretry azrequest(
-        "GET",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets?api-version=2023-03-01",
-        ["Authorization"=>"Bearer $(token(manager.session))"])
-    r = JSON.parse(String(_r.body))
-
-    if manager.show_quota
-        @info "Quota after getting a list of existing scale-sets" remaining_resource(_r)
-    end
 
     _template = deepcopy(template["value"])
 
@@ -2440,18 +2451,6 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         _template["tags"]["platformsettings.host_environment.disablehyperthreading"] = hyperthreading ? "False" : "True"
     end
 
-    n = 0
-    scalesets = get(r, "value", [])
-    scaleset_exists = false
-    for scaleset in scalesets
-        if scaleset["name"] == scalesetname
-            n = scaleset_capacity(manager, subscriptionid, resourcegroup, scalesetname, nretry, verbose)
-            scaleset_exists = true
-            break
-        end
-    end
-    n += δn
-
     @debug "about to check quota"
 
     # check usage/quotas
@@ -2473,21 +2472,32 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
         end
     end
 
-    @debug "done checking quota, δn=$(δn), n=$n"
+    @debug "done checking quota, δn=$(δn)"
 
-    _template["sku"]["capacity"] = n
-    _r = @retry nretry azrequest(
-        "PUT",
-        verbose,
-        "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
-        ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
-        String(JSON.json(_template)))
+    lock(manager.lock)
+    try
+        _scaleset = ScaleSet(subscriptionid, resourcegroup, scalesetname)
+        _template["sku"]["capacity"] = manager.scalesets[_scaleset] = _scaleset ∈ keys(scalesets(manager)) ? manager.scalesets[_scaleset] + δn : δn
 
-    if manager.show_quota
-        @info "Quota after requesting that the scale-set is created or grows" remaining_resource(_r)
+        @debug "setting capacity of scale-set $scalesetname to $(_template["sku"]["capacity"]), scaleset=$(manager.scalesets[_scaleset])"
+
+        _r = @retry nretry azrequest(
+            "PUT",
+            verbose,
+            "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$resourcegroup/providers/Microsoft.Compute/virtualMachineScaleSets/$scalesetname?api-version=2023-03-01",
+            ["Content-type"=>"application/json", "Authorization"=>"Bearer $(token(manager.session))"],
+            String(JSON.json(_template)))
+
+        if manager.show_quota
+            @info "Quota after requesting that the scale-set is created or grows" remaining_resource(_r)
+        end
+    catch e
+        throw(e)
+    finally
+        unlock(manager.lock)
     end
 
-    n
+    nothing
 end
 
 function delete_vms(manager::AzManager, subscriptionid, resourcegroup, scalesetname, ids, nretry, verbose)
@@ -2714,7 +2724,7 @@ function detachedrun(request::HTTP.Request)
         nthreads, nthreads_interactive = Threads.nthreads(), Threads.nthreads(:interactive)
         julia_num_threads = nthreads_filter("$(Threads.nthreads()),$(Threads.nthreads(:interactive))")
         projectdir = dirname(Pkg.project().path)
-        exename_parts = split(exename)
+        exename_parts = String.(split(exename))
         cmd = pipeline(Cmd(vcat(exename_parts, ["-t", julia_num_threads, "--project=$projectdir", _tempname_wrapper])))
         process = open(cmd)
         pid = getpid(process)
