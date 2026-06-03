@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [master]
+    branches: [master, "release-3"]
     tags: ["*"]
   pull_request:
 jobs:
@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - 1.6
+          - lts
           - 1
         os:
           - ubuntu-latest
@@ -33,21 +33,23 @@ jobs:
       SUBNET_NAME: "default"
       COMMIT_SHA: "${{ github.sha }}"
     steps:
-      - uses: actions/checkout@v3
-      - uses: julia-actions/setup-julia@v1
+      - uses: actions/checkout@v6
+      - uses: julia-actions/setup-julia@v3
         with:
           version: ${{ matrix.version }}
 
       - name: Create an SSH Key Pair
         run: ssh-keygen -f /home/runner/.ssh/azmanagers_rsa -N ''
 
+      - uses: azure/login@v3
+        with:
+          creds: '{"clientId":"${{ secrets.CLIENT_ID }}","clientSecret":"${{ secrets.CLIENT_SECRET }}","subscriptionId":"${{ secrets.SUBSCRIPTION_ID }}","tenantId":"${{ secrets.TENANT_ID }}"}'
       - name: Create Prereq. Azure Resources
         run: |
-          az login --service-principal   -u "$CLIENT_ID" -p "$CLIENT_SECRET" -t "$TENANT_ID"
           az group create                -g "$RESOURCE_GROUP" -l southcentralus --tags "CostElement=YWED10528906" "CompanyCode=0322" "environment=dev" "OwnerEmail=sam.kaplan@chevron.com"
           az group wait                  -g "$RESOURCE_GROUP" --created 
           az sig create                  -g "$RESOURCE_GROUP" -r "$GALLERY_NAME"
-          az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "0001-com-ubuntu-server-jammy" -s "22_04-lts-gen2" --os-type linux --hyper-v-generation V2
+          az sig image-definition create -g "$RESOURCE_GROUP" -r "$GALLERY_NAME" -i "$IMAGE_NAME" -p "canonical" -f "ubuntu-24_04-lts" -s "server" --os-type linux --hyper-v-generation V2
           az network nsg create          -g "$RESOURCE_GROUP" -n "$NSG_NAME"
           az network nsg rule create     -g "$RESOURCE_GROUP" -n "rule-$NSG_NAME" --nsg-name "$NSG_NAME" --priority 101 --source-address-prefixes "AzureCloud" --destination-port-ranges 22
           az network vnet create         -g "$RESOURCE_GROUP" -n "$VNET_NAME" --subnet-name "$SUBNET_NAME"
@@ -98,9 +100,10 @@ jobs:
           echo "scp-ing the Coverage Report..."
           scp -o StrictHostKeyChecking=no -i /home/runner/.ssh/azmanagers_rsa cvx@$ipaddress:/home/cvx/lcov.info lcov.info
 
-      - uses: codecov/codecov-action@v1
+      - uses: codecov/codecov-action@v6
         with:
           file: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Delete CI Resource Group
         run: |
@@ -110,8 +113,8 @@ jobs:
     name: Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: julia-actions/setup-julia@v1
+      - uses: actions/checkout@v6
+      - uses: julia-actions/setup-julia@v3
         with:
           version: '1'
       - run: |
