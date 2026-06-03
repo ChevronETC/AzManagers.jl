@@ -752,9 +752,12 @@ end
 function nthreads_filter(nthreads)
     _nthreads = split(string(nthreads), ',')
     nthreads_default = length(_nthreads) > 0 ? parse(Int, _nthreads[1]) : 1
-    nthreads_interactive = length(_nthreads) > 1 ? parse(Int, _nthreads[2]) : 0
 
-    nthreads_interactive > 0 ? string("$nthreads_default,$nthreads_interactive") : string(nthreads_default)
+    # since Julia 1.11, the `-t N` command line option defaults to 1 interactive thread, so we mimic that here to prevent surprises:
+    nthreads_interactive = length(_nthreads) > 1 ? parse(Int, _nthreads[2]) : (VERSION >= v"1.11" ? 1 : 0)
+
+    # tuple of `-t <default>,<interactive>` is supported since Julia 1.9:
+    VERSION >= v"1.9" ? string("$nthreads_default,$nthreads_interactive") : string(nthreads_default)
 end
 
 """
