@@ -130,7 +130,8 @@ build {
             "sudo tar --strip-components=1 -xzvf julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz -C /opt/julia",
             "sudo rm -f julia-${var.julia_version_major}.${var.julia_version_minor}.${var.julia_version_patch}-linux-x86_64.tar.gz",
             "sed -i '1 i export PATH=\"/opt/julia/bin:$${PATH}\"' ~/.bashrc",
-            "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"720\"' ~/.bashrc"
+            "sed -i '1 i export JULIA_WORKER_TIMEOUT=\"300\"' ~/.bashrc",
+            "sed -i '1 i export JULIA_AZMANAGERS_VM_JOIN_TIMEOUT=\"300\"' ~/.bashrc"
         ]
     }
 
