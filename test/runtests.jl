@@ -32,7 +32,7 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
     #
     if flexible
         addprocs(templatename, ninstances;
-            waitfor = true,
+            waitfor = false,
             ppi,
             group,
             session,
@@ -40,10 +40,21 @@ or configure user-defined routes (UDR) in the subnet. Learn more at aka.ms/defau
             spot_base_regular_priority_count = 2)
     else
         addprocs(templatename, ninstances;
-            waitfor = true,
+            waitfor = false,
             ppi,
             group,
             session)
+    end
+
+    timeout = 600
+    tic = time()
+    while nprocs() < 1+ninstances
+        sleep(10)
+        if time() - tic > timeout
+            @warn "timout waiting for workers to start"
+            @test 1 == 0
+            break
+        end
     end
     
     # Verify that the scale set is present
@@ -219,7 +230,19 @@ end
 
     group = "test$(randstring('a':'z',4))"
 
-    addprocs(templatename, 1; waitfor=true, group=group, session=session, customenv=true)
+    addprocs(templatename, 1; waitfor=false, group=group, session=session, customenv=true)
+
+    timeout = 600
+    tic = time()
+    while nprocs() < 2
+        sleep(10)
+        if time() - tic > timeout
+            @warn "timout waiting for workers to start"
+            @test 1 == 0
+            break
+        end
+    end
+
     @everywhere using Pkg
     pinfo = remotecall_fetch(Pkg.project, workers()[1])
     @test contains(pinfo.path, "myproject")
@@ -257,7 +280,18 @@ end
         _template["tags"] = Dict("foo"=>"bar")
     end
 
-    addprocs(template, 1; waitfor=true, group=group, session=session)
+    addprocs(template, 1; waitfor=false, group=group, session=session)
+
+    timeout = 600
+    tic = time()
+    while nprocs() < 2
+        sleep(10)
+        if time() - tic > timeout
+            @warn "timout waiting for workers to start"
+            @test 1 == 0
+            break
+        end
+    end
 
     _r = HTTP.request(
         "GET",
@@ -370,7 +404,18 @@ end
     templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String); dicttype=Dict)
     template = templates_scaleset[templatename]
     
-    addprocs(template, 2; waitfor=true, group=group, session=session)
+    addprocs(template, 2; waitfor=false, group=group, session=session)
+
+    timeout = 600
+    tic = time()
+    while nprocs() < 3
+        sleep(10)
+        if time() - tic > timeout
+            @warn "timout waiting for workers to start"
+            @test 1 == 0
+            break
+        end
+    end
 
     wrkers = Distributed.map_pid_wrkr
     for i in workers()
