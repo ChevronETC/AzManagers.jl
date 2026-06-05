@@ -2211,25 +2211,34 @@ function quotacheck(manager, subscriptionid, template, δn, nretry, verbose)
     ncores_available - (ncores_per_machine * δn), ncores_spot_available - (ncores_per_machine * δn)
 end
 
-function nphysical_cores(template::Dict; session=AzSession())
+function nphysical_cores(template::Dict; session=AzSession(), verbose=0, nretry=10)
     ssid = template["subscriptionid"]
     region = template["value"]["location"]
     sku_name = template["value"]["properties"]["hardwareProfile"]["vmSize"]
+    service_filter = HTTP.escapeuri("location eq '$region'") # on the service side, we can only filter by location, so we will need to filter by vm size client side
 
-    _r = HTTP.request("GET", 
-        "https://management.azure.com/subscriptions/$ssid/providers/Microsoft.Compute/skus?api-version=2022-11-01", 
+    _r = @retry nretry azrequest(
+        "GET",
+        verbose,
+        "https://management.azure.com/subscriptions/$ssid/providers/Microsoft.Compute/skus?api-version=2021-07-01&\$filter=$service_filter", 
         ["Authorization" => "Bearer $(token(session))"])
     r = JSON.parse(String(_r.body))
 
+    filtered_skus = filter(sku -> sku["name"] == sku_name, r["value"])
+    length(filtered_skus) == 1 || error("expected exactly one SKU to match the template's vm size, but found $(length(filtered_skus)) matching SKUs")
 
-    filtered_skus = filter(sku -> sku["name"] == sku_name && haskey(sku, "capabilities") && any(location -> location == region, sku["locations"]), r["value"])
+    capabilities = get(filtered_skus[1], "capabilities", Any[])
 
-    vCPU_details = [(cap["value"], any(cap -> cap["name"] == "HyperThreadingEnabled" && cap["value"] == "true", sku["capabilities"])) for sku in filtered_skus for cap in sku["capabilities"] if cap["name"] == "vCPUs"]
-    hyperthreading = vCPU_details[1][2]
-    vCPU = vCPU_details[1][1]
+    k = findfirst(capability->capability["name"]=="vCPUs", capabilities)
+    isnothing(k) && error("unable to find 'vCPUs' capability in resource for SKU=$(sku_name)")
+    vcpus = parse(Int, capabilities[k]["value"])
+
+    k = findfirst(capability->capability["name"]=="vCPUsPerCore", capabilities)
+    isnothing(k) && error("unable to find 'vCPUsPerCore' capability in resource for SKU=$(sku_name)")
+    vcpus_per_core = parse(Int, capabilities[k]["value"])
 
     # Number of physical cores
-    pCPU = hyperthreading ? div(parse(Int,vCPU),2) : parse(Int,vCPU)
+    div(vcpus, vcpus_per_core)
 end
 
 function nphysical_cores(template::AbstractString; session=AzSession())
