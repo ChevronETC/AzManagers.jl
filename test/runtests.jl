@@ -213,6 +213,7 @@ end
     @test contains(testjob_stdout, "Project.toml")
 
     rmproc(testvm; session=session)
+    Pkg.activate()
 end
 
 @testset "environment, addprocs" begin
@@ -254,20 +255,10 @@ end
     @test "Manifest.toml" ∈ files
 
     rmprocs(workers())
-
+    Pkg.activate()
 end
 
 @testset "tags, addprocs" begin
-    mkpath("myproject")
-    cd("myproject")
-    Pkg.activate(".")
-    Pkg.add("AzSessions")
-    Pkg.add("Distributed")
-    Pkg.add("JSON")
-    Pkg.add("HTTP")
-
-    Pkg.add(PackageSpec(name="AzManagers", rev=azmanagers_rev))
-
     group = "test$(randstring('a':'z',4))"
 
     templates_scaleset = JSON.parse(read(AzManagers.templates_filename_scaleset(), String); dicttype=Dict)
@@ -385,6 +376,7 @@ end
     end
     wait(testjob)
     @test contains(read(testjob), "passed")
+    rmproc(testvm; session)
 end
 
 @testset "AzManagers, retrywarn" begin
