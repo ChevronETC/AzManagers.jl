@@ -1001,7 +1001,10 @@ function Distributed.kill(manager::AzManager, id::Int, config::WorkerConfig)
     end
 
     try
-        remote_do(exit, id, 42)
+        remote_do(id) do
+            # this by-passes any the at-exit hook to ensure that the process on the worker exits without delay.
+            ccall(:_exit, Union{}, (Int32,), 42)
+        end
     catch
     end
     @debug "kill, done remote_do"
