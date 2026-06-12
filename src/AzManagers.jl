@@ -1112,17 +1112,20 @@ function rmgroup(manager::AzManager, subscriptionid, resourcegroup, groupname, n
 end
 
 function Distributed.manage(manager::AzManager, id::Integer, config::WorkerConfig, op::Symbol)
+    @debug "manage for id=$id, op=$op"
     if op == :register
         remote_do(AzManagers.logging, id)
-    end
-    if op == :interrupt
-        # TODO
     end
     if op == :finalize
         # TODO
     end
     if op == :deregister || op == :interrupt
-        # TODO
+        if isdefined(config, :userdata) && isa(config.userdata, AbstractDict) && haskey(config.userdata, "subscriptionid") && haskey(config.userdata, "resourcegroup") && haskey(config.userdata, "scalesetname") && haskey(config.userdata, "instanceid")
+            scaleset = ScaleSet(config.userdata["subscriptionid"], config.userdata["resourcegroup"], config.userdata["scalesetname"])
+            instanceid = config.userdata["instanceid"]
+            @debug "manage, adding instance to pending down list for id=$id, instanceid=$instanceid, op=$op"
+            add_instance_to_pending_down_list(manager, scaleset, instanceid)
+        end
     end
 end
 
