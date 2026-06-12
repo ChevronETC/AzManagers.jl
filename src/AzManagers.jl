@@ -1366,6 +1366,28 @@ if VERSION < v"1.7"
     errormonitor = identity
 end
 
+struct FailedToConnectMasterException <: Exception
+    timeout::Float64
+end
+Base.showerror(io::IO, e::FailedToConnectMasterException) = print(io, "Failed to connect to master process within $(e.timeout) seconds.")
+
+# copied from Distributed.check_master_connect, but we throw intead of exit the julia process.
+function azmanagers_check_master_connect(tsk_process_messages)
+    # If we do not have at least process 1 connect to us within timeout
+    # we log an error and exit, unless we're running on valgrind
+    if ccall(:jl_running_on_valgrind,Cint,()) != 0
+        return
+    end
+
+    errormonitor(@async begin
+        timeout = Distributed.worker_timeout()
+        if timedwait(() -> haskey(Distributed.map_pid_wrkr, 1), timeout) === :timed_out
+            @error "Master process (id 1) could not connect within $(timeout) seconds, interrupting the message loop, date/time=$(now(Dates.UTC))"
+            Base.throwto(tsk_process_messages, FailedToConnectMasterException(timeout)) # this should rethrow the exception within *this* async task.
+        end
+    end)
+end
+
 function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
     Distributed.init_multi()
 
@@ -1385,7 +1407,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
         sock = listen(interface, Distributed.LPROC.bind_port)
     end
 
-    t = errormonitor(@async while isopen(sock)
+    tsk_process_messages = errormonitor(@async while isopen(sock)
         client = accept(sock)
 
         #=
@@ -1430,14 +1452,16 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     manager.worker_socket = out
 
     try
-        while true
-            Distributed.check_master_connect()
-            @info "message loop..."
-            wait(t)
-            istaskfailed(t) && fetch(t)
-            sleep(10)
-        end
+        @info "waiting for the master to connect (date/time=$(now(Dates.UTC)))..."
+        azmanagers_check_master_connect(tsk_process_messages)
+        @info "message loop (date/time=$(now(Dates.UTC)))..."
+        wait(tsk_process_messages)
     catch e
+        if isa(e, FailedToConnectMasterException)
+            @error "failed to connect to master within expected time limit"
+        else
+            @error "caught error during the worker's message loop"
+        end
         throw(e)
     finally
         close(sock)
@@ -1468,6 +1492,8 @@ function azure_worker(cookie, master_address, master_port, ppi, exeflags)
                 try
                     close(c)
                 catch
+                    @error "error closing socket after failed start attempt, attempt $itry"
+                    throw(e)
                 end
             end
         end
@@ -1920,56 +1946,13 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
     if use_lvm
         if mpi_ranks_per_worker == 0 
             shell_cmds *= """
-
-            attempt_number=1
-            maximum_attempts=5
-            exit_code=0
-            while [  \$attempt_number -le \$maximum_attempts ]; do
-                $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-                
-                exit_code=\$?
-                echo "attempt \$attempt_number is done with exit code \$exit_code..."
-
-                if [ "\$exit_code" == "42" ]; then
-                    echo "...breaking from retry loop due to exit code 42."
-                    break
-                fi
-
-                echo "...trying again after sleeping for 5 seconds..."
-                sleep 5
-                attempt_number=\$(( attempt_number + 1 ))
-
-                echo "the worker startup was tried \$attempt_number times."
-            done
-            echo "the worker has finished running with exit code \$exit_code."
+            $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
             EOF
             """
         else
             shell_cmds *= """
-
             $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.build_lvm()'
-
-            attempt_number=1
-            maximum_attempts=5
-            exit_code=0
-            while [  \$attempt_number -le \$maximum_attempts ]; do
-                mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-
-                exit_code=\$?
-                echo "attempt \$attempt_number is done with exit code \$exit_code...."
-
-                if [ "\$exit_code" == "42" ]; then
-                    echo "...breaking from retry loop due to exit code 42."
-                    break
-                fi
-
-                echo "...trying again after sleeping for 5 seconds..."
-                sleep 5
-                attempt_number=\$(( attempt_number + 1 ))
-
-                echo "the worker startup was tried \$attempt_number times."
-            done
-            echo "the worker has finished running with exit code \$exit_code."
+            mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
             EOF
             """
         end
@@ -1995,56 +1978,13 @@ function buildstartupscript_cluster(manager::AzManager, spot::Bool, ppi::Int, mp
     else
         if mpi_ranks_per_worker == 0 
             shell_cmds *= """
-
-            attempt_number=1
-            maximum_attempts=5
-            exit_code=0
-            while [  \$attempt_number -le \$maximum_attempts ]; do
-                $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-                
-                exit_code=\$?
-                echo "attempt \$attempt_number is done with exit code \$exit_code..."
-
-                if [ "\$exit_code" == "42" ]; then
-                    echo "...breaking from retry loop due to exit code 42."
-                    break
-                fi
-
-                echo "...trying again after sleeping for 5 seconds..."
-                sleep 5
-                attempt_number=\$(( attempt_number + 1 ))
-
-                echo "the worker startup was tried \$attempt_number times."
-            done
-            echo "the worker has finished running with exit code \$exit_code."
+            $exename $_exeflags -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks(); AzManagers.azure_worker("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
             EOF
             """
         else
             shell_cmds *= """
-
             $exename -e '$(juliaenvstring)try using AzManagers; catch; using Pkg; Pkg.instantiate(); using AzManagers; end; AzManagers.nvidia_gpucheck($nvidia_enable_ecc, $nvidia_enable_mig); AzManagers.mount_datadisks()'
-
-            attempt_number=1
-            maximum_attempts=5
-            exit_code=0
-            while [  \$attempt_number -le \$maximum_attempts ]; do
-                mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
-
-                exit_code=\$?
-                echo "attempt \$attempt_number is done with exit code \$exit_code...."
-
-                if [ "\$exit_code" == "42" ]; then
-                    echo "...breaking from retry loop due to exit code 42."
-                    break
-                fi
-
-                echo "...trying again after sleeping for 5 seconds..."
-                sleep 5
-                attempt_number=\$(( attempt_number + 1 ))
-
-                echo "the worker startup was tried \$attempt_number times."
-            done
-            echo "the worker has finished running with exit code \$exit_code."
+            mpirun -n $mpi_ranks_per_worker $mpi_flags $exename $_exeflags -e '$(juliaenvstring)using AzManagers, MPI; AzManagers.azure_worker_mpi("$cookie", "$master_address", $master_port, $ppi, "$_exeflags")'
             EOF
             """
         end
