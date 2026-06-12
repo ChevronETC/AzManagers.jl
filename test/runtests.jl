@@ -453,5 +453,5 @@ end
     template = templates_scaleset["cbox02"]
     ncores = nphysical_cores(template; session=session)
 
-    @test_broken ncores == 1
+    @test ncores == 1
 end
