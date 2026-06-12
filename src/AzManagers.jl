@@ -679,9 +679,9 @@ function Distributed.setup_launched_worker(manager::AzManager, wconfig, launched
             sleep(1)
         end
     catch e
-        @warn "unable to create worker within $timeout seconds, adding vm to pending down list"
-        logerror(e, Logging.Debug)
         u = wconfig.userdata
+        @warn "unable to create worker within $timeout seconds, adding vm to pending down list, instanceid=$(get(u, "instanceid", "unknown")), name=$(get(u, "name", "unknown"))"
+        logerror(e, Logging.Debug)
         scaleset = ScaleSet(u["subscriptionid"], u["resourcegroup"], u["scalesetname"])
         add_instance_to_pending_down_list(manager, scaleset, u["instanceid"])
         add_instance_to_deleted_list(manager, scaleset, u["instanceid"])
@@ -1343,7 +1343,7 @@ function azure_worker_init(cookie, master_address, master_port, ppi, exeflags, m
     nbytes_written == length(_vm)+1 || error("wrote wrong number of bytes")
     flush(c)
 
-    c
+    c,vm["userdata"]
 end
 
 function logging()
@@ -1388,7 +1388,7 @@ function azmanagers_check_master_connect(tsk_process_messages)
     end)
 end
 
-function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
+function azure_worker_start(out::IO, userdata::Dict, cookie::AbstractString=readline(stdin); close_stdin::Bool=true, stderr_to_stdout::Bool=true)
     Distributed.init_multi()
 
     if close_stdin # workers will not use it
@@ -1454,7 +1454,7 @@ function azure_worker_start(out::IO, cookie::AbstractString=readline(stdin); clo
     try
         @info "waiting for the master to connect (date/time=$(now(Dates.UTC)))..."
         azmanagers_check_master_connect(tsk_process_messages)
-        @info "message loop (date/time=$(now(Dates.UTC)))..."
+        @info "message loop (date/time=$(now(Dates.UTC))), instanceid=$(userdata["instanceid"]), name=$(userdata["name"]), ip=$(getipaddr())..."
         wait(tsk_process_messages)
     catch e
         if isa(e, FailedToConnectMasterException)
@@ -1480,8 +1480,8 @@ function azure_worker(cookie, master_address, master_port, ppi, exeflags)
         itry += 1
         local c
         try
-            c = azure_worker_init(cookie, master_address, master_port, ppi, exeflags, 0)
-            azure_worker_start(c, cookie)
+            c,userdata = azure_worker_init(cookie, master_address, master_port, ppi, exeflags, 0)
+            azure_worker_start(c, userdata, cookie)
         catch e
             @error "error starting worker, attempt $itry, cookie=$cookie, master_address=$master_address, master_port=$master_port, ppi=$ppi"
             logerror(e, Logging.Debug)
