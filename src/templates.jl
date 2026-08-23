@@ -414,9 +414,15 @@ function cloudcfg_nvme_scratch()
               sed -i '/^\/dev\/disk\/cloud\/azure_resource-part1/s/^\(.*\)$/#\1/' /etc/fstab
               umount /scratch
               mkdir -m 777 -p /scratch
+              # Clean up any pre-existing LVM metadata (e.g. from reimaged VMs)
+              swapoff -a 2>/dev/null || true
+              lvremove -f $SCRATCH_VG/$SCRATCH_LV 2>/dev/null || true
+              vgremove -f $SCRATCH_VG 2>/dev/null || true
               for x in "${!NVME_DEVICES[@]}"
               do
-                  pvcreate $x
+                  pvremove -ff --yes $x 2>/dev/null || true
+                  wipefs -af $x
+                  pvcreate -ff --yes $x
               done
               vgcreate -q -s 1M $SCRATCH_VG ${!NVME_DEVICES[@]} --force
               lvcreate -q -Wy --yes -I 128k -i ${#NVME_DEVICES[@]} -L $NVME_DEVICE_SIZE -v $SCRATCH_VG -n $SCRATCH_LV
