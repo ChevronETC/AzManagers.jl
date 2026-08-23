@@ -430,6 +430,11 @@ function cloudcfg_nvme_scratch()
               mount /dev/$SCRATCH_VG/$SCRATCH_LV /scratch
               # querk with 777 dropping writes
               chmod ugo+rwx -Rf /scratch
+              # Create 200G swap on NVMe scratch
+              fallocate -l 200G /scratch/swapfile
+              chmod 0600 /scratch/swapfile
+              mkswap /scratch/swapfile
+              swapon /scratch/swapfile
           fi
 
       - path: /etc/systemd/system/scratch-nvme.service
