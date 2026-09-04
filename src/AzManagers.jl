@@ -2789,7 +2789,6 @@ function detachedkill(request::HTTP.Request)
 end
 
 function detachedstatus(request::HTTP.Request)
-    @info "inside detachedstatus"
     local id
     try
         id = split(request.target, '/')[5]
