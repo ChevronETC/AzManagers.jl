@@ -1868,6 +1868,16 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
         EOF
         """
     end
+    if isfile(joinpath(homedir(), ".netrc"))
+        netrc_credentials = rstrip(read(joinpath(homedir(), ".netrc"), String), [' ','\n'])
+        cmd *= """
+        
+        sudo su - $user << EOF
+        echo "$netrc_credentials" > ~/.netrc
+        chmod 600 ~/.netrc
+        EOF
+        """
+    end
 
     remote_julia_environment_name = ""
     if custom_environment
