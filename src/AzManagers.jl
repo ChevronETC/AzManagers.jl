@@ -71,10 +71,9 @@ function isretryable(e::HTTP.StatusError)
     false
 end
 isretryable(e::Base.IOError) = true
-isretryable(e::HTTP.Exceptions.ConnectError) = true
-isretryable(e::HTTP.Exceptions.HTTPError) = true
-isretryable(e::HTTP.Exceptions.RequestError) = true
-isretryable(e::HTTP.Exceptions.TimeoutError) = true
+isretryable(e::HTTP.ConnectError) = true
+isretryable(e::HTTP.HTTPError) = true
+isretryable(e::HTTP.TimeoutError) = true
 isretryable(e::Base.EOFError) = true
 isretryable(e::Sockets.DNSError) = true
 isretryable(e) = false
@@ -83,12 +82,12 @@ status(e::HTTP.StatusError) = e.status
 status(e) = 999
 
 function retrywarn(i, retries, s, e)
-    if isa(e, HTTP.ExceptionRequest.StatusError)
+    if isa(e, HTTP.StatusError)
         @debug "$(e.status): $(String(e.response.body)), retry $i of $retries, retrying in $s seconds"
         if e.status == 429
             remaining_resource = nothing
             for header in e.response.headers
-                if header[1] == "x-ms-ratelimit-remaining-resource"
+                if lowercase(header[1]) == "x-ms-ratelimit-remaining-resource"
                     remaining_resource = header
                     break
                 end
@@ -157,7 +156,7 @@ function azrequest(rtype, verbose, url, headers, body=nothing)
     end
     
     if r.status >= 300
-        throw(HTTP.Exceptions.StatusError(r.status, r.request.method, r.request.target, r))
+        throw(HTTP.StatusError(r.status, r))
     end
     
     r
@@ -1031,7 +1030,7 @@ end
 function remaining_resource(r)
     _remaining_resource = ""
     for header in r.headers
-        if header[1] == "x-ms-ratelimit-remaining-resource"
+        if lowercase(header[1]) == "x-ms-ratelimit-remaining-resource"
             _remaining_resource = header[2]
         end
     end
@@ -1576,7 +1575,7 @@ function scaleset_image(manager::AzManager, sigimagename, sigimageversion, image
     r = fetch(t)
 
     local _image
-    if !isa(r, HTTP.Messages.Response)
+    if !isa(r, HTTP.Response)
         return sigimagename, sigimageversion, imagename
     else
         r = fetch(t)
@@ -2359,7 +2358,7 @@ function scaleset_create_or_update(manager::AzManager, user, subscriptionid, res
     _template["properties"]["virtualMachineProfile"]["storageProfile"]["osDisk"]["diskSizeGB"] = osdisksize
 
     _t = token(manager.session)
-    _decoded = claims(JWT(;jwt=_t))
+    _decoded = JWTs.claims(JWTs.JWT(;jwt=_t))
     if haskey(_decoded, "unique_name")
         _user = _decoded["unique_name"]
 
@@ -2581,7 +2580,7 @@ function timestamp_metaformatter(level::Logging.LogLevel, _module, group, id, fi
     color, prefix, suffix
 end
 
-function detachedservice(address=ip"0.0.0.0"; server=nothing, subscriptionid="", resourcegroup="", vmname="", exename="julia")
+function detachedservice(address=ip"0.0.0.0"; subscriptionid="", resourcegroup="", vmname="", exename="julia")
     HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/run", detachedrun)
     HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/kill", detachedkill)
     HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/wait", detachedwait)
@@ -2600,7 +2599,7 @@ function detachedservice(address=ip"0.0.0.0"; server=nothing, subscriptionid="",
 
     global_logger(ConsoleLogger(stdout, Logging.Info; meta_formatter=timestamp_metaformatter))
 
-    HTTP.serve(DETACHED_ROUTER, address, port; server=server)
+    HTTP.serve(DETACHED_ROUTER, address, port)
 end
 
 function detachedrun(request::HTTP.Request)
@@ -2608,7 +2607,7 @@ function detachedrun(request::HTTP.Request)
     local process, id, pid, r
 
     try
-        r = JSON.parse(String(HTTP.payload(request)))
+        r = JSON.parse(String(request.body))
 
         if !haskey(r, "code")
             return HTTP.Response(400, ["Content-Type"=>"application/json"], JSON.json(Dict("error"=>"Malformed body: JSON body must contain the key: code")); request)

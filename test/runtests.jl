@@ -382,10 +382,10 @@ end
 @testset "AzManagers, retrywarn" begin
     r = HTTP.Response(
         429,
-        ["retry-after"=>60, "x-ms-ratelimit-remaining-resource"=>"foo"],
+        ["retry-after"=>"60", "x-ms-ratelimit-remaining-resource"=>"foo"],
         "")
 
-    e = HTTP.StatusError(429, "foo", "foo", r)
+    e = HTTP.StatusError(429, r)
     AzManagers.retrywarn(1, 2, 60, e)
 end
 
