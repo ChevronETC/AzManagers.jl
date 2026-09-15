@@ -2580,7 +2580,7 @@ function timestamp_metaformatter(level::Logging.LogLevel, _module, group, id, fi
     color, prefix, suffix
 end
 
-function detachedservice(address=ip"0.0.0.0"; subscriptionid="", resourcegroup="", vmname="", exename="julia")
+function detachedservice(address="0.0.0.0"; subscriptionid="", resourcegroup="", vmname="", exename="julia")
     HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/run", detachedrun)
     HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/kill", detachedkill)
     HTTP.register!(DETACHED_ROUTER, "POST", "/cofii/detached/job/*/wait", detachedwait)
@@ -2599,7 +2599,7 @@ function detachedservice(address=ip"0.0.0.0"; subscriptionid="", resourcegroup="
 
     global_logger(ConsoleLogger(stdout, Logging.Info; meta_formatter=timestamp_metaformatter))
 
-    HTTP.serve(DETACHED_ROUTER, address, port)
+    HTTP.serve(DETACHED_ROUTER, string(address), port)
 end
 
 function detachedrun(request::HTTP.Request)
