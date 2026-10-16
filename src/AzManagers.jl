@@ -1896,7 +1896,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
             
             sudo su - $user << 'EOF'
             $exename -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$localpreferences_compressed", "$remote_julia_environment_name")'
-            $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.Registry.update(); Pkg.activate(path); (retry(Pkg.instantiate))(); Pkg.precompile()'
+            $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); (retry(Pkg.instantiate))(); using AzStorage_jll; using Pkg.Artifacts; artifacts_toml=joinpath(dirname(dirname(pathof(AzStorage_jll))), "Artifacts.toml"); Pkg.Artifacts.ensure_artifact_installed("AzStorage", artifacts_toml); using AzStorage; Pkg.precompile()'
             EOF
             """
         catch e
@@ -1911,7 +1911,7 @@ end
 function build_envstring(env::Dict)
     envstring = ""
     for (key,value) in env
-        envstring *= "export $key=$value\n"
+        envstring *= "export $(key)=" * repr(String(value)) * "\n"
     end
     envstring
 end
