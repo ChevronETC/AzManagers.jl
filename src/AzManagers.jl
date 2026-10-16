@@ -1896,7 +1896,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
             
             sudo su - $user << 'EOF'
             $exename -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$localpreferences_compressed", "$remote_julia_environment_name")'
-            $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); (retry(() -> Pkg.instantiate(; allow_autoprecomp=false)))(); using AzStorage_jll; using Pkg.Artifacts; artifacts_toml=joinpath(dirname(dirname(pathof(AzStorage_jll))), "Artifacts.toml"); (retry(() -> Pkg.Artifacts.ensure_artifact_installed("AzStorage", artifacts_toml)))()'
+            $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); (retry(() -> Pkg.instantiate(; allow_autoprecomp=false)))(); using Pkg.Artifacts; artifacts_toml=joinpath(dirname(dirname(Base.find_package("AzStorage_jll"))), "Artifacts.toml"); (retry(() -> Pkg.Artifacts.ensure_artifact_installed("AzStorage", artifacts_toml)))()'
             $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); using AzStorage; Pkg.precompile()'
             EOF
             """
