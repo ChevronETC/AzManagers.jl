@@ -1896,7 +1896,7 @@ function buildstartupscript(manager::AzManager, exename::String, user::String, d
             
             sudo su - $user << 'EOF'
             $exename -e 'using AzManagers; AzManagers.decompress_environment("$project_compressed", "$manifest_compressed", "$localpreferences_compressed", "$remote_julia_environment_name")'
-            $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); (retry(() -> Pkg.instantiate(; allow_autoprecomp=false)))(); using Pkg.Artifacts; artifacts_toml=joinpath(dirname(dirname(Base.find_package("AzStorage_jll"))), "Artifacts.toml"); (retry(() -> Pkg.Artifacts.ensure_artifact_installed("AzStorage", artifacts_toml)))()'
+            $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); let ok=false; for attempt in 1:30; try; Pkg.instantiate(; allow_autoprecomp=false); ok=true; break; catch e; @warn string("Pkg.instantiate attempt ", attempt, " of 30 failed: ", sprint(showerror, e)); sleep(rand()*min(20*attempt, 180)); end; end; ok || error("Pkg.instantiate failed after 30 attempts (likely ADO HTTP 429 throttling while cloning private git packages)"); end; using Pkg.Artifacts; artifacts_toml=joinpath(dirname(dirname(Base.find_package("AzStorage_jll"))), "Artifacts.toml"); (retry(() -> Pkg.Artifacts.ensure_artifact_installed("AzStorage", artifacts_toml); delays=ExponentialBackOff(n=10, first_delay=1, max_delay=120)))()'
             $exename -e 'using Pkg; path=joinpath(Pkg.envdir(), "$remote_julia_environment_name"); Pkg.activate(path); using AzStorage; Pkg.precompile()'
             EOF
             """
