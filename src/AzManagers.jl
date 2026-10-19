@@ -206,6 +206,20 @@ end
 
 const _manager = AzManager()
 
+# Run the manager's cooperative-async provisioning loops on the interactive
+# threadpool (julia -t N,M with M>=1) so they are not starved by compute that
+# saturates the default threadpool (e.g. `Threads.@threads :static` kernels).
+# A single interactive thread keeps these loops mutually serialized, preserving
+# the original single-threaded (-t 1) semantics while the default pool is busy.
+# Falls back to `@async` (default pool) when no interactive thread is available.
+function _spawn_manager_loop(f)
+    if VERSION > v"1.9" && Threads.nthreads(:interactive) > 0
+        Threads.@spawn :interactive f()
+    else
+        @async f()
+    end
+end
+
 function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures, show_quota)
     _manager.session = session
     _manager.nretry = nretry
@@ -226,13 +240,13 @@ function azmanager!(session, ssh_user, nretry, verbose, save_cloud_init_failures
     _manager.preempted = Dict{ScaleSet,Set{String}}()
     _manager.preempt_channel_futures = Dict{Int,Future}()
     _manager.scalesets = Dict{ScaleSet,Int}()
-    _manager.task_add = @async add_pending_connections()
-    _manager.task_process = @async process_pending_connections()
+    _manager.task_add = _spawn_manager_loop(add_pending_connections)
+    _manager.task_process = _spawn_manager_loop(process_pending_connections)
     _manager.lock = ReentrantLock()
     _manager.scaleset_request_counter = 0
 
-    @async scaleset_pruning()
-    @async scaleset_cleaning()
+    _spawn_manager_loop(scaleset_pruning)
+    _spawn_manager_loop(scaleset_cleaning)
 
     _manager
 end
